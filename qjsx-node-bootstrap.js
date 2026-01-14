@@ -26,9 +26,9 @@ const scriptPath = scriptArgs[1];
 try {
     await import(scriptPath);
 } catch (e) {
-    console.error("Error loading script:", e.message);
+    std.err.puts("Error loading script: " + e.message + "\n");
     if (e.stack) {
-        console.error(e.stack);
+        std.err.puts(e.stack + "\n");
     }
     std.exit(1);
 }
