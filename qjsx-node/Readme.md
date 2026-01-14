@@ -22,3 +22,4 @@ The executable includes built-in support for:
 - `node:process` - Process information
 - `node:child_process` - Child process spawning
 - `node:crypto` - Cryptographic operations
+- `node:path` - Path manipulation utilities
