@@ -111,29 +111,6 @@ clean:
 clean-all:
 	rm -rf bin/
 
-# Test targets
-test: $(QJSX_PROG) $(QJSX_NODE_PROG) $(QJSXC_PROG)
-	@echo "Running QJSX test suite..."
-	QJSX_BIN_DIR=$(BIN_DIR) ./tests/run_all.sh
-
-test-qjsxpath: $(QJSX_PROG)
-	QJSX_BIN_DIR=$(BIN_DIR) ./tests/test_qjsxpath.sh
-
-test-index: $(QJSX_PROG)
-	QJSX_BIN_DIR=$(BIN_DIR) ./tests/test_index_resolution.sh
-
-test-qjsx-node: $(QJSX_NODE_PROG)
-	QJSX_BIN_DIR=$(BIN_DIR) ./tests/test_qjsx_node.sh
-
-test-qjsxc: $(QJSXC_PROG)
-	QJSX_BIN_DIR=$(BIN_DIR) ./tests/test_qjsxc.sh
-
-test-qjsxc-dynamic: $(QJSXC_PROG)
-	QJSX_BIN_DIR=$(BIN_DIR) ./tests/test_qjsxc_dynamic.sh
-
-test-import-meta: $(QJSX_PROG)
-	QJSX_BIN_DIR=$(BIN_DIR) ./tests/test_import_meta.sh
-
 # Build everything (QuickJS + qjsx)
 build: quickjs-deps all
 
@@ -149,18 +126,13 @@ help:
 	@echo "QJSX Makefile targets:"
 	@echo "  all         - Build qjsx, qjsx-node, and qjsxc executables"
 	@echo "  build       - Build QuickJS dependencies and all programs"
-	@echo "  test        - Run all tests"
-	@echo "  test-qjsxpath - Run QJSXPATH module resolution tests"
-	@echo "  test-index  - Run Node.js-style index.js resolution tests"
-	@echo "  test-qjsx-node - Run qjsx-node Node.js compatibility tests"
-	@echo "  test-qjsxc  - Run qjsxc compiler with QJSXPATH tests"
 	@echo "  clean       - Clean build artifacts"
 	@echo "  clean-all   - Clean everything including QuickJS"
 	@echo "  install     - Install all programs to \$$(PREFIX)/bin"
 	@echo ""
 	@echo "Usage examples:"
-	@echo "  make build && make test"
+	@echo "  make build"
 	@echo "  QJSXPATH=./my_modules ./bin/qjsx script.js"
 	@echo "  QJSXPATH=./my_modules ./bin/qjsxc -o app.c app.js"
 
-.PHONY: all build clean clean-all install help quickjs-deps test test-qjsxpath test-index test-qjsx-node test-qjsxc test-qjsxc-dynamic convenience-links
+.PHONY: all build clean clean-all install help quickjs-deps convenience-links
