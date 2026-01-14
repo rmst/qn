@@ -1,10 +1,12 @@
 import { test as nodetest } from 'node:test'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { execSync } from 'node:child_process'
-import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { tmpdir, platform } from 'node:os'
 
 export const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), '/')))
+
+const QJSX_NODE = resolve(`./bin/${platform()}/qjsx-node`)
 
 /**
  * @overload
@@ -26,25 +28,29 @@ export const $ = (strings, ...values) => {
 		const opts = /** @type {import('child_process').ExecSyncOptions} */ (strings)
 		return (/** @type {TemplateStringsArray} */ strings, /** @type {any[]} */ ...values) => {
 			const cmd = String.raw({ raw: strings }, ...values)
-			return execSync(cmd, { encoding: 'utf8', ...opts })
+			return execSync(cmd, { encoding: 'utf8', ...opts }).trim()
 		}
 	}
 	const cmd = String.raw({ raw: strings }, ...values)
-	return execSync(cmd, { encoding: 'utf8' })
+	return execSync(cmd, { encoding: 'utf8' }).trim()
 }
 
 /**
- * Run a test with a fresh temporary directory.
+ * Run a test twice: once with Node.js, once with qjsx-node.
+ * Both runs must produce identical output.
  * @param {string} name - Test name
- * @param {(ctx: { dir: string }) => void} fn - Test function receiving { dir }
+ * @param {(ctx: { bin: string, dir: string }) => void} fn - Test function receiving { bin, dir }
  */
 export const test = (name, fn) => {
-	nodetest(name, () => {
-		const dir = mktempdir()
-		try {
-			return fn({ dir })
-		} finally {
-			rmSync(dir, { recursive: true })
-		}
-	})
+	for (const bin of ['node', QJSX_NODE]) {
+		const label = bin === 'node' ? 'node' : 'qjsx-node'
+		nodetest(`${name} [${label}]`, () => {
+			const dir = mktempdir()
+			try {
+				return fn({ bin, dir })
+			} finally {
+				rmSync(dir, { recursive: true })
+			}
+		})
+	}
 }

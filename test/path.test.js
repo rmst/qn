@@ -1,25 +1,20 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { platform } from 'node:os'
 import { test, $ } from './util.js'
 
-const QJSX_NODE = resolve(`./bin/${platform()}/qjsx-node`)
-
 describe('node:path shim', () => {
-	test('path.sep and path.delimiter match Node.js', ({ dir }) => {
+	test('path.sep and path.delimiter match Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import path from 'node:path'
 			console.log(JSON.stringify({ sep: path.sep, delimiter: path.delimiter }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { sep: '/', delimiter: ':' })
 	})
 
-	test('path.join matches Node.js', ({ dir }) => {
+	test('path.join matches Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import path from 'node:path'
 			console.log(JSON.stringify({
@@ -31,12 +26,17 @@ describe('node:path shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			simple: 'foo/bar/baz',
+			withSlashes: '/foo/bar/baz',
+			withDots: 'foo/baz',
+			empty: '.',
+			emptyStrings: '.'
+		})
 	})
 
-	test('path.dirname matches Node.js', ({ dir }) => {
+	test('path.dirname matches Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import path from 'node:path'
 			console.log(JSON.stringify({
@@ -48,12 +48,17 @@ describe('node:path shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			simple: '/foo/bar',
+			root: '/',
+			noDir: '.',
+			empty: '.',
+			trailingSlash: '/foo'
+		})
 	})
 
-	test('path.basename matches Node.js', ({ dir }) => {
+	test('path.basename matches Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import path from 'node:path'
 			console.log(JSON.stringify({
@@ -65,12 +70,17 @@ describe('node:path shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			simple: 'baz.txt',
+			withSuffix: 'baz',
+			noMatch: 'baz.txt',
+			trailingSlash: 'bar',
+			justFile: 'file.txt'
+		})
 	})
 
-	test('path.extname matches Node.js', ({ dir }) => {
+	test('path.extname matches Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import path from 'node:path'
 			console.log(JSON.stringify({
@@ -84,12 +94,19 @@ describe('node:path shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			simple: '.txt',
+			multiple: '.txt',
+			hidden: '',
+			hiddenExt: '.txt',
+			noExt: '',
+			dotEnd: '.',
+			path: '.txt'
+		})
 	})
 
-	test('path.isAbsolute matches Node.js', ({ dir }) => {
+	test('path.isAbsolute matches Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import path from 'node:path'
 			console.log(JSON.stringify({
@@ -101,12 +118,17 @@ describe('node:path shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			absolute: true,
+			relative: false,
+			dot: false,
+			dotdot: false,
+			empty: false
+		})
 	})
 
-	test('path.normalize matches Node.js', ({ dir }) => {
+	test('path.normalize matches Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import path from 'node:path'
 			console.log(JSON.stringify({
@@ -119,12 +141,18 @@ describe('node:path shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			dots: '/foo/baz/qux',
+			doubleSlash: '/foo/bar/baz',
+			trailing: '/foo/bar/',
+			empty: '.',
+			dotOnly: '.',
+			current: 'foo/bar'
+		})
 	})
 
-	test('path.resolve with absolute paths matches Node.js', ({ dir }) => {
+	test('path.resolve with absolute paths matches Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import path from 'node:path'
 			console.log(JSON.stringify({
@@ -135,12 +163,16 @@ describe('node:path shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			single: '/foo/bar',
+			multiple: '/foo/bar/baz',
+			override: '/bar',
+			withDots: '/foo/baz'
+		})
 	})
 
-	test('path.relative matches Node.js', ({ dir }) => {
+	test('path.relative matches Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import path from 'node:path'
 			console.log(JSON.stringify({
@@ -152,12 +184,17 @@ describe('node:path shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			same: '',
+			down: 'bar/baz',
+			up: '../..',
+			sibling: '../baz',
+			differentRoot: '../bar'
+		})
 	})
 
-	test('path.parse matches Node.js', ({ dir }) => {
+	test('path.parse matches Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import path from 'node:path'
 			console.log(JSON.stringify({
@@ -169,12 +206,17 @@ describe('node:path shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			full: { root: '/', dir: '/home/user', base: 'file.txt', ext: '.txt', name: 'file' },
+			noExt: { root: '/', dir: '/home/user', base: 'file', ext: '', name: 'file' },
+			hidden: { root: '/', dir: '/home/user', base: '.hidden', ext: '', name: '.hidden' },
+			root: { root: '/', dir: '/', base: '', ext: '', name: '' },
+			relative: { root: '', dir: '', base: 'file.txt', ext: '.txt', name: 'file' }
+		})
 	})
 
-	test('path.format matches Node.js', ({ dir }) => {
+	test('path.format matches Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import path from 'node:path'
 			console.log(JSON.stringify({
@@ -185,12 +227,16 @@ describe('node:path shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			full: '/home/user/file.txt',
+			rootOnly: '/file.txt',
+			nameExt: 'file.txt',
+			dirRoot: '/home/user/file.txt'
+		})
 	})
 
-	test('path.posix exists and matches default', ({ dir }) => {
+	test('path.posix exists and matches default', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import path from 'node:path'
 			console.log(JSON.stringify({
@@ -200,12 +246,15 @@ describe('node:path shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			hasPosix: true,
+			posixSep: '/',
+			posixJoin: 'foo/bar'
+		})
 	})
 
-	test('named imports work', ({ dir }) => {
+	test('named imports work', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { join, dirname, basename, extname, resolve, normalize, isAbsolute, parse, format, relative, sep, delimiter } from 'node:path'
 			console.log(JSON.stringify({
@@ -220,12 +269,20 @@ describe('node:path shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			join: 'foo/bar',
+			dirname: '/foo',
+			basename: 'bar',
+			extname: '.txt',
+			isAbsolute: true,
+			normalize: '/bar',
+			sep: '/',
+			delimiter: ':'
+		})
 	})
 
-	test('path throws TypeError for non-string inputs', ({ dir }) => {
+	test('path throws TypeError for non-string inputs', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import path from 'node:path'
 			const errors = []
@@ -236,8 +293,8 @@ describe('node:path shim', () => {
 			console.log(JSON.stringify({ errors }))
 		`)
 
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		const result = JSON.parse(qjsxOutput)
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
 		assert.strictEqual(result.errors.length, 4)
 		assert.ok(result.errors.every(e => e === 'TypeError'))
 	})

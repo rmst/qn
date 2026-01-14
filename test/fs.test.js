@@ -1,85 +1,76 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync, mkdirSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { platform } from 'node:os'
 import { test, $ } from './util.js'
 
-const QJSX_NODE = resolve(`./bin/${platform()}/qjsx-node`)
-
 describe('node:fs shim', () => {
-	test('writeFileSync and readFileSync', ({ dir }) => {
+	test('writeFileSync and readFileSync', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { writeFileSync, readFileSync } from 'node:fs'
 			writeFileSync('${dir}/out.txt', 'hello world')
 			console.log(JSON.stringify({ content: readFileSync('${dir}/out.txt', 'utf8') }))
 		`)
 
-		const output = $`${QJSX_NODE} ${dir}/test.js`
+		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { content: 'hello world' })
 	})
 
-	test('readFileSync with utf-8 encoding variant', ({ dir }) => {
+	test('readFileSync with utf-8 encoding variant', ({ bin, dir }) => {
 		writeFileSync(`${dir}/data.txt`, 'utf-8 test content')
 		writeFileSync(`${dir}/test.js`, `
 			import { readFileSync } from 'node:fs'
 			console.log(JSON.stringify({ content: readFileSync('${dir}/data.txt', 'utf-8') }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: 'utf-8 test content' })
 	})
 
-	test('readFileSync with options object', ({ dir }) => {
+	test('readFileSync with options object', ({ bin, dir }) => {
 		writeFileSync(`${dir}/data.txt`, 'options object test')
 		writeFileSync(`${dir}/test.js`, `
 			import { readFileSync } from 'node:fs'
 			console.log(JSON.stringify({ content: readFileSync('${dir}/data.txt', { encoding: 'utf8' }) }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: 'options object test' })
 	})
 
-	test('writeFileSync with empty string', ({ dir }) => {
+	test('writeFileSync with empty string', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { writeFileSync, readFileSync } from 'node:fs'
 			writeFileSync('${dir}/empty.txt', '')
 			console.log(JSON.stringify({ content: readFileSync('${dir}/empty.txt', 'utf8') }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: '' })
 	})
 
-	test('writeFileSync with unicode content', ({ dir }) => {
+	test('writeFileSync with unicode content', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { writeFileSync, readFileSync } from 'node:fs'
 			writeFileSync('${dir}/unicode.txt', '日本語 émojis 🎉 中文')
 			console.log(JSON.stringify({ content: readFileSync('${dir}/unicode.txt', 'utf8') }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: '日本語 émojis 🎉 中文' })
 	})
 
-	test('writeFileSync with multiline content', ({ dir }) => {
+	test('writeFileSync with multiline content', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { writeFileSync, readFileSync } from 'node:fs'
 			writeFileSync('${dir}/multi.txt', 'line1\\nline2\\nline3')
 			console.log(JSON.stringify({ content: readFileSync('${dir}/multi.txt', 'utf8') }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: 'line1\nline2\nline3' })
 	})
 
-	test('existsSync matches Node.js', ({ dir }) => {
+	test('existsSync matches Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/exists.txt`, 'test')
 		writeFileSync(`${dir}/test.js`, `
 			import { existsSync } from 'node:fs'
@@ -89,12 +80,11 @@ describe('node:fs shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { exists: true, missing: false })
 	})
 
-	test('existsSync with directories', ({ dir }) => {
+	test('existsSync with directories', ({ bin, dir }) => {
 		mkdirSync(`${dir}/subdir`)
 		writeFileSync(`${dir}/test.js`, `
 			import { existsSync } from 'node:fs'
@@ -104,12 +94,11 @@ describe('node:fs shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { dirExists: true, missingDir: false })
 	})
 
-	test('statSync.isFile matches Node.js', ({ dir }) => {
+	test('statSync.isFile matches Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/file.txt`, 'test')
 		writeFileSync(`${dir}/test.js`, `
 			import { statSync } from 'node:fs'
@@ -120,12 +109,11 @@ describe('node:fs shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { isFile: true, isDirectory: false })
 	})
 
-	test('statSync.isDirectory matches Node.js', ({ dir }) => {
+	test('statSync.isDirectory matches Node.js', ({ bin, dir }) => {
 		mkdirSync(`${dir}/mydir`)
 		writeFileSync(`${dir}/test.js`, `
 			import { statSync } from 'node:fs'
@@ -136,25 +124,23 @@ describe('node:fs shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { isFile: false, isDirectory: true })
 	})
 
-	test('statSync size property matches Node.js', ({ dir }) => {
-		writeFileSync(`${dir}/sized.txt`, 'exactly 20 chars!!!')
+	test('statSync size property matches Node.js', ({ bin, dir }) => {
+		writeFileSync(`${dir}/sized.txt`, 'exactly 20 chars!!!!')
 		writeFileSync(`${dir}/test.js`, `
 			import { statSync } from 'node:fs'
 			const stats = statSync('${dir}/sized.txt')
 			console.log(JSON.stringify({ size: stats.size }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { size: 20 })
 	})
 
-	test('lstatSync on regular file matches statSync', ({ dir }) => {
+	test('lstatSync on regular file matches statSync', ({ bin, dir }) => {
 		writeFileSync(`${dir}/regular.txt`, 'regular file')
 		writeFileSync(`${dir}/test.js`, `
 			import { statSync, lstatSync } from 'node:fs'
@@ -168,12 +154,16 @@ describe('node:fs shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			statIsFile: true,
+			lstatIsFile: true,
+			statIsSymlink: false,
+			lstatIsSymlink: false
+		})
 	})
 
-	test('readdirSync returns files without . and ..', ({ dir }) => {
+	test('readdirSync returns files without . and ..', ({ bin, dir }) => {
 		writeFileSync(`${dir}/a.txt`, 'a')
 		writeFileSync(`${dir}/b.txt`, 'b')
 		mkdirSync(`${dir}/subdir`)
@@ -189,12 +179,17 @@ describe('node:fs shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			hasDot: false,
+			hasDotDot: false,
+			hasA: true,
+			hasB: true,
+			hasSubdir: true
+		})
 	})
 
-	test('readdirSync empty directory', ({ dir }) => {
+	test('readdirSync empty directory', ({ bin, dir }) => {
 		mkdirSync(`${dir}/empty`)
 		writeFileSync(`${dir}/test.js`, `
 			import { readdirSync } from 'node:fs'
@@ -202,34 +197,24 @@ describe('node:fs shim', () => {
 			console.log(JSON.stringify({ count: files.length, files }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { count: 0, files: [] })
 	})
 
-	test('mkdirSync creates directory', ({ dir }) => {
-		// Use different paths for Node and qjsx to avoid state conflicts
-		writeFileSync(`${dir}/test_node.js`, `
+	test('mkdirSync creates directory', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
 			import { mkdirSync, existsSync, statSync } from 'node:fs'
-			mkdirSync('${dir}/newdir_node')
-			const exists = existsSync('${dir}/newdir_node')
-			const isDir = statSync('${dir}/newdir_node').isDirectory()
-			console.log(JSON.stringify({ exists, isDir }))
-		`)
-		writeFileSync(`${dir}/test_qjsx.js`, `
-			import { mkdirSync, existsSync, statSync } from 'node:fs'
-			mkdirSync('${dir}/newdir_qjsx')
-			const exists = existsSync('${dir}/newdir_qjsx')
-			const isDir = statSync('${dir}/newdir_qjsx').isDirectory()
+			mkdirSync('${dir}/newdir')
+			const exists = existsSync('${dir}/newdir')
+			const isDir = statSync('${dir}/newdir').isDirectory()
 			console.log(JSON.stringify({ exists, isDir }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test_node.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test_qjsx.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { exists: true, isDir: true })
 	})
 
-	test('mkdirSync recursive creates nested directories', ({ dir }) => {
+	test('mkdirSync recursive creates nested directories', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { mkdirSync, existsSync } from 'node:fs'
 			mkdirSync('${dir}/a/b/c', { recursive: true })
@@ -240,12 +225,11 @@ describe('node:fs shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { aExists: true, bExists: true, cExists: true })
 	})
 
-	test('mkdirSync recursive with existing parent', ({ dir }) => {
+	test('mkdirSync recursive with existing parent', ({ bin, dir }) => {
 		mkdirSync(`${dir}/parent`)
 		writeFileSync(`${dir}/test.js`, `
 			import { mkdirSync, existsSync } from 'node:fs'
@@ -257,103 +241,65 @@ describe('node:fs shim', () => {
 			}))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { parentExists: true, childExists: true, grandchildExists: true })
 	})
 
-	test('unlinkSync removes file', ({ dir }) => {
-		// Use different files for Node and qjsx to avoid state conflicts
-		writeFileSync(`${dir}/toremove_node.txt`, 'remove me')
-		writeFileSync(`${dir}/toremove_qjsx.txt`, 'remove me')
-		writeFileSync(`${dir}/test_node.js`, `
+	test('unlinkSync removes file', ({ bin, dir }) => {
+		writeFileSync(`${dir}/toremove.txt`, 'remove me')
+		writeFileSync(`${dir}/test.js`, `
 			import { unlinkSync, existsSync } from 'node:fs'
-			const beforeExists = existsSync('${dir}/toremove_node.txt')
-			unlinkSync('${dir}/toremove_node.txt')
-			const afterExists = existsSync('${dir}/toremove_node.txt')
-			console.log(JSON.stringify({ beforeExists, afterExists }))
-		`)
-		writeFileSync(`${dir}/test_qjsx.js`, `
-			import { unlinkSync, existsSync } from 'node:fs'
-			const beforeExists = existsSync('${dir}/toremove_qjsx.txt')
-			unlinkSync('${dir}/toremove_qjsx.txt')
-			const afterExists = existsSync('${dir}/toremove_qjsx.txt')
+			const beforeExists = existsSync('${dir}/toremove.txt')
+			unlinkSync('${dir}/toremove.txt')
+			const afterExists = existsSync('${dir}/toremove.txt')
 			console.log(JSON.stringify({ beforeExists, afterExists }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test_node.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test_qjsx.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { beforeExists: true, afterExists: false })
 	})
 
-	test('symlinkSync creates symlink', ({ dir }) => {
-		// Use different symlink targets for Node and qjsx to avoid state conflicts
+	test('symlinkSync creates symlink', ({ bin, dir }) => {
 		writeFileSync(`${dir}/original.txt`, 'original content')
-		writeFileSync(`${dir}/test_node.js`, `
+		writeFileSync(`${dir}/test.js`, `
 			import { symlinkSync, readFileSync, lstatSync } from 'node:fs'
-			symlinkSync('${dir}/original.txt', '${dir}/link_node.txt')
-			const content = readFileSync('${dir}/link_node.txt', 'utf8')
-			const isSymlink = lstatSync('${dir}/link_node.txt').isSymbolicLink()
-			console.log(JSON.stringify({ content, isSymlink }))
-		`)
-		writeFileSync(`${dir}/test_qjsx.js`, `
-			import { symlinkSync, readFileSync, lstatSync } from 'node:fs'
-			symlinkSync('${dir}/original.txt', '${dir}/link_qjsx.txt')
-			const content = readFileSync('${dir}/link_qjsx.txt', 'utf8')
-			const isSymlink = lstatSync('${dir}/link_qjsx.txt').isSymbolicLink()
+			symlinkSync('${dir}/original.txt', '${dir}/link.txt')
+			const content = readFileSync('${dir}/link.txt', 'utf8')
+			const isSymlink = lstatSync('${dir}/link.txt').isSymbolicLink()
 			console.log(JSON.stringify({ content, isSymlink }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test_node.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test_qjsx.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: 'original content', isSymlink: true })
 	})
 
-	test('rmSync removes file', ({ dir }) => {
-		// Use different files for Node and qjsx to avoid state conflicts
-		writeFileSync(`${dir}/file_node.txt`, 'delete me')
-		writeFileSync(`${dir}/file_qjsx.txt`, 'delete me')
-		writeFileSync(`${dir}/test_node.js`, `
+	test('rmSync removes file', ({ bin, dir }) => {
+		writeFileSync(`${dir}/file.txt`, 'delete me')
+		writeFileSync(`${dir}/test.js`, `
 			import { rmSync, existsSync } from 'node:fs'
-			rmSync('${dir}/file_node.txt')
-			console.log(JSON.stringify({ exists: existsSync('${dir}/file_node.txt') }))
-		`)
-		writeFileSync(`${dir}/test_qjsx.js`, `
-			import { rmSync, existsSync } from 'node:fs'
-			rmSync('${dir}/file_qjsx.txt')
-			console.log(JSON.stringify({ exists: existsSync('${dir}/file_qjsx.txt') }))
+			rmSync('${dir}/file.txt')
+			console.log(JSON.stringify({ exists: existsSync('${dir}/file.txt') }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test_node.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test_qjsx.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { exists: false })
 	})
 
-	test('rmSync recursive removes directory tree', ({ dir }) => {
-		// Use different directories for Node and qjsx to avoid state conflicts
-		mkdirSync(`${dir}/tree_node/nested`, { recursive: true })
-		mkdirSync(`${dir}/tree_qjsx/nested`, { recursive: true })
-		writeFileSync(`${dir}/tree_node/file1.txt`, 'file1')
-		writeFileSync(`${dir}/tree_node/nested/file2.txt`, 'file2')
-		writeFileSync(`${dir}/tree_qjsx/file1.txt`, 'file1')
-		writeFileSync(`${dir}/tree_qjsx/nested/file2.txt`, 'file2')
-		writeFileSync(`${dir}/test_node.js`, `
+	test('rmSync recursive removes directory tree', ({ bin, dir }) => {
+		mkdirSync(`${dir}/tree/nested`, { recursive: true })
+		writeFileSync(`${dir}/tree/file1.txt`, 'file1')
+		writeFileSync(`${dir}/tree/nested/file2.txt`, 'file2')
+		writeFileSync(`${dir}/test.js`, `
 			import { rmSync, existsSync } from 'node:fs'
-			rmSync('${dir}/tree_node', { recursive: true })
-			console.log(JSON.stringify({ exists: existsSync('${dir}/tree_node') }))
-		`)
-		writeFileSync(`${dir}/test_qjsx.js`, `
-			import { rmSync, existsSync } from 'node:fs'
-			rmSync('${dir}/tree_qjsx', { recursive: true })
-			console.log(JSON.stringify({ exists: existsSync('${dir}/tree_qjsx') }))
+			rmSync('${dir}/tree', { recursive: true })
+			console.log(JSON.stringify({ exists: existsSync('${dir}/tree') }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test_node.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test_qjsx.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { exists: false })
 	})
 
-	test('rmSync with force on non-existent file', ({ dir }) => {
+	test('rmSync with force on non-existent file', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { rmSync, existsSync } from 'node:fs'
 			let threw = false
@@ -365,8 +311,7 @@ describe('node:fs shim', () => {
 			console.log(JSON.stringify({ threw }))
 		`)
 
-		const nodeOutput = $`node ${dir}/test.js`
-		const qjsxOutput = $`${QJSX_NODE} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(qjsxOutput), JSON.parse(nodeOutput))
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { threw: false })
 	})
 })

@@ -86,7 +86,7 @@ $(BIN_DIR)/obj/quickjs-libc.o: $(BIN_DIR)/obj/quickjs-libc.c | $(BIN_DIR)/obj
 
 # Build qjsx-node (standalone executable with embedded node modules)
 $(QJSX_NODE_PROG): qjsx-node-bootstrap.js qjsx-node/node/* $(QJSXC_PROG) quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./qjsx-node $(QJSXC_PROG) -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -o $@ qjsx-node-bootstrap.js
+	QJSXPATH=./qjsx-node $(QJSXC_PROG) -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -o $@ qjsx-node-bootstrap.js
 
 # Create convenience symlinks in bin/ directory
 convenience-links: $(QJSX_PROG) $(QJSX_NODE_PROG) $(QJSXC_PROG)
