@@ -10,6 +10,10 @@ VERSION = 2024-01-13
 CC = gcc
 CFLAGS = -g -Wall -Wno-array-bounds -Wno-format-truncation -fwrapv \
          -D_GNU_SOURCE -DCONFIG_VERSION='"$(VERSION)"' -DCONFIG_BIGNUM
+
+# Sandbox support (comment out to disable if upstream QuickJS breaks compatibility)
+CFLAGS += -DUSE_SANDBOX
+
 CFLAGS_OPT = $(CFLAGS) -O2
 LDFLAGS = -g -rdynamic
 LIBS = -lm -ldl -lpthread
@@ -28,7 +32,7 @@ QJSXC_PROG = $(BIN_DIR)/qjsxc
 QUICKJS_OBJS = $(BIN_DIR)/quickjs/.obj/quickjs.o $(BIN_DIR)/quickjs/.obj/libregexp.o \
                $(BIN_DIR)/quickjs/.obj/libunicode.o $(BIN_DIR)/quickjs/.obj/cutils.o \
                $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/quickjs/.obj/dtoa.o \
-               $(BIN_DIR)/quickjs/.obj/repl.o
+               $(BIN_DIR)/quickjs/.obj/repl.o $(BIN_DIR)/obj/sandboxed-worker.o
 
 # Convenience symlinks
 QJSX_LINK = bin/qjsx
@@ -46,7 +50,7 @@ $(BIN_DIR)/obj:
 	mkdir -p $(BIN_DIR)/obj
 
 # Build qjsx executable
-$(QJSX_PROG): $(BIN_DIR)/obj/qjsx.o $(BIN_DIR)/obj/quickjs-libc.o quickjs-deps | $(BIN_DIR)
+$(QJSX_PROG): $(BIN_DIR)/obj/qjsx.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o quickjs-deps | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(BIN_DIR)/obj/qjsx.o $(QUICKJS_OBJS) $(LIBS)
 	chmod +x $@
 
@@ -59,7 +63,7 @@ $(BIN_DIR)/obj/qjsx.o: $(BIN_DIR)/obj/qjsx.c qjsx-module-resolution.h | $(BIN_DI
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
 # Build qjsxc executable
-$(QJSXC_PROG): $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o quickjs-deps | $(BIN_DIR)
+$(QJSXC_PROG): $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o quickjs-deps | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(BIN_DIR)/obj/qjsxc.o $(QUICKJS_OBJS) $(LIBS)
 	chmod +x $@
 	cp $(BIN_DIR)/quickjs/*.h $(BIN_DIR)/
@@ -77,11 +81,16 @@ $(BIN_DIR)/obj/qjsxc.c: quickjs/qjsc.c qjsxc.patch qjsx-module-resolution.h qjsx
 $(BIN_DIR)/obj/qjsxc.o: $(BIN_DIR)/obj/qjsxc.c qjsx-module-resolution.h | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -DCONFIG_CC=\"$(CC)\" -DCONFIG_PREFIX=\"/usr/local\" -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
-# Patch and build quickjs-libc (adds import.meta.dirname)
-$(BIN_DIR)/obj/quickjs-libc.c: quickjs/quickjs-libc.c quickjs-libc.patch | $(BIN_DIR)/obj
+# Patch and build quickjs-libc (adds import.meta.dirname and sandbox support)
+$(BIN_DIR)/obj/quickjs-libc.c: quickjs/quickjs-libc.c quickjs-libc.patch sandboxed-worker/sandboxed-worker.patch | $(BIN_DIR)/obj
 	patch -p0 < quickjs-libc.patch -o $@ quickjs/quickjs-libc.c
+	patch -p0 < sandboxed-worker/sandboxed-worker.patch $@
 
 $(BIN_DIR)/obj/quickjs-libc.o: $(BIN_DIR)/obj/quickjs-libc.c | $(BIN_DIR)/obj
+	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
+
+# Build sandbox module (compiles to empty if USE_SANDBOX is not defined)
+$(BIN_DIR)/obj/sandboxed-worker.o: sandboxed-worker/sandboxed-worker.c sandboxed-worker/sandboxed-worker.h | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
 # Build qjsx-node (standalone executable with embedded node modules)
@@ -121,18 +130,24 @@ install: $(QJSX_PROG) $(QJSX_NODE_PROG) $(QJSXC_PROG)
 	install -m755 $(QJSX_NODE_PROG) "$(DESTDIR)$(PREFIX)/bin"
 	install -m755 $(QJSXC_PROG) "$(DESTDIR)$(PREFIX)/bin"
 
+# Test target
+test: build
+	jix run -f test/__jix__.js host
+
 # Help target
 help:
 	@echo "QJSX Makefile targets:"
 	@echo "  all         - Build qjsx, qjsx-node, and qjsxc executables"
 	@echo "  build       - Build QuickJS dependencies and all programs"
+	@echo "  test        - Build and run tests"
 	@echo "  clean       - Clean build artifacts"
 	@echo "  clean-all   - Clean everything including QuickJS"
 	@echo "  install     - Install all programs to \$$(PREFIX)/bin"
 	@echo ""
 	@echo "Usage examples:"
 	@echo "  make build"
+	@echo "  make test"
 	@echo "  QJSXPATH=./my_modules ./bin/qjsx script.js"
 	@echo "  QJSXPATH=./my_modules ./bin/qjsxc -o app.c app.js"
 
-.PHONY: all build clean clean-all install help quickjs-deps convenience-links
+.PHONY: all build clean clean-all install help quickjs-deps convenience-links test

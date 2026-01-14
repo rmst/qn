@@ -1,0 +1,34 @@
+--- quickjs-libc.c.orig
++++ quickjs-libc.c
+@@ -74,6 +74,10 @@
+ #include "cutils.h"
+ #include "list.h"
+
++#ifdef USE_SANDBOX
++#include "sandboxed-worker/sandboxed-worker.h"
++#endif
++
+ /* TODO:
+    - add socket calls
+ */
+@@ -4033,6 +4037,10 @@
+     }
+ #endif /* USE_WORKER */
+
++#ifdef USE_SANDBOX
++    js_sandbox_init(ctx, m);
++#endif
++
+     return JS_SetModuleExportList(ctx, m, js_os_funcs,
+                                   countof(js_os_funcs));
+ }
+@@ -4047,6 +4055,9 @@
+ #ifdef USE_WORKER
+     JS_AddModuleExport(ctx, m, "Worker");
+ #endif
++#ifdef USE_SANDBOX
++    js_sandbox_add_export(ctx, m);
++#endif
+     return m;
+ }
+

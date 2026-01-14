@@ -16,6 +16,8 @@ QuickJS-x is [QuickJS](https://bellard.org/quickjs) with a few, additional featu
 
 5. We also provide an additional binary `qjsx-node`, making a small subset of the Node.js standard library available (e.g. parts of `node:fs`, `node:child_process`, see `qjsx-node` directory).
 
+6. `os.SandboxedWorker` - a Worker-like API for running JS in a restricted environment without std/os access (see `sandboxed-worker` directory).
+
 All original QuickJS features are preserved.
 
 
