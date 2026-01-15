@@ -6,6 +6,8 @@ import { tmpdir, platform } from 'node:os'
 
 export const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), '/')))
 
+
+
 const QJSX_NODE = resolve(`./bin/${platform()}/qjsx-node`)
 
 /**
@@ -44,13 +46,22 @@ export const $ = (strings, ...values) => {
 export const test = (name, fn) => {
 	for (const bin of ['node', QJSX_NODE]) {
 		const label = bin === 'node' ? 'node' : 'qjsx-node'
-		nodetest(`${name} [${label}]`, () => {
+		const testFn = () => {
 			const dir = mktempdir()
 			try {
 				return fn({ bin, dir })
+			} catch (err) {
+				// relative paths preferred
+				if (err.stack) {
+					const cwd = process.cwd()
+					err.stack = err.stack.replaceAll(`file://${cwd}`, '.')
+				}
+				throw err
+
 			} finally {
 				rmSync(dir, { recursive: true })
 			}
-		})
+		}
+		nodetest(`${name} [${label}]`, testFn)
 	}
 }

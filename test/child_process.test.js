@@ -85,7 +85,7 @@ describe('node:child_process shim', () => {
 	test('execFileSync with env option', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFileSync } from 'node:child_process'
-			const output = execFileSync('printenv', ['MY_VAR'], { env: { MY_VAR: 'test_value' }, encoding: 'utf8' })
+			const output = execFileSync('/bin/sh', ['-c', 'echo $MY_VAR'], { env: { MY_VAR: 'test_value' }, encoding: 'utf8' })
 			console.log(JSON.stringify({ output: output.trim() }))
 		`)
 
@@ -205,8 +205,8 @@ describe('node:child_process shim', () => {
 	test('execFile handles large output without blocking', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFile } from 'node:child_process'
-			// Generate output larger than typical pipe buffer (64KB)
-			execFile('sh', ['-c', 'for i in $(seq 1 5000); do echo "line $i: some text to fill buffer"; done'], (error, stdout) => {
+			// Generate output larger than typical pipe buffer (64KB) using POSIX awk
+			execFile('awk', ['BEGIN { for(i=1;i<=5000;i++) print "line " i ": some text to fill buffer" }'], (error, stdout) => {
 				const lines = stdout.trim().split('\\n')
 				console.log(JSON.stringify({
 					lineCount: lines.length,

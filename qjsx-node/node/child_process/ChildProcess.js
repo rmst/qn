@@ -129,6 +129,10 @@ export class ChildProcess extends EventEmitter {
 			if (this.#exited && !this.#closed) {
 				this.#closed = true
 				this.emit('close', this.exitCode, this.signalCode)
+			} else if (!this.#exited) {
+				// Process hasn't exited yet but streams are closed
+				// Poll again after a short delay to avoid busy-waiting
+				os.setTimeout(() => this.#checkClose(), 1)
 			}
 		}
 	}

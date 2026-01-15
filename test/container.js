@@ -10,8 +10,10 @@ export let run = () => {
 		RUN nix-env -iA nixpkgs.gnumake
 		RUN nix-env -iA nixpkgs.gnupatch
 		RUN nix-env -iA nixpkgs.nodejs_22
-	`
+		RUN nix-env -iA nixpkgs.coreutils nixpkgs.findutils nixpkgs.gnugrep nixpkgs.gnused nixpkgs.gnutar nixpkgs.gzip nixpkgs.gawk
 
+	`
+	
 	let qjsxRoot = `${import.meta.dirname}/..`
 
 	return jix.container.run({image, workdir: "/wd", volumes: {wd: qjsxRoot}})

@@ -131,8 +131,12 @@ install: $(QJSX_PROG) $(QJSX_NODE_PROG) $(QJSXC_PROG)
 	install -m755 $(QJSXC_PROG) "$(DESTDIR)$(PREFIX)/bin"
 
 # Test target
-test: build
-	jix run -f test/__jix__.js
+test:
+	jix run -f test
+
+test-containerized:
+	jix run -f test containerized
+
 
 # Help target
 help:
