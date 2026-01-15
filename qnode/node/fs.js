@@ -11,43 +11,55 @@ export const writeFileSync = (path, data, options) => {
     throw new Error(`Unsupported encoding: ${options.encoding}. Only utf8 is supported.`);
   }
 
-  if (typeof data !== 'string') {
-    throw new TypeError('Data must be a string. Binary data is not supported.');
-  }
+  const isBinary = data instanceof ArrayBuffer || ArrayBuffer.isView(data);
 
-  const file = std.open(path, flag);
+  const file = std.open(path, flag + (isBinary ? 'b' : ''));
   if (!file) {
     throw new Error(`Failed to open file: ${path}`);
   }
   try {
-    file.puts(data);
+    if (isBinary) {
+      const buffer = data instanceof ArrayBuffer ? data : data.buffer;
+      const offset = ArrayBuffer.isView(data) ? data.byteOffset : 0;
+      const length = ArrayBuffer.isView(data) ? data.byteLength : data.byteLength;
+      file.write(buffer, offset, length);
+    } else if (typeof data === 'string') {
+      file.puts(data);
+    } else {
+      throw new TypeError('Data must be a string, ArrayBuffer, or TypedArray.');
+    }
   } finally {
     file.close();
   }
 }
 
 
-export const readFileSync = (path, options='utf8') => {
+export const readFileSync = (path, options) => {
   options = typeof options === 'string' ? { encoding: options } : (options || {});
 
   const encoding = options.encoding;
   const flag = options.flag || 'r';
 
-  if (encoding == null) {
-    throw new Error('Encoding must be specified. Binary reads are not supported.');
-  }
-
-  if (encoding !== 'utf8' && encoding !== 'utf-8') {
+  if (encoding != null && encoding !== 'utf8' && encoding !== 'utf-8') {
     throw new Error(`Unsupported encoding: ${encoding}. Only utf8 is supported.`);
   }
 
-  const file = std.open(path, flag);
+  const file = std.open(path, flag + 'b');
   if (!file) {
     throw new Error(`Failed to open file: ${path}`);
   }
 
   try {
-    return file.readAsString()
+    if (encoding == null) {
+      file.seek(0, std.SEEK_END);
+      const size = file.tell();
+      file.seek(0, std.SEEK_SET);
+      const buffer = new ArrayBuffer(size);
+      file.read(buffer, 0, size);
+      return new Uint8Array(buffer);
+    } else {
+      return file.readAsString();
+    }
   } finally {
     file.close();
   }

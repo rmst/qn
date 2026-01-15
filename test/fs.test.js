@@ -1,7 +1,7 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync, mkdirSync } from 'node:fs'
-import { test, $ } from './util.js'
+import { test, testQnodeOnly, $ } from './util.js'
 
 describe('node:fs shim', () => {
 	test('writeFileSync and readFileSync', ({ bin, dir }) => {
@@ -359,5 +359,54 @@ describe('node:fs shim', () => {
 
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { target: `${dir}/target.txt` })
+	})
+
+	testQnodeOnly('readFileSync without encoding returns Uint8Array', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { writeFileSync, readFileSync } from 'node:fs'
+			writeFileSync('${dir}/binary.bin', new Uint8Array([0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd]))
+			const data = readFileSync('${dir}/binary.bin')
+			console.log(JSON.stringify({
+				type: data.constructor.name,
+				length: data.length,
+				bytes: Array.from(data)
+			}))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			type: 'Uint8Array',
+			length: 6,
+			bytes: [0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd]
+		})
+	})
+
+	testQnodeOnly('writeFileSync accepts ArrayBuffer', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { writeFileSync, readFileSync } from 'node:fs'
+			const buffer = new ArrayBuffer(4)
+			new Uint8Array(buffer).set([0x10, 0x20, 0x30, 0x40])
+			writeFileSync('${dir}/arraybuffer.bin', buffer)
+			const data = readFileSync('${dir}/arraybuffer.bin')
+			console.log(JSON.stringify({ bytes: Array.from(data) }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { bytes: [0x10, 0x20, 0x30, 0x40] })
+	})
+
+	testQnodeOnly('binary roundtrip preserves data', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { writeFileSync, readFileSync } from 'node:fs'
+			const original = new Uint8Array(256)
+			for (let i = 0; i < 256; i++) original[i] = i
+			writeFileSync('${dir}/allbytes.bin', original)
+			const read = readFileSync('${dir}/allbytes.bin')
+			const match = read.every((b, i) => b === original[i])
+			console.log(JSON.stringify({ length: read.length, match }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { length: 256, match: true })
 	})
 })
