@@ -363,4 +363,147 @@ describe('node:child_process shim', () => {
 		const result = JSON.parse(output)
 		assert.strictEqual(result.transformedCorrectly, true, 'sed should transform hello to goodbye')
 	})
+
+	// execSync tests
+	test('execSync runs command through shell', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execSync } from 'node:child_process'
+			const output = execSync('echo $((1 + 2))', { encoding: 'utf8' })
+			console.log(JSON.stringify({ output: output.trim() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { output: '3' })
+	})
+
+	test('execSync with custom shell', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execSync } from 'node:child_process'
+			const output = execSync('echo hello', { shell: '/bin/sh', encoding: 'utf8' })
+			console.log(JSON.stringify({ output: output.trim() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { output: 'hello' })
+	})
+
+	test('execSync with input option', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execSync } from 'node:child_process'
+			const output = execSync('cat', { input: 'piped via shell', encoding: 'utf8' })
+			console.log(JSON.stringify({ output: output.trim() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { output: 'piped via shell' })
+	})
+
+	// exec tests (async)
+	test('exec runs command through shell', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { exec } from 'node:child_process'
+			exec('echo $((2 * 3))', (error, stdout, stderr) => {
+				console.log(JSON.stringify({
+					error: error ? error.message : null,
+					stdout: stdout.trim()
+				}))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { error: null, stdout: '6' })
+	})
+
+	test('exec with cwd option', ({ bin, dir }) => {
+		mkdirSync(`${dir}/subdir`)
+		writeFileSync(`${dir}/test.js`, `
+			import { exec } from 'node:child_process'
+			exec('pwd', { cwd: '${dir}/subdir' }, (error, stdout) => {
+				console.log(JSON.stringify({ output: stdout.trim() }))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.ok(result.output.endsWith('/subdir'))
+	})
+
+	test('exec returns ChildProcess', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { exec } from 'node:child_process'
+			const child = exec('echo test')
+			console.log(JSON.stringify({
+				hasPid: typeof child.pid === 'number',
+				hasStdout: child.stdout !== null
+			}))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { hasPid: true, hasStdout: true })
+	})
+
+	// spawn tests
+	test('spawn returns ChildProcess with streams', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { spawn } from 'node:child_process'
+			const child = spawn('echo', ['hello', 'spawn'])
+			let stdout = ''
+			child.stdout.on('data', (chunk) => { stdout += chunk })
+			child.on('close', (code) => {
+				console.log(JSON.stringify({ code, stdout: stdout.trim() }))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { code: 0, stdout: 'hello spawn' })
+	})
+
+	test('spawn with shell option', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { spawn } from 'node:child_process'
+			const child = spawn('echo $((3 + 4))', { shell: true })
+			let stdout = ''
+			child.stdout.on('data', (chunk) => { stdout += chunk })
+			child.on('close', (code) => {
+				console.log(JSON.stringify({ code, stdout: stdout.trim() }))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { code: 0, stdout: '7' })
+	})
+
+	test('spawn with cwd option', ({ bin, dir }) => {
+		mkdirSync(`${dir}/subdir`)
+		writeFileSync(`${dir}/test.js`, `
+			import { spawn } from 'node:child_process'
+			const child = spawn('pwd', [], { cwd: '${dir}/subdir' })
+			let stdout = ''
+			child.stdout.on('data', (chunk) => { stdout += chunk })
+			child.on('close', () => {
+				console.log(JSON.stringify({ output: stdout.trim() }))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.ok(result.output.endsWith('/subdir'))
+	})
+
+	test('spawn bidirectional streaming', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { spawn } from 'node:child_process'
+			const child = spawn('cat')
+			let stdout = ''
+			child.stdout.on('data', (chunk) => { stdout += chunk })
+			child.on('close', () => {
+				console.log(JSON.stringify({ stdout: stdout.trim() }))
+			})
+			child.stdin.write('hello from spawn\\n')
+			child.stdin.end()
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { stdout: 'hello from spawn' })
+	})
 })

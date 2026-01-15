@@ -1,3 +1,6 @@
 export { ChildProcess } from 'node/child_process/ChildProcess.js'
+export { spawn } from 'node/child_process/spawn.js'
+export { exec } from 'node/child_process/exec.js'
 export { execFile } from 'node/child_process/execFile.js'
+export { execSync } from 'node/child_process/execSync.js'
 export { execFileSync } from 'node/child_process/execFileSync.js'

@@ -124,14 +124,23 @@ import process from 'node:process';
 ### `node:child_process`
 
 ```js
-import { execFileSync, execFile } from 'node:child_process';
+import { spawn, exec, execFile, execSync, execFileSync } from 'node:child_process';
 ```
 
 | Function | Status | Notes |
 |----------|--------|-------|
-| `execFileSync` | ✅ | Supports `env`, `cwd`, `input` |
+| `spawn` | ✅ | Supports `cwd`, `env`, `stdio`, `shell` |
+| `exec` | ✅ | Async with callback, runs via shell |
 | `execFile` | ✅ | Async with callback and events |
+| `execSync` | ✅ | Supports `cwd`, `env`, `input`, `shell` |
+| `execFileSync` | ✅ | Supports `cwd`, `env`, `input` |
 | `ChildProcess` | ✅ | EventEmitter with streaming stdio |
+| `spawnSync` | ❌ | |
+| `fork` | ❌ | |
+
+**Unsupported options** (throw `NodeCompatibilityError`): `timeout`, `killSignal`, `uid`, `gid`, `signal`, `detached`
+
+**Ignored options**: `maxBuffer`, `windowsHide`
 
 ### `node:path`
 

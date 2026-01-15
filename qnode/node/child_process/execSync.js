@@ -8,50 +8,41 @@ const UNSUPPORTED_OPTIONS = [
 	'uid',
 	'gid',
 	'stdio',
-	'shell',
 ]
 
 /**
- * Execute a command synchronously and return its output.
+ * Execute a shell command synchronously and return its output.
  *
- * @param {string} file - The command or executable file to run.
- * @param {Array} [args=[]] - The list of arguments to pass to the command.
+ * @param {string} command - The shell command to run.
  * @param {Object} [options={}] - Optional parameters.
  * @param {Object} [options.env] - Environment variables for the command.
  * @param {string} [options.cwd] - Working directory for the command.
  * @param {string} [options.stdout] - Redirect stdout (can be 'inherit').
  * @param {string} [options.stderr] - Redirect stderr (can be 'inherit').
  * @param {string} [options.input] - A string to be passed as input to the command.
+ * @param {string} [options.shell] - Shell to use (default: '/bin/sh').
  *
  * @returns {string} - The stdout output of the command (if not forwarded).
  *
  * @throws {Error} - Throws an error if the command exits with a non-zero status.
  *
  * @example
- * const output = execFileSync('echo', ['Hello, World!'])
+ * const output = execSync('echo "Hello, World!"')
  * console.log(output)  // Outputs: Hello, World!
  *
  * @example
- * const output = execFileSync('cat', [], { input: 'Hello from input!' })
+ * const output = execSync('cat', { input: 'Hello from input!' })
  * console.log(output)  // Outputs: Hello from input!
- *
- * @example
- * execFileSync('your_command', ['arg1'], { stdout: 'inherit', stderr: 'inherit' })
  */
-export function execFileSync(file, args = [], options = {}) {
-	if (typeof file !== 'string') {
-		throw new TypeError('file must be a string')
-	}
-	if (!Array.isArray(args)) {
-		throw new TypeError('args must be an array')
-	}
-	if (options != null && typeof options !== 'object') {
-		throw new TypeError('options must be an object')
+export function execSync(command, options = {}) {
+	if (typeof command !== 'string') {
+		throw new TypeError('command must be a string')
 	}
 
-	checkUnsupportedOptions(options, UNSUPPORTED_OPTIONS, 'execFileSync')
-	checkEncodingOption(options, 'execFileSync')
+	checkUnsupportedOptions(options, UNSUPPORTED_OPTIONS, 'execSync')
+	checkEncodingOption(options, 'execSync')
 
+	const shell = options.shell || '/bin/sh'
 	const env = options.env || std.getenviron()
 	const cwd = options.cwd || undefined
 
@@ -90,7 +81,7 @@ export function execFileSync(file, args = [], options = {}) {
 		inputFile.close()
 	}
 
-	const exitCode = os.exec([file, ...args], execOptions)
+	const exitCode = os.exec([shell, '-c', command], execOptions)
 
 	// Close the parent's copy of stdinRead after the child has inherited it
 	if (options.input) {
@@ -114,16 +105,7 @@ export function execFileSync(file, args = [], options = {}) {
 
 	// Handle error case if exit code is non-zero
 	if (exitCode !== 0) {
-		const argsSection = args
-			.map(a => `'${a}'`)
-			.join(', ')
-			.replaceAll("\n", "\n  ")
-
-		let errorMsg = `Command: ['${file}', ${argsSection}]\n`
-		if (argsSection.includes("\n")) {
-			errorMsg += "\n"
-		}
-
+		let errorMsg = `Command: ${command}\n`
 		errorMsg += `Exit Code: ${exitCode}\n`
 
 		if (options.env) {
@@ -139,9 +121,6 @@ export function execFileSync(file, args = [], options = {}) {
 		}
 
 		errorMsg += `Stderr:\n${indent(errorOutput)}\n`
-		if (errorOutput.includes("\n")) {
-			errorMsg += "\n"
-		}
 
 		const error = new Error(errorMsg)
 		error.status = exitCode
