@@ -2,6 +2,25 @@ import * as os from 'os'
 import { EventEmitter } from 'node:events'
 import { Readable, Writable } from 'node:stream'
 
+// Signal constants (some missing from QuickJS os module)
+const signals = {
+	SIGHUP: 1,
+	SIGINT: os.SIGINT ?? 2,
+	SIGQUIT: os.SIGQUIT ?? 3,
+	SIGILL: os.SIGILL ?? 4,
+	SIGTRAP: 5,
+	SIGABRT: os.SIGABRT ?? 6,
+	SIGBUS: 7,
+	SIGFPE: os.SIGFPE ?? 8,
+	SIGKILL: 9,
+	SIGUSR1: os.SIGUSR1 ?? 10,
+	SIGSEGV: os.SIGSEGV ?? 11,
+	SIGUSR2: os.SIGUSR2 ?? 12,
+	SIGPIPE: os.SIGPIPE ?? 13,
+	SIGALRM: os.SIGALRM ?? 14,
+	SIGTERM: os.SIGTERM ?? 15,
+}
+
 /**
  * Represents a spawned child process.
  * @extends EventEmitter
@@ -145,7 +164,7 @@ export class ChildProcess extends EventEmitter {
 	kill(signal = 'SIGTERM') {
 		if (this.#exited) return false
 
-		const sig = typeof signal === 'string' ? os[signal] : signal
+		const sig = typeof signal === 'string' ? signals[signal] : signal
 		if (sig === undefined) {
 			throw new Error(`Unknown signal: ${signal}`)
 		}

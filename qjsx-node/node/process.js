@@ -77,6 +77,18 @@ const process = {
     return dir
   },
 
+  // Change working directory
+  chdir: (directory) => {
+    const errno = os.chdir(directory)
+    if (errno !== 0) {
+      const err = new Error(`ENOENT: no such file or directory, chdir '${directory}'`)
+      err.code = 'ENOENT'
+      err.syscall = 'chdir'
+      err.path = directory
+      throw err
+    }
+  },
+
   // Standard streams
   stdin: createStream(0),
   stdout: createStream(1),
@@ -145,5 +157,5 @@ const process = {
 export default process;
 
 // Also export individual properties for named imports
-export const { argv, exit, cwd, pid, platform, version, versions, stdin, stdout, stderr } = process;
+export const { argv, exit, cwd, chdir, pid, platform, version, versions, stdin, stdout, stderr } = process;
 export const env = process.env;  // Export env separately to preserve the Proxy
