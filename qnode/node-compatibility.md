@@ -133,7 +133,7 @@ import { spawn, exec, execFile, execSync, execFileSync } from 'node:child_proces
 | `exec` | ✅ | Async with callback, runs via shell |
 | `execFile` | ✅ | Async with callback and events; supports `timeout`, `killSignal` |
 | `execSync` | ✅ | Supports `cwd`, `env`, `input`, `shell` |
-| `execFileSync` | ✅ | Supports `cwd`, `env`, `input`, `timeout`, `killSignal` |
+| `execFileSync` | ✅ | Supports `cwd`, `env`, `input`, `timeout`, `killSignal`, `stdio` |
 | `ChildProcess` | ✅ | EventEmitter with streaming stdio |
 | `spawnSync` | ❌ | |
 | `fork` | ❌ | |

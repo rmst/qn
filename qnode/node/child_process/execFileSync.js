@@ -1,11 +1,10 @@
 import * as std from 'std'
 import * as os from 'os'
-import { readFromFd, readBytesFromFd, indent, checkUnsupportedOptions, spawnWithPipes, NodeCompatibilityError } from 'node/child_process/utils.js'
+import { readFromFd, readBytesFromFd, indent, checkUnsupportedOptions, NodeCompatibilityError } from 'node/child_process/utils.js'
 
 const UNSUPPORTED_OPTIONS = [
 	'uid',
 	'gid',
-	'stdio',
 	'shell',
 ]
 
@@ -21,6 +20,7 @@ const UNSUPPORTED_OPTIONS = [
  * @param {number} [options.timeout=0] - Timeout in milliseconds (0 means no timeout).
  * @param {string} [options.killSignal='SIGTERM'] - Signal to send when timeout expires.
  * @param {string} [options.encoding] - If 'utf8', returns string; otherwise returns Uint8Array.
+ * @param {string|string[]} [options.stdio='pipe'] - stdio configuration ('pipe', 'inherit', 'ignore', or array).
  *
  * @returns {Uint8Array|string} - The stdout output (Uint8Array by default, string if encoding='utf8').
  *
@@ -66,16 +66,61 @@ export function execFileSync(file, args = [], options = {}) {
 	}
 	const useUtf8 = encoding && encoding.toLowerCase().replace('-', '') === 'utf8'
 
-	// Spawn the process with pipes
-	const { pid, stdinFd, stdoutFd, stderrFd } = spawnWithPipes(file, args, options)
+	const env = options.env || std.getenviron()
+	const cwd = options.cwd || undefined
+
+	// Parse stdio option
+	const stdio = parseStdio(options.stdio)
+
+	// Create pipes for stdin, stdout, stderr based on stdio config
+	const [stdinRead, stdinWrite] = os.pipe()
+
+	let stdoutRead, stdoutWrite
+	if (stdio[1] === 'pipe') {
+		[stdoutRead, stdoutWrite] = os.pipe()
+	}
+
+	let stderrRead, stderrWrite
+	if (stdio[2] === 'pipe') {
+		[stderrRead, stderrWrite] = os.pipe()
+	}
+
+	// Build exec options
+	const execOptions = {
+		block: false,
+		env,
+		cwd,
+		stdin: stdinRead,
+	}
+
+	if (stdio[1] === 'pipe') {
+		execOptions.stdout = stdoutWrite
+	} else if (stdio[1] === 'ignore') {
+		execOptions.stdout = std.open('/dev/null', 'w')
+	}
+	// 'inherit' means don't set - use parent's
+
+	if (stdio[2] === 'pipe') {
+		execOptions.stderr = stderrWrite
+	} else if (stdio[2] === 'ignore') {
+		execOptions.stderr = std.open('/dev/null', 'w')
+	}
+
+	// Spawn the process
+	const pid = os.exec([file, ...args], execOptions)
+
+	// Close child-side of pipes in parent
+	os.close(stdinRead)
+	if (stdio[1] === 'pipe') os.close(stdoutWrite)
+	if (stdio[2] === 'pipe') os.close(stderrWrite)
 
 	// Write input to the process if provided, then close stdin
 	if (options.input !== undefined) {
-		const inputFile = std.fdopen(stdinFd, 'w')
+		const inputFile = std.fdopen(stdinWrite, 'w')
 		inputFile.puts(options.input)
 		inputFile.close()
 	} else {
-		os.close(stdinFd)
+		os.close(stdinWrite)
 	}
 
 	// Poll for process exit with timeout support
@@ -114,14 +159,18 @@ export function execFileSync(file, args = [], options = {}) {
 		os.sleep(1)
 	}
 
-	// Read stdout and stderr from pipes
+	// Read stdout and stderr from pipes (if piped)
 	let output, errorOutput
-	if (useUtf8) {
-		output = readFromFd(stdoutFd)
-		errorOutput = readFromFd(stderrFd)
+	if (stdio[1] === 'pipe') {
+		output = useUtf8 ? readFromFd(stdoutRead) : readBytesFromFd(stdoutRead)
 	} else {
-		output = readBytesFromFd(stdoutFd)
-		errorOutput = readBytesFromFd(stderrFd)
+		output = useUtf8 ? '' : new Uint8Array(0)
+	}
+
+	if (stdio[2] === 'pipe') {
+		errorOutput = useUtf8 ? readFromFd(stderrRead) : readBytesFromFd(stderrRead)
+	} else {
+		errorOutput = useUtf8 ? '' : new Uint8Array(0)
 	}
 
 	// Helper to get string version of output for error messages
@@ -245,4 +294,29 @@ function getSignalNumber(signal) {
 		SIGTERM: 15,
 	}
 	return signals[signal] || 15
+}
+
+/**
+ * Parse stdio option into array of 3 values.
+ * @param {string|string[]|undefined} stdio
+ * @returns {string[]} Array of ['pipe'|'inherit'|'ignore', ...]
+ */
+function parseStdio(stdio) {
+	if (stdio === undefined || stdio === 'pipe') {
+		return ['pipe', 'pipe', 'pipe']
+	}
+	if (stdio === 'inherit') {
+		return ['inherit', 'inherit', 'inherit']
+	}
+	if (stdio === 'ignore') {
+		return ['ignore', 'ignore', 'ignore']
+	}
+	if (Array.isArray(stdio)) {
+		return [
+			stdio[0] || 'pipe',
+			stdio[1] || 'pipe',
+			stdio[2] || 'pipe',
+		]
+	}
+	throw new TypeError(`Invalid stdio option: ${stdio}`)
 }

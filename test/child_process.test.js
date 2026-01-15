@@ -743,4 +743,38 @@ describe('node:child_process shim', () => {
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { output: 'hello world' })
 	})
+
+	test('execFileSync with stdio inherit', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFileSync } from 'node:child_process'
+			// When stdio is 'inherit', output goes directly to parent
+			// The return value should be null or empty
+			const result = execFileSync('echo', ['inherited output'], { stdio: 'inherit', encoding: 'utf8' })
+			// Result should be null (Node) or empty string (qnode) since stdout was inherited
+			console.log(JSON.stringify({ resultEmpty: result === null || result === '' }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		// The output includes both the inherited "inherited output" and our JSON
+		assert.ok(output.includes('inherited output'))
+		assert.ok(output.includes('"resultEmpty":true'))
+	})
+
+	test('execFileSync with stdio array for partial inherit', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFileSync } from 'node:child_process'
+			// Pipe stdin, inherit stdout/stderr
+			const result = execFileSync('sh', ['-c', 'echo hello; echo error >&2'], {
+				stdio: ['pipe', 'inherit', 'inherit'],
+				encoding: 'utf8'
+			})
+			// Result should be null (Node) or empty string (qnode) since stdout was inherited
+			console.log(JSON.stringify({ resultEmpty: result === null || result === '' }))
+		`)
+
+		const output = $({ stdio: 'pipe' })`${bin} ${dir}/test.js 2>&1`
+		assert.ok(output.includes('hello'))
+		assert.ok(output.includes('error'))
+		assert.ok(output.includes('"resultEmpty":true'))
+	})
 })
