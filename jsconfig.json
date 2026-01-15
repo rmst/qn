@@ -1,11 +1,24 @@
 {
-	"compilerOptions": {
-		"target": "ES2022",
-		"module": "ES2022",
-		"moduleResolution": "node",
-		"checkJs": false,
-		"strict": false
-	},
-	"include": ["**/*.js"],
-	"exclude": ["node_modules", "quickjs", "bin"]
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "node",
+    "checkJs": false,
+    "strict": false,
+    "paths": {
+      "*": [
+        ".jix/modules/*"
+      ]
+    },
+    "baseUrl": "."
+  },
+  "include": [
+    "**/*.js",
+    "./.jix/**/*.js"
+  ],
+  "exclude": [
+    "node_modules",
+    "quickjs",
+    "bin"
+  ]
 }
