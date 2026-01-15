@@ -350,7 +350,9 @@ static char *normalize_module_name(JSContext *ctx, const char *base_name,
     if (!filename)
         return NULL;
     memcpy(filename, base_name, len);
-    filename[len] = '\0';
+    // Note: Use integer 0, not '\0'. The embed-header.sh script escapes
+    // backslashes, turning '\0' into '\\0' (multi-char constant = 0x5c30).
+    filename[len] = 0;
 
     // Resolve leading './' and '../' sequences
     r = name;
@@ -360,7 +362,7 @@ static char *normalize_module_name(JSContext *ctx, const char *base_name,
             r += 2;
         } else if (r[0] == '.' && r[1] == '.' && r[2] == '/') {
             // "../" - go up one directory
-            if (filename[0] == '\0')
+            if (filename[0] == 0)
                 break;
             p = strrchr(filename, '/');
             if (!p)
@@ -371,7 +373,7 @@ static char *normalize_module_name(JSContext *ctx, const char *base_name,
                 break;
             if (p > filename)
                 p--;
-            *p = '\0';
+            *p = 0;
             r += 3;
         } else {
             break;
@@ -379,7 +381,7 @@ static char *normalize_module_name(JSContext *ctx, const char *base_name,
     }
 
     // Append the remaining path
-    if (filename[0] != '\0')
+    if (filename[0] != 0)
         pstrcat(filename, cap, "/");
     pstrcat(filename, cap, r);
 
