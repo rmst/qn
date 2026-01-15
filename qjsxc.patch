@@ -1,5 +1,5 @@
 --- quickjs/qjsc.c	2025-10-08 10:58:22.941334621 +0000
-+++ /tmp/qjsxc_work.c	2026-01-14 23:49:34.197654001 +0000
++++ /tmp/qjsxc_work.c	2026-01-15 09:47:30.911173013 +0000
 @@ -1,5 +1,8 @@
  /*
 - * QuickJS command line compiler
@@ -19,7 +19,15 @@
  
  typedef struct {
      char *name;
-@@ -236,6 +241,11 @@
+@@ -56,6 +61,7 @@
+ static namelist_t cname_list;
+ static namelist_t cmodule_list;
+ static namelist_t init_module_list;
++static namelist_t embedded_module_names;  /* tracks actual module names for probing */
+ static uint64_t feature_bitmap;
+ static FILE *outfile;
+ static BOOL byte_swap;
+@@ -236,6 +242,11 @@
      pstrcpy(cname, cname_size, cname1);
  }
  
@@ -31,7 +39,7 @@
  JSModuleDef *jsc_module_loader(JSContext *ctx,
                                 const char *module_name, void *opaque,
                                 JSValueConst attributes)
-@@ -243,17 +253,25 @@
+@@ -243,17 +254,25 @@
      JSModuleDef *m;
      namelist_entry_t *e;
  
@@ -62,7 +70,7 @@
          /* the resulting executable will export its symbols for the
             dynamic library */
          dynamic_export = TRUE;
-@@ -262,16 +280,39 @@
+@@ -262,16 +281,39 @@
          uint8_t *buf;
          char cname[1024];
          int res;
@@ -105,7 +113,7 @@
              /* compile as JSON or JSON5 depending on "type" */
              JSValue val;
              int flags;
-@@ -280,18 +321,25 @@
+@@ -280,18 +322,25 @@
                  flags = JS_PARSE_JSON_EXT;
              else
                  flags = 0;
@@ -135,7 +143,7 @@
              if (namelist_find(&cname_list, cname)) {
                  find_unique_cname(cname, sizeof(cname));
              }
-@@ -299,7 +347,7 @@
+@@ -299,31 +348,46 @@
              /* output the module name */
              fprintf(outfile, "static const uint8_t %s_module_name[] = {\n",
                      cname);
@@ -144,7 +152,12 @@
              fprintf(outfile, "};\n\n");
  
              output_object_code(ctx, outfile, val, cname, CNAME_TYPE_JSON_MODULE);
-@@ -308,12 +356,16 @@
++            /* Track the module name for runtime probing */
++            if (!namelist_find(&embedded_module_names, reg_name)) {
++                namelist_add(&embedded_module_names, reg_name, NULL, 0);
++            }
+             JS_FreeValue(ctx, val);
+         } else {
              JSValue func_val;
  
              /* compile the module */
@@ -164,7 +177,14 @@
              if (namelist_find(&cname_list, cname)) {
                  find_unique_cname(cname, sizeof(cname));
              }
-@@ -323,7 +375,10 @@
+             output_object_code(ctx, outfile, func_val, cname, CNAME_TYPE_MODULE);
+-            
++            /* Track the module name for runtime probing */
++            if (!namelist_find(&embedded_module_names, reg_name)) {
++                namelist_add(&embedded_module_names, reg_name, NULL, 0);
++            }
++
+             /* the module is already referenced, so we must free it */
              m = JS_VALUE_GET_PTR(func_val);
              JS_FreeValue(ctx, func_val);
          }
@@ -175,7 +195,7 @@
      return m;
  }
  
-@@ -761,7 +816,7 @@
+@@ -761,7 +825,7 @@
      JS_SetStripInfo(rt, strip_flags);
  
      /* loader for ES6 modules */
@@ -184,7 +204,7 @@
  
      fprintf(fo, "/* File generated automatically by the QuickJS compiler. */\n"
              "\n"
-@@ -769,8 +824,39 @@
+@@ -769,8 +833,39 @@
  
      if (output_type != OUTPUT_C) {
          fprintf(fo, "#include \"quickjs-libc.h\"\n"
@@ -224,12 +244,39 @@
      } else {
          fprintf(fo, "#include <inttypes.h>\n"
                  "\n"
-@@ -843,7 +929,7 @@
+@@ -792,6 +887,19 @@
+     }
+ 
+     if (output_type != OUTPUT_C) {
++        /* Output the embedded module names array for runtime probing */
++        fprintf(fo, "/* Embedded module names for runtime resolution */\n");
++        fprintf(fo, "static const char *qjsx_embedded_modules[] = {\n");
++        for(i = 0; i < embedded_module_names.count; i++) {
++            namelist_entry_t *e = &embedded_module_names.array[i];
++            fprintf(fo, "    \"%s\",\n", e->name);
++        }
++        fprintf(fo, "    NULL\n};\n\n");
++
++        fprintf(fo, "static QJSXModuleResolverContext qjsx_resolver_ctx = {\n");
++        fprintf(fo, "    .embedded_modules = qjsx_embedded_modules\n");
++        fprintf(fo, "};\n\n");
++
+         fprintf(fo,
+                 "static JSContext *JS_NewCustomContext(JSRuntime *rt)\n"
+                 "{\n"
+@@ -843,7 +951,7 @@
  
          /* add the module loader if necessary */
          if (feature_bitmap & (1 << FE_MODULE_LOADER)) {
 -            fprintf(fo, "  JS_SetModuleLoaderFunc2(rt, NULL, js_module_loader, js_module_check_attributes, NULL);\n");
-+            fprintf(fo, "  JS_SetModuleLoaderFunc2(rt, qjsx_module_normalizer, qjsx_loader, js_module_check_attributes, NULL);\n");
++            fprintf(fo, "  JS_SetModuleLoaderFunc2(rt, qjsx_module_normalizer, qjsx_loader, js_module_check_attributes, &qjsx_resolver_ctx);\n");
          }
  
          fprintf(fo,
+@@ -872,5 +980,6 @@
+     namelist_free(&cname_list);
+     namelist_free(&cmodule_list);
+     namelist_free(&init_module_list);
++    namelist_free(&embedded_module_names);
+     return 0;
+ }

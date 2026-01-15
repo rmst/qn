@@ -119,6 +119,31 @@ describe('Bundler Mode (default)', () => {
 		const output = $`${QJSX_NODE} ${dir}/test.js`
 		assert.strictEqual(output, 'function function')
 	})
+
+	test('circular deps with cross-package imports', ({ dir }) => {
+		// Minimal reproduction: two packages that import each other using ../
+		// This causes stack overflow when the module normalizer is active.
+		mkdirSync(`${dir}/pkg-a`)
+		mkdirSync(`${dir}/pkg-b`)
+
+		writeFileSync(`${dir}/pkg-a/index.js`, `
+			import { getB } from '../pkg-b/index.js'
+			export const getA = () => 'A'
+			export const getAB = () => getA() + getB()
+		`)
+		writeFileSync(`${dir}/pkg-b/index.js`, `
+			import { getA } from '../pkg-a/index.js'
+			export const getB = () => 'B'
+			export const getBA = () => getB() + getA()
+		`)
+		writeFileSync(`${dir}/main.js`, `
+			import { getAB } from './pkg-a/index.js'
+			console.log(getAB())
+		`)
+
+		const output = $`${QJSX} ${dir}/main.js`
+		assert.strictEqual(output, 'AB')
+	})
 })
 
 describe('Bundler Mode Compilation', () => {

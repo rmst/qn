@@ -134,7 +134,7 @@ install: $(QJSX_PROG) $(QJSX_NODE_PROG) $(QJSXC_PROG)
 test:
 	jix run -f test
 
-test-containerized:
+test2:
 	jix run -f test containerized
 
 

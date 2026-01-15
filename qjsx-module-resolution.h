@@ -240,11 +240,76 @@ static char *translate_colons_to_slashes(JSContext *ctx, const char *name) {
  * Bundler mode (default):
  *   - "./foo" resolves to "./foo.js" if it exists
  *   - "./dir" resolves to "./dir/index.js" if it exists
- *   - Normalizer strips .js and /index.js for canonical names
  */
 static int is_node_resolution(void) {
     const char *mode = getenv("QJSX_MODULE_RESOLUTION");
     return mode && strcmp(mode, "node") == 0;
+}
+
+/**
+ * Context for module resolution, passed via opaque parameter.
+ * For interpreter: embedded_modules is NULL (uses filesystem)
+ * For compiled binary: embedded_modules contains list of embedded module names
+ */
+typedef struct {
+    const char **embedded_modules;
+} QJSXModuleResolverContext;
+
+/**
+ * Check if a module name exists in the embedded modules list.
+ */
+static int embedded_module_exists(const char **modules, const char *name) {
+    if (!modules) return 0;
+    for (int i = 0; modules[i]; i++) {
+        if (strcmp(modules[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+/**
+ * Probe for module existence with extension fallbacks.
+ * Returns the resolved name (with extension) or NULL if not found.
+ *
+ * For embedded modules: probes the embedded list
+ * For interpreter: probes the filesystem
+ */
+static char *probe_module_with_extensions(JSContext *ctx, const char *name,
+                                          const char **embedded_modules) {
+    size_t name_len = strlen(name);
+    size_t buflen = name_len + 20;
+    char *buf = js_malloc(ctx, buflen);
+    if (!buf) return NULL;
+
+    if (embedded_modules) {
+        if (embedded_module_exists(embedded_modules, name)) {
+            js_free(ctx, buf);
+            return js_strdup(ctx, name);
+        }
+        snprintf(buf, buflen, "%s.js", name);
+        if (embedded_module_exists(embedded_modules, buf)) {
+            return buf;
+        }
+        snprintf(buf, buflen, "%s/index.js", name);
+        if (embedded_module_exists(embedded_modules, buf)) {
+            return buf;
+        }
+    } else {
+        if (file_exists(name)) {
+            js_free(ctx, buf);
+            return js_strdup(ctx, name);
+        }
+        snprintf(buf, buflen, "%s.js", name);
+        if (file_exists(buf)) {
+            return buf;
+        }
+        snprintf(buf, buflen, "%s/index.js", name);
+        if (file_exists(buf)) {
+            return buf;
+        }
+    }
+
+    js_free(ctx, buf);
+    return NULL;
 }
 
 /**
@@ -322,26 +387,6 @@ static char *normalize_module_name(JSContext *ctx, const char *base_name,
 }
 
 /**
- * Strip "/index.js" suffix from a path (in place).
- */
-static void strip_index_js_suffix(char *path) {
-    size_t len = strlen(path);
-    if (len > 9 && strcmp(path + len - 9, "/index.js") == 0) {
-        path[len - 9] = '\0';
-    }
-}
-
-/**
- * Strip ".js" suffix from a path (in place).
- */
-static void strip_js_suffix(char *path) {
-    size_t len = strlen(path);
-    if (len > 3 && strcmp(path + len - 3, ".js") == 0) {
-        path[len - 3] = '\0';
-    }
-}
-
-/**
  * QJSX module normalizer - produces canonical module names.
  *
  * This normalizer is used by both qjsx (interpreter) and compiled binaries.
@@ -351,37 +396,49 @@ static void strip_js_suffix(char *path) {
  * Processing steps:
  *   1. Colon-to-slash translation (e.g., "node:fs" -> "node/fs")
  *   2. Resolve relative paths (handle "./" and "../")
- *   3. In bundler mode: strip ".js" and "/index.js" for canonical form
+ *   3. In bundler mode: probe for existence to find full path with extension
  *
  * @param ctx - QuickJS context
  * @param base_name - The name of the importing module
  * @param name - The import specifier to normalize
- * @param opaque - Unused (for API compatibility)
+ * @param opaque - QJSXModuleResolverContext* with embedded modules list (or NULL)
  * @return Canonical module name, or NULL on error
  */
 static char *qjsx_module_normalizer(JSContext *ctx, const char *base_name,
                                     const char *name, void *opaque) {
+    QJSXModuleResolverContext *resolver_ctx = (QJSXModuleResolverContext *)opaque;
+    const char **embedded_modules = resolver_ctx ? resolver_ctx->embedded_modules : NULL;
+
     // Step 1: Colon-to-slash translation
     char *translated = translate_colons_to_slashes(ctx, name);
     const char *work_name = translated ? translated : name;
 
     // Step 2: Resolve relative paths
-    char *result = normalize_module_name(ctx, base_name, work_name);
+    char *resolved = normalize_module_name(ctx, base_name, work_name);
 
     // Clean up translated name if allocated
     if (translated)
         js_free(ctx, translated);
 
-    if (!result)
+    if (!resolved)
         return NULL;
 
-    // Step 3: Strip .js and /index.js for canonical form (except in node mode)
-    if (!is_node_resolution()) {
-        strip_index_js_suffix(result);
-        strip_js_suffix(result);
+    // Bare imports (no leading dot) - return unchanged, loader handles QJSXPATH
+    if (name[0] != '.') {
+        return resolved;
     }
 
-    return result;
+    // Step 3: In bundler mode, probe for existence to find full path with extension
+    if (!is_node_resolution()) {
+        char *probed = probe_module_with_extensions(ctx, resolved, embedded_modules);
+        if (probed) {
+            js_free(ctx, resolved);
+            return probed;
+        }
+    }
+
+    // Return resolved path (node mode or probe failed - let loader handle it)
+    return resolved;
 }
 
 #endif /* QJSX_MODULE_RESOLUTION_H */

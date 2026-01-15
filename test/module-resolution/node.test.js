@@ -11,7 +11,7 @@ const QJSX = resolve(`./bin/${platform()}/qjsx`)
 
 const $ = (strings, ...values) => {
 	const cmd = String.raw({ raw: strings }, ...values)
-	return execSync(cmd, { encoding: 'utf8', timeout: 30000 }).trim()
+	return execSync(cmd, { encoding: 'utf8', timeout: 30000, env: { ...process.env, NO_COLOR: '1', NODE_DISABLE_COLORS: '1', FORCE_COLOR: '0' } }).trim()
 }
 
 /**
