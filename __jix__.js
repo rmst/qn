@@ -4,7 +4,16 @@ export const run = {
 	`,
 }
 
+
+
+
 const binDir = () => {
+
+	let repo = jix.git.checkout({
+		repo: import.meta.dirname,
+		commit: jix.exec`git rev-parse HEAD`
+	})
+
 	let repo = import.meta.dirname
 
 	let platform = jix.target().host.os === "macos" ? "darwin" : "linux"
@@ -25,6 +34,7 @@ const bin = {
 	qjsx: () => `${binDir}/qjsx`,
 	"qjsx-node": () => `${binDir}/qjsx-node`,
 	qjsxc: () => `${binDir}/qjsxc`,
+	qx: () => `${binDir}/qx`,
 }
 
 
@@ -33,6 +43,5 @@ export const install = () => {
 		...bin
 	})
 }
-
 
 export default bin
