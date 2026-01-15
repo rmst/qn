@@ -69,18 +69,15 @@ $(QJSXC_PROG): $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/o
 	$(CC) $(LDFLAGS) -o $@ $(BIN_DIR)/obj/qjsxc.o $(QUICKJS_OBJS) $(LIBS)
 	chmod +x $@
 	cp $(BIN_DIR)/quickjs/*.h $(BIN_DIR)/
+	cp qjsx-module-resolution.h $(BIN_DIR)/
 	cp $(BIN_DIR)/quickjs/libquickjs.a $(BIN_DIR)/
 	# Replace unpatched quickjs-libc.o with patched version in libquickjs.a
 	# Also add sandboxed-worker.o which is required by the patched quickjs-libc
 	ar d $(BIN_DIR)/libquickjs.a quickjs-libc.nolto.o 2>/dev/null || true
 	ar r $(BIN_DIR)/libquickjs.a $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o
 
-# Generate embedded header from qjsx-module-resolution.h
-$(BIN_DIR)/obj/qjsx-module-resolution-embedded.h: qjsx-module-resolution.h embed-header.sh | $(BIN_DIR)/obj
-	./embed-header.sh $@
-
 # Generate qjsxc.c from quickjs/qjsc.c by applying the patch
-$(BIN_DIR)/obj/qjsxc.c: quickjs/qjsc.c qjsxc.patch qjsx-module-resolution.h $(BIN_DIR)/obj/qjsx-module-resolution-embedded.h | $(BIN_DIR)/obj
+$(BIN_DIR)/obj/qjsxc.c: quickjs/qjsc.c qjsxc.patch qjsx-module-resolution.h | $(BIN_DIR)/obj
 	patch -p0 < qjsxc.patch -o $@ quickjs/qjsc.c
 
 # Build qjsxc.o from the patched source

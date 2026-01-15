@@ -350,9 +350,7 @@ static char *normalize_module_name(JSContext *ctx, const char *base_name,
     if (!filename)
         return NULL;
     memcpy(filename, base_name, len);
-    // Note: Use integer 0, not '\0'. The embed-header.sh script escapes
-    // backslashes, turning '\0' into '\\0' (multi-char constant = 0x5c30).
-    filename[len] = 0;
+    filename[len] = '\0';
 
     // Resolve leading './' and '../' sequences
     r = name;

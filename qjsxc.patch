@@ -1,5 +1,5 @@
---- quickjs/qjsc.c	2025-10-08 10:58:22.941334621 +0000
-+++ /tmp/qjsxc_work.c	2026-01-15 09:47:30.911173013 +0000
+--- quickjs/qjsc.c	2026-01-14 15:44:54.815434062 +0000
++++ /tmp/qjsxc_new.c	2026-01-15 22:02:19.940809003 +0000
 @@ -1,5 +1,8 @@
  /*
 - * QuickJS command line compiler
@@ -10,16 +10,15 @@
   *
   * Copyright (c) 2018-2021 Fabrice Bellard
   *
-@@ -35,6 +38,8 @@
+@@ -35,6 +38,7 @@
  
  #include "cutils.h"
  #include "quickjs-libc.h"
 +#include "qjsx-module-resolution.h"
-+#include "qjsx-module-resolution-embedded.h"
  
  typedef struct {
      char *name;
-@@ -56,6 +61,7 @@
+@@ -56,6 +60,7 @@
  static namelist_t cname_list;
  static namelist_t cmodule_list;
  static namelist_t init_module_list;
@@ -27,19 +26,7 @@
  static uint64_t feature_bitmap;
  static FILE *outfile;
  static BOOL byte_swap;
-@@ -236,6 +242,11 @@
-     pstrcpy(cname, cname_size, cname1);
- }
- 
-+static void emit_qjsx_module_resolution(FILE *fo) {
-+    fprintf(fo, "/* QJSXPATH Module Resolution */\n");
-+    fprintf(fo, "%s", qjsx_module_resolution_code);
-+}
-+
- JSModuleDef *jsc_module_loader(JSContext *ctx,
-                                const char *module_name, void *opaque,
-                                JSValueConst attributes)
-@@ -243,17 +254,25 @@
+@@ -243,17 +248,25 @@
      JSModuleDef *m;
      namelist_entry_t *e;
  
@@ -70,7 +57,7 @@
          /* the resulting executable will export its symbols for the
             dynamic library */
          dynamic_export = TRUE;
-@@ -262,16 +281,39 @@
+@@ -262,16 +275,39 @@
          uint8_t *buf;
          char cname[1024];
          int res;
@@ -113,7 +100,7 @@
              /* compile as JSON or JSON5 depending on "type" */
              JSValue val;
              int flags;
-@@ -280,18 +322,25 @@
+@@ -280,18 +316,25 @@
                  flags = JS_PARSE_JSON_EXT;
              else
                  flags = 0;
@@ -143,7 +130,7 @@
              if (namelist_find(&cname_list, cname)) {
                  find_unique_cname(cname, sizeof(cname));
              }
-@@ -299,31 +348,46 @@
+@@ -299,31 +342,46 @@
              /* output the module name */
              fprintf(outfile, "static const uint8_t %s_module_name[] = {\n",
                      cname);
@@ -195,7 +182,7 @@
      return m;
  }
  
-@@ -761,7 +825,7 @@
+@@ -761,7 +819,7 @@
      JS_SetStripInfo(rt, strip_flags);
  
      /* loader for ES6 modules */
@@ -204,7 +191,7 @@
  
      fprintf(fo, "/* File generated automatically by the QuickJS compiler. */\n"
              "\n"
-@@ -769,8 +833,39 @@
+@@ -769,8 +827,39 @@
  
      if (output_type != OUTPUT_C) {
          fprintf(fo, "#include \"quickjs-libc.h\"\n"
@@ -214,7 +201,7 @@
                  "\n"
                  );
 +
-+        emit_qjsx_module_resolution(fo);
++        fprintf(fo, "#include \"qjsx-module-resolution.h\"\n\n");
 +
 +        fprintf(fo,
 +                "static JSModuleDef *qjsx_loader(JSContext *ctx, const char *name, void *opaque, JSValueConst attributes) {\n"
@@ -244,7 +231,7 @@
      } else {
          fprintf(fo, "#include <inttypes.h>\n"
                  "\n"
-@@ -792,6 +887,19 @@
+@@ -792,6 +881,19 @@
      }
  
      if (output_type != OUTPUT_C) {
@@ -264,7 +251,7 @@
          fprintf(fo,
                  "static JSContext *JS_NewCustomContext(JSRuntime *rt)\n"
                  "{\n"
-@@ -843,7 +951,7 @@
+@@ -843,7 +945,7 @@
  
          /* add the module loader if necessary */
          if (feature_bitmap & (1 << FE_MODULE_LOADER)) {
@@ -273,7 +260,7 @@
          }
  
          fprintf(fo,
-@@ -872,5 +980,6 @@
+@@ -872,5 +974,6 @@
      namelist_free(&cname_list);
      namelist_free(&cmodule_list);
      namelist_free(&init_module_list);
