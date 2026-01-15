@@ -249,7 +249,7 @@ static int sandbox_handle_posted_message(JSRuntime *rt, JSContext *ctx,
     int ret;
     struct list_head *el;
     SandboxMessage *msg;
-    JSValue obj, data_obj, func, retval;
+    JSValue obj = JS_UNDEFINED, data_obj, func = JS_UNDEFINED, retval;
 
     pthread_mutex_lock(&ps->mutex);
     if (!list_empty(&ps->msg_queue)) {
