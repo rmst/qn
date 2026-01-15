@@ -26,15 +26,18 @@ const QJSX_NODE = resolve(`./bin/${platform()}/qjsx-node`)
  * @param {...any} values
  */
 export const $ = (strings, ...values) => {
+	// NO_COLOR disables ANSI color codes in Node.js console output
+	const { FORCE_COLOR, ...env } = process.env
+	const defaultOpts = { encoding: 'utf8', env: { ...env, NO_COLOR: '1' } }
 	if (typeof strings === 'string' || /** @type {TemplateStringsArray} */ (strings).raw === undefined) {
 		const opts = /** @type {import('child_process').ExecSyncOptions} */ (strings)
 		return (/** @type {TemplateStringsArray} */ strings, /** @type {any[]} */ ...values) => {
 			const cmd = String.raw({ raw: strings }, ...values)
-			return execSync(cmd, { encoding: 'utf8', ...opts }).trim()
+			return execSync(cmd, { ...defaultOpts, ...opts }).trim()
 		}
 	}
 	const cmd = String.raw({ raw: strings }, ...values)
-	return execSync(cmd, { encoding: 'utf8' }).trim()
+	return execSync(cmd, defaultOpts).trim()
 }
 
 /**

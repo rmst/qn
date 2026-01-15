@@ -168,6 +168,29 @@ export function symlinkSync(target, path) {
 	}
 }
 
+export function renameSync(oldPath, newPath) {
+	const result = os.rename(oldPath, newPath);
+	if (result !== 0) {
+		throw new Error(`Failed to rename ${oldPath} to ${newPath}`);
+	}
+}
+
+export function realpathSync(path) {
+	const [resolved, err] = os.realpath(path);
+	if (err !== 0) {
+		throw new Error(`Failed to resolve path: ${path}`);
+	}
+	return resolved;
+}
+
+export function readlinkSync(path) {
+	const [target, err] = os.readlink(path);
+	if (err !== 0) {
+		throw new Error(`Failed to read symlink: ${path}`);
+	}
+	return target;
+}
+
 export function rmSync(path, options = {}) {
 	const recursive = options.recursive || false;
 	const force = options.force || false;

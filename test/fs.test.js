@@ -314,4 +314,50 @@ describe('node:fs shim', () => {
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { threw: false })
 	})
+
+	test('renameSync moves file', ({ bin, dir }) => {
+		writeFileSync(`${dir}/original.txt`, 'content')
+		writeFileSync(`${dir}/test.js`, `
+			import { renameSync, existsSync, readFileSync } from 'node:fs'
+			renameSync('${dir}/original.txt', '${dir}/renamed.txt')
+			console.log(JSON.stringify({
+				oldExists: existsSync('${dir}/original.txt'),
+				newExists: existsSync('${dir}/renamed.txt'),
+				content: readFileSync('${dir}/renamed.txt', 'utf8')
+			}))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			oldExists: false,
+			newExists: true,
+			content: 'content'
+		})
+	})
+
+	test('realpathSync resolves path', ({ bin, dir }) => {
+		writeFileSync(`${dir}/file.txt`, 'content')
+		writeFileSync(`${dir}/test.js`, `
+			import { realpathSync } from 'node:fs'
+			const resolved = realpathSync('${dir}/./file.txt')
+			console.log(JSON.stringify({ resolved }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.resolved, `${dir}/file.txt`)
+	})
+
+	test('readlinkSync reads symlink target', ({ bin, dir }) => {
+		writeFileSync(`${dir}/target.txt`, 'target content')
+		writeFileSync(`${dir}/test.js`, `
+			import { symlinkSync, readlinkSync } from 'node:fs'
+			symlinkSync('${dir}/target.txt', '${dir}/link.txt')
+			const target = readlinkSync('${dir}/link.txt')
+			console.log(JSON.stringify({ target }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { target: `${dir}/target.txt` })
+	})
 })
