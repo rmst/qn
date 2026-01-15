@@ -168,7 +168,7 @@ describe('node:child_process shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { stderr: 'error' })
 	})
 
-	// Note: execFile with input option is a qjsx-node extension, not supported in Node.js
+	// Note: execFile with input option is a qnode extension, not supported in Node.js
 	// Use stdin.write() instead for cross-platform compatibility (see streaming tests below)
 
 	test('execFile callback receives error on non-zero exit', ({ bin, dir }) => {

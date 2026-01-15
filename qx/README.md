@@ -11,7 +11,7 @@ Commands run via `/bin/sh` (POSIX shell). Interpolated values are safely escaped
 ./bin/qx script.js
 ```
 
-**As a library in qjsx-node:**
+**As a library in qnode:**
 ```javascript
 import { $, ProcessPromise, ProcessOutput } from 'qx'
 // or
@@ -63,7 +63,7 @@ await within(async () => {
 
 ## Node.js Modules
 
-All qjsx-node shims are available:
+All qnode shims are available:
 
 ```javascript
 import { readFileSync } from 'node:fs'
@@ -71,7 +71,7 @@ import path from 'node:path'
 import process from 'node:process'
 ```
 
-See [node-compatibility.md](../qjsx-node/node-compatibility.md) for details.
+See [node-compatibility.md](../qnode/node-compatibility.md) for details.
 
 ## Configuration
 

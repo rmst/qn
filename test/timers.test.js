@@ -4,7 +4,7 @@ import { writeFileSync, rmSync } from 'node:fs'
 import { platform } from 'node:os'
 import { test, $, mktempdir } from './util.js'
 
-const QJSX_NODE = `./bin/${platform()}/qjsx-node`
+const QNODE = `./bin/${platform()}/qnode`
 
 describe('timer globals', () => {
 	test('setTimeout works', ({ bin, dir }) => {
@@ -27,8 +27,8 @@ describe('timer globals', () => {
 		assert.strictEqual(output, 'done')
 	})
 
-	// qjsx-node specific tests (behavior differs from Node.js)
-	nodetest('setTimeout with extra args throws NodeCompatibilityError [qjsx-node]', () => {
+	// qnode specific tests (behavior differs from Node.js)
+	nodetest('setTimeout with extra args throws NodeCompatibilityError [qnode]', () => {
 		const dir = mktempdir()
 		try {
 			writeFileSync(`${dir}/test.js`, `
@@ -39,14 +39,14 @@ describe('timer globals', () => {
 					console.log(e.name)
 				}
 			`)
-			const output = $`${QJSX_NODE} ${dir}/test.js`
+			const output = $`${QNODE} ${dir}/test.js`
 			assert.strictEqual(output, 'NodeCompatibilityError')
 		} finally {
 			rmSync(dir, { recursive: true })
 		}
 	})
 
-	nodetest('setInterval throws NodeCompatibilityError [qjsx-node]', () => {
+	nodetest('setInterval throws NodeCompatibilityError [qnode]', () => {
 		const dir = mktempdir()
 		try {
 			writeFileSync(`${dir}/test.js`, `
@@ -57,14 +57,14 @@ describe('timer globals', () => {
 					console.log(e.name)
 				}
 			`)
-			const output = $`${QJSX_NODE} ${dir}/test.js`
+			const output = $`${QNODE} ${dir}/test.js`
 			assert.strictEqual(output, 'NodeCompatibilityError')
 		} finally {
 			rmSync(dir, { recursive: true })
 		}
 	})
 
-	nodetest('clearInterval throws NodeCompatibilityError [qjsx-node]', () => {
+	nodetest('clearInterval throws NodeCompatibilityError [qnode]', () => {
 		const dir = mktempdir()
 		try {
 			writeFileSync(`${dir}/test.js`, `
@@ -75,7 +75,7 @@ describe('timer globals', () => {
 					console.log(e.name)
 				}
 			`)
-			const output = $`${QJSX_NODE} ${dir}/test.js`
+			const output = $`${QNODE} ${dir}/test.js`
 			assert.strictEqual(output, 'NodeCompatibilityError')
 		} finally {
 			rmSync(dir, { recursive: true })

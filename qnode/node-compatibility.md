@@ -1,6 +1,6 @@
-# qjsx-node Compatibility
+# qnode Compatibility
 
-`qjsx-node` provides a subset of the Node.js API on top of QuickJS. This document lists what's available and what's not.
+`qnode` provides a subset of the Node.js API on top of QuickJS. This document lists what's available and what's not.
 
 CommonJS is not supported. Use ES modules with `import.meta.dirname` and `import.meta.filename` instead of `__dirname` and `__filename`.
 

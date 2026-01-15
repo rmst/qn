@@ -345,17 +345,17 @@ describe('qx shell escaping', () => {
 	})
 })
 
-describe('qx as library in qjsx-node', () => {
+describe('qx as library in qnode', () => {
 	test('import { $ } from qx works', () => {
 		const dir = mktempdir()
-		const QJSX_NODE = resolve(`./bin/${platform()}/qjsx-node`)
+		const QNODE = resolve(`./bin/${platform()}/qnode`)
 		try {
 			writeFileSync(`${dir}/test.js`, `
 				import { $ } from 'qx'
 				const result = await $\`echo "library test"\`
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`)
-			const output = execSync(`${QJSX_NODE} ${dir}/test.js`, { encoding: 'utf8' }).trim()
+			const output = execSync(`${QNODE} ${dir}/test.js`, { encoding: 'utf8' }).trim()
 			assert.deepStrictEqual(JSON.parse(output), { out: 'library test' })
 		} finally {
 			rmSync(dir, { recursive: true })
@@ -364,14 +364,14 @@ describe('qx as library in qjsx-node', () => {
 
 	test('import $ from qx (default export) works', () => {
 		const dir = mktempdir()
-		const QJSX_NODE = resolve(`./bin/${platform()}/qjsx-node`)
+		const QNODE = resolve(`./bin/${platform()}/qnode`)
 		try {
 			writeFileSync(`${dir}/test.js`, `
 				import $ from 'qx'
 				const result = await $\`echo "default export"\`
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`)
-			const output = execSync(`${QJSX_NODE} ${dir}/test.js`, { encoding: 'utf8' }).trim()
+			const output = execSync(`${QNODE} ${dir}/test.js`, { encoding: 'utf8' }).trim()
 			assert.deepStrictEqual(JSON.parse(output), { out: 'default export' })
 		} finally {
 			rmSync(dir, { recursive: true })

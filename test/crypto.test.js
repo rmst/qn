@@ -99,8 +99,8 @@ describe('node:crypto shim', () => {
 			console.log(JSON.stringify({ threw }))
 		`)
 
-		// Only qjsx-node throws for md5, Node.js supports it
-		// This test verifies qjsx-node behavior
+		// Only qnode throws for md5, Node.js supports it
+		// This test verifies qnode behavior
 		if (bin.includes('qjsx')) {
 			const output = $`${bin} ${dir}/test.js`
 			assert.deepStrictEqual(JSON.parse(output), { threw: true })

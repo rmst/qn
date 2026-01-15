@@ -8,7 +8,7 @@ export const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), '/')))
 
 
 
-const QJSX_NODE = resolve(`./bin/${platform()}/qjsx-node`)
+const QNODE = resolve(`./bin/${platform()}/qnode`)
 
 /**
  * @overload
@@ -41,14 +41,14 @@ export const $ = (strings, ...values) => {
 }
 
 /**
- * Run a test twice: once with Node.js, once with qjsx-node.
+ * Run a test twice: once with Node.js, once with qnode.
  * Both runs must produce identical output.
  * @param {string} name - Test name
  * @param {(ctx: { bin: string, dir: string }) => void} fn - Test function receiving { bin, dir }
  */
 export const test = (name, fn) => {
-	for (const bin of ['node', QJSX_NODE]) {
-		const label = bin === 'node' ? 'node' : 'qjsx-node'
+	for (const bin of ['node', QNODE]) {
+		const label = bin === 'node' ? 'node' : 'qnode'
 		const testFn = () => {
 			const dir = mktempdir()
 			try {
