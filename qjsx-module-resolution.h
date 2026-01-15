@@ -224,4 +224,164 @@ static char *translate_colons_to_slashes(JSContext *ctx, const char *name) {
     return translated;
 }
 
+/* ========================================================================
+ * MODULE NAME NORMALIZATION
+ * ======================================================================== */
+
+/**
+ * Check if Node.js strict resolution mode is enabled.
+ *
+ * Node mode (QJSX_MODULE_RESOLUTION=node):
+ *   - Matches Node.js ESM behavior exactly
+ *   - Explicit extensions required (no .js fallback)
+ *   - No automatic index.js resolution
+ *   - QJSXPATH and colon-to-slash still work
+ *
+ * Bundler mode (default):
+ *   - "./foo" resolves to "./foo.js" if it exists
+ *   - "./dir" resolves to "./dir/index.js" if it exists
+ *   - Normalizer strips .js and /index.js for canonical names
+ */
+static int is_node_resolution(void) {
+    const char *mode = getenv("QJSX_MODULE_RESOLUTION");
+    return mode && strcmp(mode, "node") == 0;
+}
+
+/**
+ * Normalize a module name by resolving relative path components.
+ *
+ * This is the core path normalization logic (based on QuickJS's default).
+ * It handles:
+ *   - Bare imports: returned unchanged
+ *   - Relative paths: "./foo" and "../bar" resolved against base_name
+ *
+ * @param ctx - QuickJS context (for memory allocation)
+ * @param base_name - The name of the importing module
+ * @param name - The import specifier to normalize
+ * @return Normalized module name, or NULL on allocation failure
+ */
+static char *normalize_module_name(JSContext *ctx, const char *base_name,
+                                   const char *name) {
+    char *filename, *p;
+    const char *r;
+    int cap;
+    int len;
+
+    if (name[0] != '.') {
+        // Bare import (no leading dot) - return unchanged
+        return js_strdup(ctx, name);
+    }
+
+    // Find the directory part of base_name
+    p = strrchr(base_name, '/');
+    if (p)
+        len = p - base_name;
+    else
+        len = 0;
+
+    // Allocate buffer for result
+    cap = len + strlen(name) + 1 + 1;
+    filename = js_malloc(ctx, cap);
+    if (!filename)
+        return NULL;
+    memcpy(filename, base_name, len);
+    filename[len] = '\0';
+
+    // Resolve leading './' and '../' sequences
+    r = name;
+    for (;;) {
+        if (r[0] == '.' && r[1] == '/') {
+            // "./" - just skip it
+            r += 2;
+        } else if (r[0] == '.' && r[1] == '.' && r[2] == '/') {
+            // "../" - go up one directory
+            if (filename[0] == '\0')
+                break;
+            p = strrchr(filename, '/');
+            if (!p)
+                p = filename;
+            else
+                p++;
+            if (!strcmp(p, ".") || !strcmp(p, ".."))
+                break;
+            if (p > filename)
+                p--;
+            *p = '\0';
+            r += 3;
+        } else {
+            break;
+        }
+    }
+
+    // Append the remaining path
+    if (filename[0] != '\0')
+        pstrcat(filename, cap, "/");
+    pstrcat(filename, cap, r);
+
+    return filename;
+}
+
+/**
+ * Strip "/index.js" suffix from a path (in place).
+ */
+static void strip_index_js_suffix(char *path) {
+    size_t len = strlen(path);
+    if (len > 9 && strcmp(path + len - 9, "/index.js") == 0) {
+        path[len - 9] = '\0';
+    }
+}
+
+/**
+ * Strip ".js" suffix from a path (in place).
+ */
+static void strip_js_suffix(char *path) {
+    size_t len = strlen(path);
+    if (len > 3 && strcmp(path + len - 3, ".js") == 0) {
+        path[len - 3] = '\0';
+    }
+}
+
+/**
+ * QJSX module normalizer - produces canonical module names.
+ *
+ * This normalizer is used by both qjsx (interpreter) and compiled binaries.
+ * It ensures that different import specifiers for the same logical module
+ * produce the same canonical name, enabling embedded module lookup.
+ *
+ * Processing steps:
+ *   1. Colon-to-slash translation (e.g., "node:fs" -> "node/fs")
+ *   2. Resolve relative paths (handle "./" and "../")
+ *   3. In bundler mode: strip ".js" and "/index.js" for canonical form
+ *
+ * @param ctx - QuickJS context
+ * @param base_name - The name of the importing module
+ * @param name - The import specifier to normalize
+ * @param opaque - Unused (for API compatibility)
+ * @return Canonical module name, or NULL on error
+ */
+static char *qjsx_module_normalizer(JSContext *ctx, const char *base_name,
+                                    const char *name, void *opaque) {
+    // Step 1: Colon-to-slash translation
+    char *translated = translate_colons_to_slashes(ctx, name);
+    const char *work_name = translated ? translated : name;
+
+    // Step 2: Resolve relative paths
+    char *result = normalize_module_name(ctx, base_name, work_name);
+
+    // Clean up translated name if allocated
+    if (translated)
+        js_free(ctx, translated);
+
+    if (!result)
+        return NULL;
+
+    // Step 3: Strip .js and /index.js for canonical form (except in node mode)
+    if (!is_node_resolution()) {
+        strip_index_js_suffix(result);
+        strip_js_suffix(result);
+    }
+
+    return result;
+}
+
 #endif /* QJSX_MODULE_RESOLUTION_H */

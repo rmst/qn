@@ -2,7 +2,7 @@ import container from "./container.js"
 
 export const run = {
 	default: jix.script`
-		${container.testContainer()} ${container.testImage} bash -c '
+		${container.run()} bash -c '
 			export PATH=~/.jix/bin:$PATH
 			export BUILD_DIR=/build
 			make build
@@ -15,10 +15,4 @@ export const run = {
 		make build
 		node --test test/*.test.js
 	`,
-}
-
-export const install = {
-	dev: () => {
-		container.install()
-	}
 }

@@ -132,7 +132,7 @@ install: $(QJSX_PROG) $(QJSX_NODE_PROG) $(QJSXC_PROG)
 
 # Test target
 test: build
-	jix run -f test/__jix__.js host
+	jix run -f test/__jix__.js
 
 # Help target
 help:

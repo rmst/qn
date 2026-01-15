@@ -1,22 +1,16 @@
 # QuickJS-x
 
-QuickJS-x is [QuickJS](https://bellard.org/quickjs) with a few, additional features patched in:
+QuickJS-x is [QuickJS](https://bellard.org/quickjs) with a few additional features:
 
-1. Custom module loader implementing `QJSXPATH` (like `NODE_PATH`) resolution, to specify additional paths for imports.
+1. **Module resolution** with two modes (see [tests](test/module-resolution/)):
+   - **Bundler mode** (default): `QJSXPATH` for bare imports, `.js` and `/index.js` fallbacks
+   - **Node mode** (`QJSX_MODULE_RESOLUTION=node`): matches Node.js ESM exactly
 
-2. Node.js-style `index.js` resolution for all imports:
+2. `import.meta.dirname` and `import.meta.filename`
 
-	`... from "./module_dir"` → `... from "./module_dir/index.js"`
+3. `qjsx-node` binary with Node.js standard library shims (`node:fs`, `node:child_process`, etc.)
 
-3. Colon-to-slash translation (useful for our Node.js shim):
-
-	`... from "node:fs"` → `... from "node/fs"`
-
-4. We add `import.meta.dirname` and `import.meta.filename`.
-
-5. We also provide an additional binary `qjsx-node`, making a small subset of the Node.js standard library available (e.g. parts of `node:fs`, `node:child_process`, see `qjsx-node` directory).
-
-6. `os.SandboxedWorker` - a Worker-like API for running JS in a restricted environment without std/os access (see `sandboxed-worker` directory).
+4. `os.SandboxedWorker` for running JS in a restricted environment (see [test](test/sandbox.test.js))
 
 All original QuickJS features are preserved.
 
