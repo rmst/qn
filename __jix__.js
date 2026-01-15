@@ -1,3 +1,5 @@
+import { execSync } from 'node:child_process'
+
 export const run = {
 	default: jix.script`
 
@@ -5,16 +7,14 @@ export const run = {
 }
 
 
-
-
 const binDir = () => {
 
 	let repo = jix.git.checkout({
 		repo: import.meta.dirname,
-		commit: jix.exec`git rev-parse HEAD`
+		commit: execSync('git rev-parse HEAD', { cwd: import.meta.dirname, encoding: 'utf8' }).trim()
 	})
 
-	let repo = import.meta.dirname
+	// let repo = import.meta.dirname
 
 	let platform = jix.target().host.os === "macos" ? "darwin" : "linux"
 
@@ -24,15 +24,16 @@ const binDir = () => {
 		make build
 		mkdir -p "$out"
 		cp ./bin/${platform}/qjsx "$out/"
-		cp ./bin/${platform}/qjsx-node "$out/"
+		cp ./bin/${platform}/qnode "$out/"
 		cp ./bin/${platform}/qjsxc "$out/"
+		cp ./bin/${platform}/qx "$out/"
 	`
 }
 
 
 const bin = {
 	qjsx: () => `${binDir}/qjsx`,
-	"qjsx-node": () => `${binDir}/qjsx-node`,
+	qnode: () => `${binDir}/qnode`,
 	qjsxc: () => `${binDir}/qjsxc`,
 	qx: () => `${binDir}/qx`,
 }
