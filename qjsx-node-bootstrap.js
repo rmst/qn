@@ -14,6 +14,12 @@
 import * as std from "std";
 import * as os from "os";
 
+// Add missing console methods for Node.js compatibility
+console.error = (...args) => { std.err.puts(args.join(' ') + '\n'); std.err.flush() }
+console.warn = console.error
+console.info = console.log
+console.debug = console.log
+
 // Check if a script was provided
 if (scriptArgs.length < 2) {
     console.log("Usage: qjsx-node <script.js> [args...]");
@@ -22,9 +28,8 @@ if (scriptArgs.length < 2) {
 
 const scriptPath = scriptArgs[1];
 
-// Shift scriptArgs so loaded modules see [scriptPath, args...] instead of [qjsx-node, scriptPath, args...]
-// This matches the behavior of running `qjsx script.js args...` directly
-globalThis.scriptArgs = scriptArgs.slice(1);
+// Keep scriptArgs as-is to match Node.js argv behavior:
+// argv[0] = interpreter, argv[1] = script, argv[2+] = args
 
 // Load and execute the user's script
 try {

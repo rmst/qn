@@ -4,6 +4,29 @@ import { writeFileSync } from 'node:fs'
 import { test, $ } from './util.js'
 
 describe('node:process shim', () => {
+	test('process.argv structure matches Node.js', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import process from 'node:process'
+			console.log(JSON.stringify({
+				length: process.argv.length,
+				argv0Type: typeof process.argv[0],
+				argv1: process.argv[1],
+				argv2: process.argv[2],
+				argv3: process.argv[3]
+			}))
+		`)
+
+		const output = $`${bin} ${dir}/test.js arg1 arg2`
+		const result = JSON.parse(output)
+
+		// argv[0] = interpreter path, argv[1] = script path, argv[2+] = user args
+		assert.strictEqual(result.length, 4)
+		assert.strictEqual(result.argv0Type, 'string')
+		assert.strictEqual(result.argv1, `${dir}/test.js`)
+		assert.strictEqual(result.argv2, 'arg1')
+		assert.strictEqual(result.argv3, 'arg2')
+	})
+
 	test('process.cwd matches Node.js', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import process from 'node:process'
