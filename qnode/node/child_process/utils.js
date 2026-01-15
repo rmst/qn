@@ -1,4 +1,5 @@
 import * as std from 'std'
+import * as os from 'os'
 
 /**
  * Error for unsupported Node.js compatibility features.
@@ -43,7 +44,7 @@ export function checkEncodingOption(options, fnName) {
 }
 
 /**
- * Reads the entire contents from a file descriptor using std.fdopen.
+ * Reads the entire contents from a file descriptor as a UTF-8 string.
  * @param {number} fd - The file descriptor to read from.
  * @returns {string} - The string contents of the file descriptor.
  */
@@ -58,6 +59,42 @@ export function readFromFd(fd) {
 	file.close()
 
 	return output
+}
+
+/**
+ * Reads the entire contents from a file descriptor as raw bytes.
+ * @param {number} fd - The file descriptor to read from.
+ * @returns {Uint8Array} - The raw bytes from the file descriptor.
+ */
+export function readBytesFromFd(fd) {
+	const chunks = []
+	const buf = new Uint8Array(4096)
+	let totalLen = 0
+
+	while (true) {
+		const n = os.read(fd, buf.buffer, 0, buf.length)
+		if (n <= 0) break
+		chunks.push(buf.slice(0, n))
+		totalLen += n
+	}
+
+	os.close(fd)
+
+	// Concatenate all chunks
+	if (chunks.length === 0) {
+		return new Uint8Array(0)
+	}
+	if (chunks.length === 1) {
+		return chunks[0]
+	}
+
+	const result = new Uint8Array(totalLen)
+	let offset = 0
+	for (const chunk of chunks) {
+		result.set(chunk, offset)
+		offset += chunk.length
+	}
+	return result
 }
 
 /**
@@ -78,3 +115,41 @@ export function prefixLines(prefix, str) {
  * @returns {string}
  */
 export const indent = str => prefixLines("  ", str)
+
+/**
+ * Spawn a process with pipes for stdin, stdout, and stderr.
+ * This is the shared low-level helper used by both execFile and execFileSync.
+ *
+ * @param {string} file - The command or executable file to run.
+ * @param {string[]} args - The list of arguments to pass to the command.
+ * @param {Object} options - Options for the process.
+ * @param {Object} [options.env] - Environment variables for the command.
+ * @param {string} [options.cwd] - Working directory for the command.
+ * @returns {{ pid: number, stdinFd: number, stdoutFd: number, stderrFd: number }}
+ */
+export function spawnWithPipes(file, args, options = {}) {
+	const env = options.env || std.getenviron()
+	const cwd = options.cwd || undefined
+
+	// Create pipes for stdin, stdout, and stderr
+	const [stdinRead, stdinWrite] = os.pipe()
+	const [stdoutRead, stdoutWrite] = os.pipe()
+	const [stderrRead, stderrWrite] = os.pipe()
+
+	// Spawn the process (non-blocking)
+	const pid = os.exec([file, ...args], {
+		block: false,
+		env,
+		cwd,
+		stdin: stdinRead,
+		stdout: stdoutWrite,
+		stderr: stderrWrite,
+	})
+
+	// Close child-side of pipes in parent
+	os.close(stdinRead)
+	os.close(stdoutWrite)
+	os.close(stderrWrite)
+
+	return { pid, stdinFd: stdinWrite, stdoutFd: stdoutRead, stderrFd: stderrRead }
+}

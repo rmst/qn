@@ -87,8 +87,8 @@ import { readFileSync, writeFileSync, existsSync, ... } from 'node:fs';
 
 | Function | Status | Notes |
 |----------|--------|-------|
-| `readFileSync` | ⚠️ | String only, requires encoding |
-| `writeFileSync` | ⚠️ | String only |
+| `readFileSync` | ✅ | Returns `Uint8Array` if no encoding, string if `utf8` |
+| `writeFileSync` | ✅ | Accepts string, `ArrayBuffer`, or `TypedArray` |
 | `existsSync` | ✅ | |
 | `statSync` | ✅ | |
 | `lstatSync` | ✅ | |
@@ -131,14 +131,14 @@ import { spawn, exec, execFile, execSync, execFileSync } from 'node:child_proces
 |----------|--------|-------|
 | `spawn` | ✅ | Supports `cwd`, `env`, `stdio`, `shell` |
 | `exec` | ✅ | Async with callback, runs via shell |
-| `execFile` | ✅ | Async with callback and events |
+| `execFile` | ✅ | Async with callback and events; supports `timeout`, `killSignal` |
 | `execSync` | ✅ | Supports `cwd`, `env`, `input`, `shell` |
-| `execFileSync` | ✅ | Supports `cwd`, `env`, `input` |
+| `execFileSync` | ✅ | Supports `cwd`, `env`, `input`, `timeout`, `killSignal` |
 | `ChildProcess` | ✅ | EventEmitter with streaming stdio |
 | `spawnSync` | ❌ | |
 | `fork` | ❌ | |
 
-**Unsupported options** (throw `NodeCompatibilityError`): `timeout`, `killSignal`, `uid`, `gid`, `signal`, `detached`
+**Unsupported options** (throw `NodeCompatibilityError`): `uid`, `gid`, `signal`, `detached`
 
 **Ignored options**: `maxBuffer`, `windowsHide`
 

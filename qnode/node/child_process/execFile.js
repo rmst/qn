@@ -1,6 +1,6 @@
-import * as std from 'std'
 import * as os from 'os'
 import { ChildProcess } from 'node/child_process/ChildProcess.js'
+import { spawnWithPipes, NodeCompatibilityError } from 'node/child_process/utils.js'
 
 /**
  * Execute a file asynchronously.
@@ -10,6 +10,9 @@ import { ChildProcess } from 'node/child_process/ChildProcess.js'
  * @param {Object} [options.env] - Environment variables for the command.
  * @param {string} [options.cwd] - Working directory for the command.
  * @param {string} [options.input] - A string to be passed as input to the command (closes stdin after).
+ * @param {number} [options.timeout=0] - Timeout in milliseconds (0 means no timeout).
+ * @param {string} [options.killSignal='SIGTERM'] - Signal to send when timeout expires.
+ * @param {string} [options.encoding] - If 'utf8', callback receives strings; otherwise Uint8Array.
  * @param {Function} [callback] - Called with (error, stdout, stderr) when process completes.
  * @returns {ChildProcess}
  *
@@ -26,6 +29,12 @@ import { ChildProcess } from 'node/child_process/ChildProcess.js'
  * child.stdout.on('data', (chunk) => console.log('received:', chunk))
  * child.stdin.write('hello\n')
  * child.stdin.end()
+ *
+ * @example
+ * // With timeout
+ * execFile('sleep', ['10'], { timeout: 1000 }, (error, stdout, stderr) => {
+ *   if (error) console.error('Timed out or failed:', error.message)
+ * })
  */
 export function execFile(file, args, options, callback) {
 	// Handle overloaded arguments
@@ -52,35 +61,35 @@ export function execFile(file, args, options, callback) {
 		throw new TypeError('args must be an array')
 	}
 
-	const env = options.env || std.getenviron()
-	const cwd = options.cwd || undefined
-
-	// Create pipes for all stdio
-	const [stdinRead, stdinWrite] = os.pipe()
-	const [stdoutRead, stdoutWrite] = os.pipe()
-	const [stderrRead, stderrWrite] = os.pipe()
-
-	// Spawn the process (non-blocking)
-	const pid = os.exec([file, ...args], {
-		block: false,
-		env,
-		cwd,
-		stdin: stdinRead,
-		stdout: stdoutWrite,
-		stderr: stderrWrite,
-	})
-
-	// Close child-side of pipes in parent
-	os.close(stdinRead)
-	os.close(stdoutWrite)
-	os.close(stderrWrite)
+	// Spawn the process with pipes
+	const { pid, stdinFd, stdoutFd, stderrFd } = spawnWithPipes(file, args, options)
 
 	// Create ChildProcess instance with streams
 	const child = new ChildProcess(pid, {
-		stdoutFd: stdoutRead,
-		stderrFd: stderrRead,
-		stdinFd: stdinWrite,
+		stdoutFd,
+		stderrFd,
+		stdinFd,
 	})
+
+	// Set up timeout if specified
+	let timeoutId = null
+	let timedOut = false
+	const timeout = options.timeout || 0
+	const killSignal = options.killSignal || 'SIGTERM'
+
+	if (timeout > 0) {
+		timeoutId = os.setTimeout(() => {
+			timedOut = true
+			child.kill(killSignal)
+		}, timeout)
+
+		child.on('close', () => {
+			if (timeoutId !== null) {
+				os.clearTimeout(timeoutId)
+				timeoutId = null
+			}
+		})
+	}
 
 	// Write input if provided and close stdin
 	if (options.input !== undefined) {
@@ -89,24 +98,88 @@ export function execFile(file, args, options, callback) {
 
 	// If callback provided, collect stream data and call on close
 	if (typeof callback === 'function') {
-		let stdoutData = ''
-		let stderrData = ''
+		// Check encoding option
+		const encoding = options.encoding
+		if (encoding && encoding.toLowerCase().replace('-', '') !== 'utf8') {
+			throw new NodeCompatibilityError(
+				`execFile: encoding '${encoding}' is not supported, only 'utf8' is supported`
+			)
+		}
+		const useUtf8 = encoding && encoding.toLowerCase().replace('-', '') === 'utf8'
+
+		// Set encoding on streams if specified
+		if (useUtf8) {
+			child.stdout.setEncoding('utf8')
+			child.stderr.setEncoding('utf8')
+		}
+
+		// Collect output - strings if encoding set, otherwise Uint8Array chunks
+		let stdoutChunks = useUtf8 ? '' : []
+		let stderrChunks = useUtf8 ? '' : []
 
 		child.stdout.on('data', (chunk) => {
-			stdoutData += chunk
+			if (useUtf8) {
+				stdoutChunks += chunk
+			} else {
+				stdoutChunks.push(chunk)
+			}
 		})
 
 		child.stderr.on('data', (chunk) => {
-			stderrData += chunk
+			if (useUtf8) {
+				stderrChunks += chunk
+			} else {
+				stderrChunks.push(chunk)
+			}
 		})
 
 		child.on('close', (code) => {
-			const error = code !== 0
-				? Object.assign(new Error(`Command failed: ${file}`), { code })
-				: null
+			// Combine chunks into final output
+			let stdoutData, stderrData
+			if (useUtf8) {
+				stdoutData = stdoutChunks
+				stderrData = stderrChunks
+			} else {
+				stdoutData = concatUint8Arrays(stdoutChunks)
+				stderrData = concatUint8Arrays(stderrChunks)
+			}
+
+			let error = null
+			if (timedOut) {
+				error = Object.assign(new Error(`Command timed out: ${file}`), {
+					code,
+					killed: true,
+					signal: killSignal,
+				})
+			} else if (code !== 0) {
+				error = Object.assign(new Error(`Command failed: ${file}`), { code })
+			}
 			callback(error, stdoutData, stderrData)
 		})
 	}
 
 	return child
+}
+
+/**
+ * Concatenate array of Uint8Arrays into a single Uint8Array.
+ * @param {Uint8Array[]} arrays
+ * @returns {Uint8Array}
+ */
+function concatUint8Arrays(arrays) {
+	if (arrays.length === 0) {
+		return new Uint8Array(0)
+	}
+	if (arrays.length === 1) {
+		return arrays[0]
+	}
+
+	const totalLen = arrays.reduce((sum, arr) => sum + arr.length, 0)
+	const result = new Uint8Array(totalLen)
+	let offset = 0
+	for (const arr of arrays) {
+		result.set(arr, offset)
+		offset += arr.length
+	}
+	return result
 }

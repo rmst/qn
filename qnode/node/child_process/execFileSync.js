@@ -1,10 +1,8 @@
 import * as std from 'std'
 import * as os from 'os'
-import { readFromFd, indent, checkUnsupportedOptions, checkEncodingOption } from 'node/child_process/utils.js'
+import { readFromFd, readBytesFromFd, indent, checkUnsupportedOptions, spawnWithPipes, NodeCompatibilityError } from 'node/child_process/utils.js'
 
 const UNSUPPORTED_OPTIONS = [
-	'timeout',
-	'killSignal',
 	'uid',
 	'gid',
 	'stdio',
@@ -19,24 +17,32 @@ const UNSUPPORTED_OPTIONS = [
  * @param {Object} [options={}] - Optional parameters.
  * @param {Object} [options.env] - Environment variables for the command.
  * @param {string} [options.cwd] - Working directory for the command.
- * @param {string} [options.stdout] - Redirect stdout (can be 'inherit').
- * @param {string} [options.stderr] - Redirect stderr (can be 'inherit').
- * @param {string} [options.input] - A string to be passed as input to the command.
+ * @param {string} [options.input] - A string or Uint8Array to be passed as input to the command.
+ * @param {number} [options.timeout=0] - Timeout in milliseconds (0 means no timeout).
+ * @param {string} [options.killSignal='SIGTERM'] - Signal to send when timeout expires.
+ * @param {string} [options.encoding] - If 'utf8', returns string; otherwise returns Uint8Array.
  *
- * @returns {string} - The stdout output of the command (if not forwarded).
+ * @returns {Uint8Array|string} - The stdout output (Uint8Array by default, string if encoding='utf8').
  *
- * @throws {Error} - Throws an error if the command exits with a non-zero status.
- *
- * @example
- * const output = execFileSync('echo', ['Hello, World!'])
- * console.log(output)  // Outputs: Hello, World!
+ * @throws {Error} - Throws an error if the command exits with a non-zero status or times out.
  *
  * @example
- * const output = execFileSync('cat', [], { input: 'Hello from input!' })
- * console.log(output)  // Outputs: Hello from input!
+ * // Returns Uint8Array by default
+ * const bytes = execFileSync('echo', ['Hello, World!'])
+ * console.log(bytes)  // Uint8Array
  *
  * @example
- * execFileSync('your_command', ['arg1'], { stdout: 'inherit', stderr: 'inherit' })
+ * // Returns string with encoding option
+ * const output = execFileSync('echo', ['Hello, World!'], { encoding: 'utf8' })
+ * console.log(output)  // "Hello, World!"
+ *
+ * @example
+ * // With timeout
+ * try {
+ *   execFileSync('sleep', ['10'], { timeout: 1000 })
+ * } catch (e) {
+ *   console.log('Timed out!')
+ * }
  */
 export function execFileSync(file, args = [], options = {}) {
 	if (typeof file !== 'string') {
@@ -50,66 +56,86 @@ export function execFileSync(file, args = [], options = {}) {
 	}
 
 	checkUnsupportedOptions(options, UNSUPPORTED_OPTIONS, 'execFileSync')
-	checkEncodingOption(options, 'execFileSync')
 
-	const env = options.env || std.getenviron()
-	const cwd = options.cwd || undefined
-
-	// Create pipes for stdin, stdout, and stderr
-	let stdinRead = null
-	let stdinWrite = null
-	if (options.input) {
-		[stdinRead, stdinWrite] = os.pipe()
+	// Check encoding option
+	const encoding = options.encoding
+	if (encoding && encoding.toLowerCase().replace('-', '') !== 'utf8') {
+		throw new NodeCompatibilityError(
+			`execFileSync: encoding '${encoding}' is not supported, only 'utf8' is supported`
+		)
 	}
+	const useUtf8 = encoding && encoding.toLowerCase().replace('-', '') === 'utf8'
 
-	const inheritStdout = options.stdout === 'inherit'
-	let stdoutRead, stdoutWrite
-	if (!inheritStdout) {
-		[stdoutRead, stdoutWrite] = os.pipe()
-	}
+	// Spawn the process with pipes
+	const { pid, stdinFd, stdoutFd, stderrFd } = spawnWithPipes(file, args, options)
 
-	const inheritStderr = options.stderr === 'inherit'
-	let stderrRead, stderrWrite
-	if (!inheritStderr) {
-		[stderrRead, stderrWrite] = os.pipe()
-	}
-
-	// Prepare the process execution
-	const execOptions = {
-		env,
-		cwd,
-		...(options.input ? { stdin: stdinRead } : {}),
-		...(inheritStdout ? {} : { stdout: stdoutWrite }),
-		...(inheritStderr ? {} : { stderr: stderrWrite }),
-	}
-
-	// Write input to the process if provided
-	if (options.input) {
-		const inputFile = std.fdopen(stdinWrite, 'w')
+	// Write input to the process if provided, then close stdin
+	if (options.input !== undefined) {
+		const inputFile = std.fdopen(stdinFd, 'w')
 		inputFile.puts(options.input)
 		inputFile.close()
+	} else {
+		os.close(stdinFd)
 	}
 
-	const exitCode = os.exec([file, ...args], execOptions)
+	// Poll for process exit with timeout support
+	const timeout = options.timeout || 0
+	const killSignal = options.killSignal || 'SIGTERM'
+	const startTime = Date.now()
+	let timedOut = false
+	let exitCode = null
+	let signalCode = null
 
-	// Close the parent's copy of stdinRead after the child has inherited it
-	if (options.input) {
-		os.close(stdinRead)
+	while (true) {
+		const [ret, status] = os.waitpid(pid, os.WNOHANG)
+
+		if (ret === pid) {
+			// Process has exited - decode status
+			if ((status & 0x7F) === 0) {
+				// Normal exit
+				exitCode = (status >> 8) & 0xFF
+			} else {
+				// Killed by signal
+				signalCode = status & 0x7F
+			}
+			break
+		}
+
+		// Check timeout
+		if (timeout > 0 && Date.now() - startTime > timeout) {
+			timedOut = true
+			os.kill(pid, typeof killSignal === 'string' ? getSignalNumber(killSignal) : killSignal)
+			// Wait for the process to actually terminate
+			os.waitpid(pid, 0)
+			break
+		}
+
+		// Small sleep to avoid busy-waiting (1ms)
+		os.sleep(1)
 	}
 
-	// Read stdout and stderr from pipes if not forwarded
-	let output = ""
-	if (!inheritStdout) {
-		os.close(stdoutWrite)
-		output = readFromFd(stdoutRead)
-		os.close(stdoutRead)
+	// Read stdout and stderr from pipes
+	let output, errorOutput
+	if (useUtf8) {
+		output = readFromFd(stdoutFd)
+		errorOutput = readFromFd(stderrFd)
+	} else {
+		output = readBytesFromFd(stdoutFd)
+		errorOutput = readBytesFromFd(stderrFd)
 	}
 
-	let errorOutput = ""
-	if (!inheritStderr) {
-		os.close(stderrWrite)
-		errorOutput = readFromFd(stderrRead)
-		os.close(stderrRead)
+	// Helper to get string version of output for error messages
+	const outputStr = useUtf8 ? output : bytesToString(output)
+	const errorOutputStr = useUtf8 ? errorOutput : bytesToString(errorOutput)
+
+	// Handle timeout
+	if (timedOut) {
+		const error = new Error(`Command timed out: ${file}`)
+		error.killed = true
+		error.signal = killSignal
+		error.stdout = output
+		error.stderr = errorOutput
+		throw error
 	}
 
 	// Handle error case if exit code is non-zero
@@ -138,15 +164,85 @@ export function execFileSync(file, args = [], options = {}) {
 			errorMsg += `Cwd: ${options.cwd}\n`
 		}
 
-		errorMsg += `Stderr:\n${indent(errorOutput)}\n`
-		if (errorOutput.includes("\n")) {
+		errorMsg += `Stderr:\n${indent(errorOutputStr)}\n`
+		if (errorOutputStr.includes("\n")) {
 			errorMsg += "\n"
 		}
 
 		const error = new Error(errorMsg)
 		error.status = exitCode
+		error.stdout = output
+		error.stderr = errorOutput
 		throw error
 	}
 
-	return output.trim()
+	// Return trimmed output
+	if (useUtf8) {
+		return output.trim()
+	} else {
+		return trimBytes(output)
+	}
+}
+
+/**
+ * Convert Uint8Array to string (for error messages).
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+function bytesToString(bytes) {
+	const file = std.tmpfile()
+	if (!file) {
+		// Fallback to basic conversion
+		let result = ''
+		for (let i = 0; i < bytes.length; i++) {
+			result += String.fromCharCode(bytes[i])
+		}
+		return result
+	}
+	file.write(bytes.buffer, 0, bytes.length)
+	file.seek(0, std.SEEK_SET)
+	const str = file.readAsString()
+	file.close()
+	return str
+}
+
+/**
+ * Trim trailing whitespace from Uint8Array.
+ * @param {Uint8Array} bytes
+ * @returns {Uint8Array}
+ */
+function trimBytes(bytes) {
+	let end = bytes.length
+	// Trim trailing whitespace (space, tab, newline, carriage return)
+	while (end > 0) {
+		const b = bytes[end - 1]
+		if (b === 0x20 || b === 0x09 || b === 0x0A || b === 0x0D) {
+			end--
+		} else {
+			break
+		}
+	}
+	// Trim leading whitespace
+	let start = 0
+	while (start < end) {
+		const b = bytes[start]
+		if (b === 0x20 || b === 0x09 || b === 0x0A || b === 0x0D) {
+			start++
+		} else {
+			break
+		}
+	}
+	return bytes.subarray(start, end)
+}
+
+// Signal name to number mapping
+function getSignalNumber(signal) {
+	const signals = {
+		SIGHUP: 1,
+		SIGINT: 2,
+		SIGQUIT: 3,
+		SIGKILL: 9,
+		SIGTERM: 15,
+	}
+	return signals[signal] || 15
 }

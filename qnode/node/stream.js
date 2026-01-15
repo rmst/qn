@@ -1,5 +1,225 @@
 import * as os from 'os'
+import * as std from 'std'
 import { EventEmitter } from 'node:events'
+
+/**
+ * UTF-8 streaming decoder that handles incomplete multi-byte sequences.
+ * Buffers incomplete sequences until more data arrives.
+ */
+class Utf8Decoder {
+	#pending = new Uint8Array(4)
+	#pendingLen = 0
+
+	/**
+	 * Decode bytes to string, buffering incomplete sequences.
+	 * @param {Uint8Array} bytes
+	 * @returns {string}
+	 */
+	decode(bytes) {
+		if (this.#pendingLen === 0 && bytes.length === 0) {
+			return ''
+		}
+
+		// Combine pending bytes with new bytes
+		let input
+		if (this.#pendingLen > 0) {
+			input = new Uint8Array(this.#pendingLen + bytes.length)
+			input.set(this.#pending.subarray(0, this.#pendingLen), 0)
+			input.set(bytes, this.#pendingLen)
+			this.#pendingLen = 0
+		} else {
+			input = bytes
+		}
+
+		// Find where complete UTF-8 sequences end
+		const completeLen = this.#findCompleteLength(input)
+
+		// Buffer incomplete trailing bytes
+		if (completeLen < input.length) {
+			const remaining = input.length - completeLen
+			this.#pending.set(input.subarray(completeLen), 0)
+			this.#pendingLen = remaining
+		}
+
+		// Decode complete bytes using QuickJS
+		if (completeLen === 0) {
+			return ''
+		}
+
+		return this.#decodeComplete(input.subarray(0, completeLen))
+	}
+
+	/**
+	 * Flush any remaining buffered bytes (may produce replacement chars for invalid sequences).
+	 * @returns {string}
+	 */
+	flush() {
+		if (this.#pendingLen === 0) {
+			return ''
+		}
+		const result = this.#decodeComplete(this.#pending.subarray(0, this.#pendingLen))
+		this.#pendingLen = 0
+		return result
+	}
+
+	/**
+	 * Find length of complete UTF-8 sequences (excluding trailing incomplete sequence).
+	 * @param {Uint8Array} bytes
+	 * @returns {number}
+	 */
+	#findCompleteLength(bytes) {
+		const len = bytes.length
+		if (len === 0) return 0
+
+		// Check last 1-3 bytes for incomplete sequence
+		for (let i = 1; i <= Math.min(3, len); i++) {
+			const byte = bytes[len - i]
+			// Check if this is a leading byte of a multi-byte sequence
+			if ((byte & 0xC0) === 0xC0) {
+				// Leading byte found - check if sequence is complete
+				const seqLen = this.#sequenceLength(byte)
+				if (seqLen > i) {
+					// Incomplete sequence
+					return len - i
+				}
+				break
+			} else if ((byte & 0xC0) !== 0x80) {
+				// ASCII byte or invalid - no incomplete sequence
+				break
+			}
+		}
+		return len
+	}
+
+	/**
+	 * Get expected length of UTF-8 sequence from leading byte.
+	 * @param {number} byte
+	 * @returns {number}
+	 */
+	#sequenceLength(byte) {
+		if ((byte & 0x80) === 0) return 1      // 0xxxxxxx
+		if ((byte & 0xE0) === 0xC0) return 2   // 110xxxxx
+		if ((byte & 0xF0) === 0xE0) return 3   // 1110xxxx
+		if ((byte & 0xF8) === 0xF0) return 4   // 11110xxx
+		return 1 // Invalid, treat as single byte
+	}
+
+	/**
+	 * Decode complete UTF-8 bytes to string.
+	 * Uses QuickJS std module for proper UTF-8 handling.
+	 * @param {Uint8Array} bytes
+	 * @returns {string}
+	 */
+	#decodeComplete(bytes) {
+		// Write to temp file and read as string for proper UTF-8 decoding
+		const tmpFile = std.tmpfile()
+		if (!tmpFile) {
+			// Fallback to basic decoding
+			return this.#basicDecode(bytes)
+		}
+		tmpFile.write(bytes.buffer, 0, bytes.length)
+		tmpFile.seek(0, std.SEEK_SET)
+		const str = tmpFile.readAsString()
+		tmpFile.close()
+		return str
+	}
+
+	/**
+	 * Basic UTF-8 decode fallback.
+	 * @param {Uint8Array} bytes
+	 * @returns {string}
+	 */
+	#basicDecode(bytes) {
+		let result = ''
+		let i = 0
+		while (i < bytes.length) {
+			const byte = bytes[i]
+			if ((byte & 0x80) === 0) {
+				// ASCII
+				result += String.fromCharCode(byte)
+				i++
+			} else if ((byte & 0xE0) === 0xC0) {
+				// 2-byte sequence
+				const cp = ((byte & 0x1F) << 6) | (bytes[i + 1] & 0x3F)
+				result += String.fromCharCode(cp)
+				i += 2
+			} else if ((byte & 0xF0) === 0xE0) {
+				// 3-byte sequence
+				const cp = ((byte & 0x0F) << 12) | ((bytes[i + 1] & 0x3F) << 6) | (bytes[i + 2] & 0x3F)
+				result += String.fromCharCode(cp)
+				i += 3
+			} else if ((byte & 0xF8) === 0xF0) {
+				// 4-byte sequence (surrogate pair needed)
+				const cp = ((byte & 0x07) << 18) | ((bytes[i + 1] & 0x3F) << 12) |
+				           ((bytes[i + 2] & 0x3F) << 6) | (bytes[i + 3] & 0x3F)
+				// Convert to surrogate pair
+				const adjusted = cp - 0x10000
+				result += String.fromCharCode(0xD800 + (adjusted >> 10), 0xDC00 + (adjusted & 0x3FF))
+				i += 4
+			} else {
+				// Invalid byte, skip
+				i++
+			}
+		}
+		return result
+	}
+}
+
+/**
+ * Encode string as UTF-8 bytes.
+ * Uses QuickJS std module for proper UTF-8 handling.
+ * @param {string} str
+ * @returns {Uint8Array}
+ */
+function encodeUtf8(str) {
+	const tmpFile = std.tmpfile()
+	if (!tmpFile) {
+		return basicEncodeUtf8(str)
+	}
+	tmpFile.puts(str)
+	const len = tmpFile.tell()
+	tmpFile.seek(0, std.SEEK_SET)
+	const buf = new Uint8Array(len)
+	tmpFile.read(buf.buffer, 0, len)
+	tmpFile.close()
+	return buf
+}
+
+/**
+ * Basic UTF-8 encode fallback.
+ * @param {string} str
+ * @returns {Uint8Array}
+ */
+function basicEncodeUtf8(str) {
+	const bytes = []
+	for (let i = 0; i < str.length; i++) {
+		let cp = str.charCodeAt(i)
+		// Handle surrogate pairs
+		if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < str.length) {
+			const low = str.charCodeAt(i + 1)
+			if (low >= 0xDC00 && low <= 0xDFFF) {
+				cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00)
+				i++
+			}
+		}
+
+		if (cp < 0x80) {
+			bytes.push(cp)
+		} else if (cp < 0x800) {
+			bytes.push(0xC0 | (cp >> 6), 0x80 | (cp & 0x3F))
+		} else if (cp < 0x10000) {
+			bytes.push(0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F))
+		} else {
+			bytes.push(
+				0xF0 | (cp >> 18),
+				0x80 | ((cp >> 12) & 0x3F),
+				0x80 | ((cp >> 6) & 0x3F),
+				0x80 | (cp & 0x3F)
+			)
+		}
+	}
+	return new Uint8Array(bytes)
+}
 
 /**
  * Readable stream that wraps a file descriptor.
@@ -7,7 +227,7 @@ import { EventEmitter } from 'node:events'
  * @extends EventEmitter
  *
  * Events:
- * - 'data' (chunk: string) - Emitted when data is available
+ * - 'data' (chunk: Uint8Array|string) - Emitted when data is available
  * - 'end' - Emitted when EOF is reached
  * - 'error' (err: Error) - Emitted on read error
  * - 'close' - Emitted when stream is closed
@@ -25,8 +245,14 @@ export class Readable extends EventEmitter {
 	/** @type {boolean} */
 	#destroyed = false
 
-	/** @type {string[]} */
+	/** @type {Array<Uint8Array|string>} */
 	#buffer = []
+
+	/** @type {string|null} */
+	#encoding = null
+
+	/** @type {Utf8Decoder|null} */
+	#decoder = null
 
 	/**
 	 * @param {number} fd - File descriptor to read from
@@ -35,6 +261,22 @@ export class Readable extends EventEmitter {
 		super()
 		this.#fd = fd
 		this.#setupReadHandler()
+	}
+
+	/**
+	 * Set encoding for string output.
+	 * @param {string} encoding - Currently only 'utf8' or 'utf-8' supported
+	 * @returns {this}
+	 */
+	setEncoding(encoding) {
+		if (encoding && encoding.toLowerCase().replace('-', '') !== 'utf8') {
+			throw new Error(`Unsupported encoding: ${encoding}. Only 'utf8' is supported.`)
+		}
+		this.#encoding = encoding ? 'utf8' : null
+		if (this.#encoding && !this.#decoder) {
+			this.#decoder = new Utf8Decoder()
+		}
+		return this
 	}
 
 	#setupReadHandler() {
@@ -53,7 +295,15 @@ export class Readable extends EventEmitter {
 			}
 
 			if (n > 0) {
-				const chunk = decodeUtf8(buf.subarray(0, n))
+				const bytes = buf.subarray(0, n)
+				let chunk
+				if (this.#encoding) {
+					chunk = this.#decoder.decode(bytes)
+				} else {
+					// Return a copy of the subarray to avoid issues with buffer reuse
+					chunk = new Uint8Array(bytes)
+				}
+
 				if (this.#flowing) {
 					this.emit('data', chunk)
 				} else {
@@ -63,6 +313,15 @@ export class Readable extends EventEmitter {
 				// EOF
 				this.#ended = true
 				os.setReadHandler(this.#fd, null)
+
+				// Flush any remaining decoder buffer
+				if (this.#decoder) {
+					const remaining = this.#decoder.flush()
+					if (remaining) {
+						this.emit('data', remaining)
+					}
+				}
+
 				this.emit('end')
 				this.#close()
 			}
@@ -177,7 +436,7 @@ export class Writable extends EventEmitter {
 	/** @type {boolean} */
 	#ending = false
 
-	/** @type {string[]} */
+	/** @type {Uint8Array[]} */
 	#writeQueue = []
 
 	/** @type {Function[]} */
@@ -199,11 +458,18 @@ export class Writable extends EventEmitter {
 
 	/**
 	 * Write data to the stream
-	 * @param {string} chunk - Data to write
+	 * @param {string|Uint8Array} chunk - Data to write
+	 * @param {string|Function} [encoding] - Encoding (ignored, always UTF-8 for strings)
 	 * @param {Function} [callback] - Called when chunk has been written
 	 * @returns {boolean} - false if buffer is full (wait for 'drain')
 	 */
-	write(chunk, callback) {
+	write(chunk, encoding, callback) {
+		// Handle overloaded arguments
+		if (typeof encoding === 'function') {
+			callback = encoding
+			encoding = undefined
+		}
+
 		if (this.#destroyed || this.#ending) {
 			const err = new Error('write after end')
 			if (callback) {
@@ -213,11 +479,17 @@ export class Writable extends EventEmitter {
 			return false
 		}
 
-		if (typeof chunk !== 'string') {
-			chunk = String(chunk)
+		// Convert to Uint8Array
+		let bytes
+		if (chunk instanceof Uint8Array) {
+			bytes = chunk
+		} else if (typeof chunk === 'string') {
+			bytes = encodeUtf8(chunk)
+		} else {
+			bytes = encodeUtf8(String(chunk))
 		}
 
-		this.#writeQueue.push(chunk)
+		this.#writeQueue.push(bytes)
 		if (callback) {
 			this.#callbackQueue.push(callback)
 		} else {
@@ -241,13 +513,12 @@ export class Writable extends EventEmitter {
 		if (this.#fd === null || this.#destroyed) return
 
 		while (this.#writeQueue.length > 0) {
-			const chunk = this.#writeQueue[0]
+			const bytes = this.#writeQueue[0]
 			const callback = this.#callbackQueue[0]
-			const bytes = encodeUtf8(chunk)
 
 			let written
 			try {
-				written = os.write(this.#fd, bytes.buffer, 0, bytes.length)
+				written = os.write(this.#fd, bytes.buffer, bytes.byteOffset, bytes.length)
 			} catch (e) {
 				// EAGAIN/EWOULDBLOCK - set up write handler for when fd is writable
 				if (e.errno === os.EAGAIN || e.errno === os.EWOULDBLOCK) {
@@ -260,8 +531,7 @@ export class Writable extends EventEmitter {
 
 			if (written < bytes.length) {
 				// Partial write - update queue with remaining data
-				const remaining = decodeUtf8(bytes.subarray(written))
-				this.#writeQueue[0] = remaining
+				this.#writeQueue[0] = bytes.subarray(written)
 				this.#setupWriteHandler()
 				return
 			}
@@ -327,13 +597,19 @@ export class Writable extends EventEmitter {
 
 	/**
 	 * Signal that no more data will be written
-	 * @param {string} [chunk] - Optional final chunk to write
+	 * @param {string|Uint8Array} [chunk] - Optional final chunk to write
+	 * @param {string|Function} [encoding] - Encoding (ignored)
 	 * @param {Function} [callback] - Called when stream is finished
 	 */
-	end(chunk, callback) {
+	end(chunk, encoding, callback) {
+		// Handle overloaded arguments
 		if (typeof chunk === 'function') {
 			callback = chunk
 			chunk = undefined
+			encoding = undefined
+		} else if (typeof encoding === 'function') {
+			callback = encoding
+			encoding = undefined
 		}
 
 		if (chunk !== undefined) {
@@ -406,30 +682,4 @@ export class Writable extends EventEmitter {
 	get destroyed() {
 		return this.#destroyed
 	}
-}
-
-/**
- * Decode a Uint8Array as UTF-8 string
- * @param {Uint8Array} bytes
- * @returns {string}
- */
-function decodeUtf8(bytes) {
-	let result = ''
-	for (let i = 0; i < bytes.length; i++) {
-		result += String.fromCharCode(bytes[i])
-	}
-	return result
-}
-
-/**
- * Encode a string as UTF-8 Uint8Array
- * @param {string} str
- * @returns {Uint8Array}
- */
-function encodeUtf8(str) {
-	const bytes = new Uint8Array(str.length)
-	for (let i = 0; i < str.length; i++) {
-		bytes[i] = str.charCodeAt(i) & 0xFF
-	}
-	return bytes
 }

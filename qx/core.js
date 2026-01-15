@@ -191,6 +191,10 @@ export class ProcessPromise extends Promise {
 
 		this.#child = child
 
+		// Set encoding for string output
+		child.stdout.setEncoding('utf8')
+		child.stderr.setEncoding('utf8')
+
 		child.stdout.on('data', (chunk) => {
 			this.#stdoutBuffer += chunk
 			if (!this.#quiet && this.#verbose) {

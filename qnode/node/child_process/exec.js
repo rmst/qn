@@ -54,6 +54,7 @@ export function exec(command, options, callback) {
 		cwd: options.cwd,
 		env: options.env,
 		input: options.input,
+		encoding: options.encoding,
 	}
 
 	return execFile(shell, ['-c', command], execFileOptions, callback)

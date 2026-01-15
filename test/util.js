@@ -68,3 +68,27 @@ export const test = (name, fn) => {
 		nodetest(`${name} [${label}]`, testFn)
 	}
 }
+
+/**
+ * Run a test only with qnode (not Node.js).
+ * Use this for testing qnode-specific behavior that differs from Node.js.
+ * @param {string} name - Test name
+ * @param {(ctx: { bin: string, dir: string }) => void} fn - Test function receiving { bin, dir }
+ */
+export const testQnodeOnly = (name, fn) => {
+	const testFn = () => {
+		const dir = mktempdir()
+		try {
+			return fn({ bin: QNODE, dir })
+		} catch (err) {
+			if (err.stack) {
+				const cwd = process.cwd()
+				err.stack = err.stack.replaceAll(`file://${cwd}`, '.')
+			}
+			throw err
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	}
+	nodetest(`${name} [qnode]`, testFn)
+}

@@ -43,6 +43,7 @@ describe('node:stream shim', () => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFile } from 'node:child_process'
 			const child = execFile('cat')
+			child.stdout.setEncoding('utf8')
 			let output = ''
 			child.stdout.on('data', (chunk) => { output += chunk })
 			child.on('close', () => {
@@ -61,6 +62,7 @@ describe('node:stream shim', () => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFile } from 'node:child_process'
 			const child = execFile('cat')
+			child.stdout.setEncoding('utf8')
 			let output = ''
 			child.stdout.on('data', (chunk) => { output += chunk })
 			child.on('close', () => {

@@ -1,7 +1,7 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync, mkdirSync } from 'node:fs'
-import { test, $ } from './util.js'
+import { test, testQnodeOnly, $ } from './util.js'
 
 describe('node:child_process shim', () => {
 	test('execFileSync returns stdout', ({ bin, dir }) => {
@@ -93,11 +93,61 @@ describe('node:child_process shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { output: 'test_value' })
 	})
 
+	test('execFileSync with timeout that expires', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFileSync } from 'node:child_process'
+			const start = Date.now()
+			let threw = false
+			let signal = null
+			try {
+				execFileSync('sleep', ['10'], { timeout: 100 })
+			} catch (e) {
+				threw = true
+				signal = e.signal
+			}
+			const elapsed = Date.now() - start
+			console.log(JSON.stringify({ threw, signal, elapsedOk: elapsed < 500 }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.threw, true)
+		assert.strictEqual(result.signal, 'SIGTERM')
+		assert.strictEqual(result.elapsedOk, true, 'should timeout quickly, not wait for sleep to complete')
+	})
+
+	test('execFileSync with timeout that does not expire', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFileSync } from 'node:child_process'
+			const output = execFileSync('echo', ['fast'], { timeout: 5000, encoding: 'utf8' })
+			console.log(JSON.stringify({ output: output.trim() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { output: 'fast' })
+	})
+
+	test('execFileSync with custom killSignal', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFileSync } from 'node:child_process'
+			let signal = null
+			try {
+				execFileSync('sleep', ['10'], { timeout: 100, killSignal: 'SIGKILL' })
+			} catch (e) {
+				signal = e.signal
+			}
+			console.log(JSON.stringify({ signal }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { signal: 'SIGKILL' })
+	})
+
 	// Async execFile tests
 	test('execFile with callback', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFile } from 'node:child_process'
-			execFile('echo', ['hello', 'async'], (error, stdout, stderr) => {
+			execFile('echo', ['hello', 'async'], { encoding: 'utf8' }, (error, stdout, stderr) => {
 				console.log(JSON.stringify({
 					error: error ? error.message : null,
 					stdout: stdout.trim(),
@@ -142,6 +192,7 @@ describe('node:child_process shim', () => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFile } from 'node:child_process'
 			const child = execFile('echo', ['test'])
+			child.stdout.setEncoding('utf8')
 			let stdout = ''
 			child.stdout.on('data', (chunk) => { stdout += chunk })
 			child.on('close', (code) => {
@@ -157,6 +208,7 @@ describe('node:child_process shim', () => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFile } from 'node:child_process'
 			const child = execFile('sh', ['-c', 'echo error >&2'])
+			child.stderr.setEncoding('utf8')
 			let stderr = ''
 			child.stderr.on('data', (chunk) => { stderr += chunk })
 			child.on('close', (code) => {
@@ -192,7 +244,7 @@ describe('node:child_process shim', () => {
 		mkdirSync(`${dir}/subdir`)
 		writeFileSync(`${dir}/test.js`, `
 			import { execFile } from 'node:child_process'
-			execFile('pwd', [], { cwd: '${dir}/subdir' }, (error, stdout) => {
+			execFile('pwd', [], { cwd: '${dir}/subdir', encoding: 'utf8' }, (error, stdout) => {
 				console.log(JSON.stringify({ output: stdout.trim() }))
 			})
 		`)
@@ -202,11 +254,61 @@ describe('node:child_process shim', () => {
 		assert.ok(result.output.endsWith('/subdir'))
 	})
 
+	test('execFile with timeout that expires', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFile } from 'node:child_process'
+			const start = Date.now()
+			execFile('sleep', ['10'], { timeout: 100 }, (error, stdout, stderr) => {
+				const elapsed = Date.now() - start
+				console.log(JSON.stringify({
+					hasError: error !== null,
+					killed: error ? error.killed : null,
+					signal: error ? error.signal : null,
+					elapsedOk: elapsed < 500
+				}))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.hasError, true)
+		assert.strictEqual(result.killed, true)
+		assert.strictEqual(result.signal, 'SIGTERM')
+		assert.strictEqual(result.elapsedOk, true, 'should timeout quickly')
+	})
+
+	test('execFile with timeout that does not expire', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFile } from 'node:child_process'
+			execFile('echo', ['fast'], { timeout: 5000, encoding: 'utf8' }, (error, stdout, stderr) => {
+				console.log(JSON.stringify({
+					error: error ? error.message : null,
+					stdout: stdout.trim()
+				}))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { error: null, stdout: 'fast' })
+	})
+
+	test('execFile with custom killSignal', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFile } from 'node:child_process'
+			execFile('sleep', ['10'], { timeout: 100, killSignal: 'SIGKILL' }, (error) => {
+				console.log(JSON.stringify({ signal: error ? error.signal : null }))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { signal: 'SIGKILL' })
+	})
+
 	test('execFile handles large output without blocking', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFile } from 'node:child_process'
 			// Generate output larger than typical pipe buffer (64KB) using POSIX awk
-			execFile('awk', ['BEGIN { for(i=1;i<=5000;i++) print "line " i ": some text to fill buffer" }'], (error, stdout) => {
+			execFile('awk', ['BEGIN { for(i=1;i<=5000;i++) print "line " i ": some text to fill buffer" }'], { encoding: 'utf8' }, (error, stdout) => {
 				const lines = stdout.trim().split('\\n')
 				console.log(JSON.stringify({
 					lineCount: lines.length,
@@ -228,6 +330,7 @@ describe('node:child_process shim', () => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFile } from 'node:child_process'
 			const child = execFile('cat')
+			child.stdout.setEncoding('utf8')
 			let output = ''
 			child.stdout.on('data', (chunk) => { output += chunk })
 			child.on('close', () => {
@@ -272,6 +375,7 @@ describe('node:child_process shim', () => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFile } from 'node:child_process'
 			const child = execFile('cat')
+			child.stdout.setEncoding('utf8')
 			let output = ''
 			child.stdout.on('data', (chunk) => { output += chunk })
 			child.on('close', () => {
@@ -341,6 +445,7 @@ describe('node:child_process shim', () => {
 			import { execFile } from 'node:child_process'
 			// sed transforms input and outputs result
 			const child = execFile('sed', ['s/hello/goodbye/'])
+			child.stdout.setEncoding('utf8')
 			const responses = []
 
 			child.stdout.on('data', (chunk) => {
@@ -402,7 +507,7 @@ describe('node:child_process shim', () => {
 	test('exec runs command through shell', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { exec } from 'node:child_process'
-			exec('echo $((2 * 3))', (error, stdout, stderr) => {
+			exec('echo $((2 * 3))', { encoding: 'utf8' }, (error, stdout, stderr) => {
 				console.log(JSON.stringify({
 					error: error ? error.message : null,
 					stdout: stdout.trim()
@@ -418,7 +523,7 @@ describe('node:child_process shim', () => {
 		mkdirSync(`${dir}/subdir`)
 		writeFileSync(`${dir}/test.js`, `
 			import { exec } from 'node:child_process'
-			exec('pwd', { cwd: '${dir}/subdir' }, (error, stdout) => {
+			exec('pwd', { cwd: '${dir}/subdir', encoding: 'utf8' }, (error, stdout) => {
 				console.log(JSON.stringify({ output: stdout.trim() }))
 			})
 		`)
@@ -447,6 +552,7 @@ describe('node:child_process shim', () => {
 		writeFileSync(`${dir}/test.js`, `
 			import { spawn } from 'node:child_process'
 			const child = spawn('echo', ['hello', 'spawn'])
+			child.stdout.setEncoding('utf8')
 			let stdout = ''
 			child.stdout.on('data', (chunk) => { stdout += chunk })
 			child.on('close', (code) => {
@@ -462,6 +568,7 @@ describe('node:child_process shim', () => {
 		writeFileSync(`${dir}/test.js`, `
 			import { spawn } from 'node:child_process'
 			const child = spawn('echo $((3 + 4))', { shell: true })
+			child.stdout.setEncoding('utf8')
 			let stdout = ''
 			child.stdout.on('data', (chunk) => { stdout += chunk })
 			child.on('close', (code) => {
@@ -478,6 +585,7 @@ describe('node:child_process shim', () => {
 		writeFileSync(`${dir}/test.js`, `
 			import { spawn } from 'node:child_process'
 			const child = spawn('pwd', [], { cwd: '${dir}/subdir' })
+			child.stdout.setEncoding('utf8')
 			let stdout = ''
 			child.stdout.on('data', (chunk) => { stdout += chunk })
 			child.on('close', () => {
@@ -494,6 +602,7 @@ describe('node:child_process shim', () => {
 		writeFileSync(`${dir}/test.js`, `
 			import { spawn } from 'node:child_process'
 			const child = spawn('cat')
+			child.stdout.setEncoding('utf8')
 			let stdout = ''
 			child.stdout.on('data', (chunk) => { stdout += chunk })
 			child.on('close', () => {
@@ -505,5 +614,133 @@ describe('node:child_process shim', () => {
 
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { stdout: 'hello from spawn' })
+	})
+
+	// Raw bytes vs UTF-8 encoding tests (qnode-specific behavior)
+	// Note: Node.js returns strings by default, qnode returns Uint8Array by default
+	testQnodeOnly('execFileSync returns Uint8Array by default', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFileSync } from 'node:child_process'
+			const output = execFileSync('echo', ['hello'])
+			const isUint8Array = output instanceof Uint8Array
+			// Check first few bytes are ASCII for 'hello'
+			const firstByte = output[0]
+			console.log(JSON.stringify({ isUint8Array, firstByte }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.isUint8Array, true)
+		assert.strictEqual(result.firstByte, 104) // 'h' = 104
+	})
+
+	testQnodeOnly('execFileSync returns string with encoding utf8', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFileSync } from 'node:child_process'
+			const output = execFileSync('echo', ['hello'], { encoding: 'utf8' })
+			const isString = typeof output === 'string'
+			console.log(JSON.stringify({ isString, output: output.trim() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { isString: true, output: 'hello' })
+	})
+
+	testQnodeOnly('execFile callback receives Uint8Array by default', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFile } from 'node:child_process'
+			execFile('echo', ['hello'], (error, stdout, stderr) => {
+				const stdoutIsUint8 = stdout instanceof Uint8Array
+				const stderrIsUint8 = stderr instanceof Uint8Array
+				const firstByte = stdout[0]
+				console.log(JSON.stringify({ stdoutIsUint8, stderrIsUint8, firstByte }))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.stdoutIsUint8, true)
+		assert.strictEqual(result.stderrIsUint8, true)
+		assert.strictEqual(result.firstByte, 104) // 'h' = 104
+	})
+
+	testQnodeOnly('execFile callback receives string with encoding utf8', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFile } from 'node:child_process'
+			execFile('echo', ['hello'], { encoding: 'utf8' }, (error, stdout, stderr) => {
+				const stdoutIsString = typeof stdout === 'string'
+				const stderrIsString = typeof stderr === 'string'
+				console.log(JSON.stringify({ stdoutIsString, stderrIsString, output: stdout.trim() }))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { stdoutIsString: true, stderrIsString: true, output: 'hello' })
+	})
+
+	testQnodeOnly('stream emits Uint8Array by default', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { spawn } from 'node:child_process'
+			const child = spawn('echo', ['test'])
+			let chunkType = null
+			let firstByte = null
+			child.stdout.on('data', (chunk) => {
+				if (chunkType === null) {
+					chunkType = chunk instanceof Uint8Array ? 'Uint8Array' : typeof chunk
+					firstByte = chunk[0]
+				}
+			})
+			child.on('close', () => {
+				console.log(JSON.stringify({ chunkType, firstByte }))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.chunkType, 'Uint8Array')
+		assert.strictEqual(result.firstByte, 116) // 't' = 116
+	})
+
+	testQnodeOnly('stream emits string after setEncoding', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { spawn } from 'node:child_process'
+			const child = spawn('echo', ['test'])
+			child.stdout.setEncoding('utf8')
+			let chunkType = null
+			let content = ''
+			child.stdout.on('data', (chunk) => {
+				if (chunkType === null) {
+					chunkType = typeof chunk
+				}
+				content += chunk
+			})
+			child.on('close', () => {
+				console.log(JSON.stringify({ chunkType, content: content.trim() }))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { chunkType: 'string', content: 'test' })
+	})
+
+	testQnodeOnly('stdin accepts both string and Uint8Array', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { spawn } from 'node:child_process'
+			const child = spawn('cat')
+			child.stdout.setEncoding('utf8')
+			let output = ''
+			child.stdout.on('data', (chunk) => { output += chunk })
+			child.on('close', () => {
+				console.log(JSON.stringify({ output: output.trim() }))
+			})
+			// Write string
+			child.stdin.write('hello ')
+			// Write Uint8Array
+			child.stdin.write(new Uint8Array([119, 111, 114, 108, 100])) // 'world'
+			child.stdin.end()
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { output: 'hello world' })
 	})
 })
