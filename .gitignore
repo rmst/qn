@@ -6,6 +6,3 @@ bin/
 Thumbs.db
 
 .claude/settings.local.json
-
-# Auto-generated files
-qjsx-module-resolution-embedded.h

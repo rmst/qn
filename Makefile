@@ -76,16 +76,16 @@ $(QJSXC_PROG): $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/o
 	ar r $(BIN_DIR)/libquickjs.a $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o
 
 # Generate embedded header from qjsx-module-resolution.h
-qjsx-module-resolution-embedded.h: qjsx-module-resolution.h embed-header.sh
-	./embed-header.sh
+$(BIN_DIR)/obj/qjsx-module-resolution-embedded.h: qjsx-module-resolution.h embed-header.sh | $(BIN_DIR)/obj
+	./embed-header.sh $@
 
 # Generate qjsxc.c from quickjs/qjsc.c by applying the patch
-$(BIN_DIR)/obj/qjsxc.c: quickjs/qjsc.c qjsxc.patch qjsx-module-resolution.h qjsx-module-resolution-embedded.h | $(BIN_DIR)/obj
+$(BIN_DIR)/obj/qjsxc.c: quickjs/qjsc.c qjsxc.patch qjsx-module-resolution.h $(BIN_DIR)/obj/qjsx-module-resolution-embedded.h | $(BIN_DIR)/obj
 	patch -p0 < qjsxc.patch -o $@ quickjs/qjsc.c
 
 # Build qjsxc.o from the patched source
 $(BIN_DIR)/obj/qjsxc.o: $(BIN_DIR)/obj/qjsxc.c qjsx-module-resolution.h | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -DCONFIG_CC=\"$(CC)\" -DCONFIG_PREFIX=\"/usr/local\" -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
+	$(CC) $(CFLAGS_OPT) -DCONFIG_CC=\"$(CC)\" -DCONFIG_PREFIX=\"/usr/local\" -I. -I$(BIN_DIR)/obj -I$(BIN_DIR)/quickjs -c -o $@ $<
 
 # Patch and build quickjs-libc (adds import.meta.dirname and sandbox support)
 $(BIN_DIR)/obj/quickjs-libc.c: quickjs/quickjs-libc.c quickjs-libc.patch sandboxed-worker/sandboxed-worker.patch | $(BIN_DIR)/obj
@@ -100,8 +100,8 @@ $(BIN_DIR)/obj/sandboxed-worker.o: sandboxed-worker/sandboxed-worker.c sandboxed
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
 # Build qjsx-node (standalone executable with embedded node modules and qx)
-$(QJSX_NODE_PROG): qjsx-node-bootstrap.js qjsx-node/node/* qjsx-node/repl.js qx/index.js qx/core.js $(QJSXC_PROG) quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./qjsx-node:./qx $(QJSXC_PROG) -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D qx -o $@ qjsx-node-bootstrap.js
+$(QJSX_NODE_PROG): qjsx-node/bootstrap.js qjsx-node/node/* qjsx-node/repl.js qx/index.js qx/core.js $(QJSXC_PROG) quickjs-deps | $(BIN_DIR)
+	QJSXPATH=./qjsx-node:./qx $(QJSXC_PROG) -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D qx -o $@ qjsx-node/bootstrap.js
 
 # Build qx (zx-compatible shell scripting with $ function)
 $(QX_PROG): qx/bootstrap.js qx/* qjsx-node/node/* qjsx-node/repl.js $(QJSXC_PROG) quickjs-deps | $(BIN_DIR)

@@ -4,7 +4,7 @@
 set -e
 
 INPUT="qjsx-module-resolution.h"
-OUTPUT="qjsx-module-resolution-embedded.h"
+OUTPUT="${1:-qjsx-module-resolution-embedded.h}"
 
 cat > "$OUTPUT" << 'HEADER_START'
 /* Auto-generated from qjsx-module-resolution.h - DO NOT EDIT */
