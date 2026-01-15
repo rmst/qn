@@ -22,6 +22,10 @@ if (scriptArgs.length < 2) {
 
 const scriptPath = scriptArgs[1];
 
+// Shift scriptArgs so loaded modules see [scriptPath, args...] instead of [qjsx-node, scriptPath, args...]
+// This matches the behavior of running `qjsx script.js args...` directly
+globalThis.scriptArgs = scriptArgs.slice(1);
+
 // Load and execute the user's script
 try {
     await import(scriptPath);
