@@ -1,6 +1,17 @@
---- quickjs/quickjs-libc.c
-+++ quickjs-libc.c
-@@ -587,6 +587,50 @@
+--- quickjs/quickjs-libc.c	2026-01-16 11:05:44.122933386 +0000
++++ bin/linux/obj/quickjs-libc.c	2026-01-16 13:41:38.512191602 +0000
+@@ -80,6 +80,10 @@
+ #define PATH_MAX 4096
+ #endif
+ 
++#ifdef USE_SANDBOX
++#include "sandboxed-worker/sandboxed-worker.h"
++#endif
++
+ /* TODO:
+    - add socket calls
+ */
+@@ -587,6 +591,50 @@
      JS_DefinePropertyValueStr(ctx, meta_obj, "main",
                                JS_NewBool(ctx, is_main),
                                JS_PROP_C_W_E);
@@ -51,3 +62,61 @@
      JS_FreeValue(ctx, meta_obj);
      return 0;
  }
+@@ -1637,6 +1685,27 @@
+ #undef DEF
+ };
+ 
++/* UTF-8 encoding/decoding using QuickJS's internal conversion */
++static JSValue js_std_encode_utf8(JSContext *ctx, JSValueConst this_val,
++                                  int argc, JSValueConst *argv) {
++    size_t len;
++    const char *str = JS_ToCStringLen(ctx, &len, argv[0]);
++    if (!str)
++        return JS_EXCEPTION;
++    JSValue ab = JS_NewArrayBufferCopy(ctx, (const uint8_t *)str, len);
++    JS_FreeCString(ctx, str);
++    return ab;
++}
++
++static JSValue js_std_decode_utf8(JSContext *ctx, JSValueConst this_val,
++                                  int argc, JSValueConst *argv) {
++    size_t len;
++    uint8_t *buf = JS_GetArrayBuffer(ctx, &len, argv[0]);
++    if (!buf)
++        return JS_EXCEPTION;
++    return JS_NewStringLen(ctx, (const char *)buf, len);
++}
++
+ static const JSCFunctionListEntry js_std_funcs[] = {
+     JS_CFUNC_DEF("exit", 1, js_std_exit ),
+     JS_CFUNC_DEF("gc", 0, js_std_gc ),
+@@ -1650,6 +1719,8 @@
+     JS_CFUNC_DEF("loadFile", 1, js_std_loadFile ),
+     JS_CFUNC_DEF("strerror", 1, js_std_strerror ),
+     JS_CFUNC_DEF("parseExtJSON", 1, js_std_parseExtJSON ),
++    JS_CFUNC_DEF("_encodeUtf8", 1, js_std_encode_utf8 ),
++    JS_CFUNC_DEF("_decodeUtf8", 1, js_std_decode_utf8 ),
+ 
+     /* FILE I/O */
+     JS_CFUNC_DEF("open", 2, js_std_open ),
+@@ -3990,6 +4061,10 @@
+     }
+ #endif /* USE_WORKER */
+ 
++#ifdef USE_SANDBOX
++    js_sandbox_init(ctx, m);
++#endif
++
+     return JS_SetModuleExportList(ctx, m, js_os_funcs,
+                                   countof(js_os_funcs));
+ }
+@@ -4004,6 +4079,9 @@
+ #ifdef USE_WORKER
+     JS_AddModuleExport(ctx, m, "Worker");
+ #endif
++#ifdef USE_SANDBOX
++    js_sandbox_add_export(ctx, m);
++#endif
+     return m;
+ }
+ 

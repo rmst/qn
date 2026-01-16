@@ -1,5 +1,6 @@
 import * as std from 'std';
 import * as os from 'os';
+import { Buffer } from 'node:buffer';
 
 
 export const writeFileSync = (path, data, options) => {
@@ -56,7 +57,7 @@ export const readFileSync = (path, options) => {
       file.seek(0, std.SEEK_SET);
       const buffer = new ArrayBuffer(size);
       file.read(buffer, 0, size);
-      return new Uint8Array(buffer);
+      return Buffer.from(buffer);
     } else {
       return file.readAsString();
     }

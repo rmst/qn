@@ -361,7 +361,7 @@ describe('node:fs shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { target: `${dir}/target.txt` })
 	})
 
-	testQnodeOnly('readFileSync without encoding returns Uint8Array', ({ bin, dir }) => {
+	testQnodeOnly('readFileSync without encoding returns Buffer', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { writeFileSync, readFileSync } from 'node:fs'
 			writeFileSync('${dir}/binary.bin', new Uint8Array([0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd]))
@@ -375,7 +375,7 @@ describe('node:fs shim', () => {
 
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), {
-			type: 'Uint8Array',
+			type: 'Buffer',
 			length: 6,
 			bytes: [0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd]
 		})

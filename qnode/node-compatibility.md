@@ -46,13 +46,12 @@ Reference: [Node.js Globals](https://nodejs.org/api/globals.html)
 
 ### Encoding
 
-| Global | Status |
-|--------|--------|
-| `Buffer` | ❌ |
-| `TextEncoder` | ❌ |
-| `TextDecoder` | ❌ |
-| `atob` | ✅ |
-| `btoa` | ✅ |
+| Global | Status | Notes |
+|--------|--------|-------|
+| `TextEncoder` | ✅ | UTF-8 only |
+| `TextDecoder` | ⚠️ | UTF-8 only; `fatal` and `stream` options throw `NodeCompatibilityError` |
+| `atob` | ✅ | |
+| `btoa` | ✅ | |
 
 ### Web APIs
 
@@ -186,6 +185,34 @@ import { Readable, Writable } from 'node:stream';
 | `Readable` | ✅ | `data`, `end`, `close`, `error` events; `pause`, `resume`, `destroy` |
 | `Writable` | ✅ | `write`, `end`, `cork`, `uncork`, `destroy` |
 
+### `node:buffer`
+
+```js
+import { Buffer } from 'node:buffer';
+```
+
+| Method | Status | Notes |
+|--------|--------|-------|
+| `Buffer.from` | ✅ | string, Array, ArrayBuffer, Uint8Array |
+| `Buffer.alloc` | ✅ | |
+| `Buffer.allocUnsafe` | ✅ | Same as `alloc` (no uninitialized memory) |
+| `Buffer.isBuffer` | ✅ | |
+| `Buffer.isEncoding` | ✅ | |
+| `Buffer.concat` | ✅ | |
+| `Buffer.byteLength` | ✅ | |
+| `buffer.toString` | ✅ | utf8, base64, hex, latin1, ascii |
+| `buffer.write` | ✅ | |
+| `buffer.copy` | ✅ | |
+| `buffer.equals` | ✅ | |
+| `buffer.compare` | ✅ | |
+| `buffer.slice` | ✅ | Returns Buffer (not Uint8Array) |
+| `buffer.toJSON` | ✅ | |
+| `buffer.fill` | ❌ | |
+| `buffer.indexOf` | ❌ | |
+| `buffer.includes` | ❌ | |
+| `buffer.swap*` | ❌ | |
+| `buffer.read*` / `write*` | ❌ | Integer read/write methods |
+
 ---
 
 ## Unavailable `node:*` Imports
@@ -194,7 +221,6 @@ The following Node.js built-in modules are **not available**:
 
 - `node:assert`
 - `node:async_hooks`
-- `node:buffer`
 - `node:cluster`
 - `node:dgram`
 - `node:diagnostics_channel`

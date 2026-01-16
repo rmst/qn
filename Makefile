@@ -98,11 +98,11 @@ $(BIN_DIR)/obj/sandboxed-worker.o: sandboxed-worker/sandboxed-worker.c sandboxed
 
 # Build qnode (standalone executable with embedded node modules and qx)
 $(QNODE_PROG): qnode/bootstrap.js qnode/node/* qnode/repl.js qx/index.js qx/core.js $(QJSXC_PROG) quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./qnode:./qx $(QJSXC_PROG) -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D qx -o $@ qnode/bootstrap.js
+	QJSXPATH=./qnode:./qx $(QJSXC_PROG) -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D qx -o $@ qnode/bootstrap.js
 
 # Build qx (zx-compatible shell scripting with $ function)
 $(QX_PROG): qx/bootstrap.js qx/* qnode/node/* qnode/repl.js $(QJSXC_PROG) quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./qnode:./qx $(QJSXC_PROG) -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D qx/core -o $@ qx/bootstrap.js
+	QJSXPATH=./qnode:./qx $(QJSXC_PROG) -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D qx/core -o $@ qx/bootstrap.js
 
 # Create convenience symlinks in bin/ directory
 convenience-links: $(QJSX_PROG) $(QNODE_PROG) $(QX_PROG) $(QJSXC_PROG)

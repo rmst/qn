@@ -46,34 +46,101 @@ globalThis.performance = {
 }
 
 // Base64 encoding/decoding
+const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+const BASE64_LOOKUP = new Uint8Array(128)
+for (let i = 0; i < BASE64_CHARS.length; i++) {
+	BASE64_LOOKUP[BASE64_CHARS.charCodeAt(i)] = i
+}
+
 globalThis.btoa = (str) => {
-	const bytes = new Uint8Array([...str].map(c => c.charCodeAt(0)))
-	const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 	let result = ''
-	for (let i = 0; i < bytes.length; i += 3) {
-		const b1 = bytes[i], b2 = bytes[i + 1] ?? 0, b3 = bytes[i + 2] ?? 0
-		result += chars[b1 >> 2]
-		result += chars[((b1 & 3) << 4) | (b2 >> 4)]
-		result += i + 1 < bytes.length ? chars[((b2 & 15) << 2) | (b3 >> 6)] : '='
-		result += i + 2 < bytes.length ? chars[b3 & 63] : '='
+	for (let i = 0; i < str.length; i += 3) {
+		const b1 = str.charCodeAt(i), b2 = str.charCodeAt(i + 1) || 0, b3 = str.charCodeAt(i + 2) || 0
+		result += BASE64_CHARS[b1 >> 2]
+		result += BASE64_CHARS[((b1 & 3) << 4) | (b2 >> 4)]
+		result += i + 1 < str.length ? BASE64_CHARS[((b2 & 15) << 2) | (b3 >> 6)] : '='
+		result += i + 2 < str.length ? BASE64_CHARS[b3 & 63] : '='
 	}
 	return result
 }
 
 globalThis.atob = (str) => {
-	const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-	str = str.replace(/=+$/, '')
+	let end = str.length
+	while (end > 0 && str[end - 1] === '=') end--
 	let result = ''
-	for (let i = 0; i < str.length; i += 4) {
-		const b1 = chars.indexOf(str[i])
-		const b2 = chars.indexOf(str[i + 1])
-		const b3 = chars.indexOf(str[i + 2])
-		const b4 = chars.indexOf(str[i + 3])
+	for (let i = 0; i < end; i += 4) {
+		const b1 = BASE64_LOOKUP[str.charCodeAt(i)]
+		const b2 = BASE64_LOOKUP[str.charCodeAt(i + 1)]
+		const b3 = BASE64_LOOKUP[str.charCodeAt(i + 2)]
+		const b4 = BASE64_LOOKUP[str.charCodeAt(i + 3)]
 		result += String.fromCharCode((b1 << 2) | (b2 >> 4))
-		if (b3 !== -1) result += String.fromCharCode(((b2 & 15) << 4) | (b3 >> 2))
-		if (b4 !== -1) result += String.fromCharCode(((b3 & 3) << 6) | b4)
+		if (i + 2 < end) result += String.fromCharCode(((b2 & 15) << 4) | (b3 >> 2))
+		if (i + 3 < end) result += String.fromCharCode(((b3 & 3) << 6) | b4)
 	}
 	return result
+}
+
+// TextEncoder/TextDecoder (Web standard, also in Node.js)
+globalThis.TextEncoder = class TextEncoder {
+	encoding = 'utf-8'
+
+	encode(string) {
+		if (typeof string !== 'string') {
+			string = String(string)
+		}
+		return new Uint8Array(std._encodeUtf8(string))
+	}
+
+	encodeInto(string, uint8Array) {
+		if (typeof string !== 'string') {
+			string = String(string)
+		}
+		const encoded = new Uint8Array(std._encodeUtf8(string))
+		const len = Math.min(encoded.length, uint8Array.length)
+		uint8Array.set(encoded.subarray(0, len))
+		return {
+			read: string.length,
+			written: len
+		}
+	}
+}
+
+globalThis.TextDecoder = class TextDecoder {
+	constructor(encoding = 'utf-8', options = {}) {
+		const normalizedEncoding = encoding.toLowerCase().replace('-', '')
+		if (normalizedEncoding !== 'utf8') {
+			throw new TypeError(`TextDecoder: '${encoding}' encoding not supported. Only UTF-8 is supported.`)
+		}
+		if (options.fatal) {
+			throw new NodeCompatibilityError('TextDecoder: fatal option is not supported')
+		}
+		this.encoding = 'utf-8'
+		this.fatal = false
+		this.ignoreBOM = !!options.ignoreBOM
+	}
+
+	decode(input, options = {}) {
+		if (options.stream) {
+			throw new NodeCompatibilityError('TextDecoder: stream option is not supported')
+		}
+		if (input === undefined) {
+			return ''
+		}
+		let buffer
+		if (input instanceof ArrayBuffer) {
+			buffer = input
+		} else if (ArrayBuffer.isView(input)) {
+			buffer = input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength)
+		} else {
+			throw new TypeError('TextDecoder.decode: input must be ArrayBuffer or ArrayBufferView')
+		}
+		let result = std._decodeUtf8(buffer)
+		// Strip BOM if present (default behavior per WHATWG spec)
+		if (!this.ignoreBOM && result.length > 0 && result.charCodeAt(0) === 0xFEFF) {
+			result = result.slice(1)
+		}
+		return result
+	}
 }
 
 // Add missing console methods for Node.js compatibility

@@ -1,5 +1,6 @@
 import * as std from 'std'
 import * as os from 'os'
+import { Buffer } from 'node:buffer'
 
 /**
  * Error for unsupported Node.js compatibility features.
@@ -64,7 +65,7 @@ export function readFromFd(fd) {
 /**
  * Reads the entire contents from a file descriptor as raw bytes.
  * @param {number} fd - The file descriptor to read from.
- * @returns {Uint8Array} - The raw bytes from the file descriptor.
+ * @returns {Buffer} - The raw bytes from the file descriptor.
  */
 export function readBytesFromFd(fd) {
 	const chunks = []
@@ -82,13 +83,13 @@ export function readBytesFromFd(fd) {
 
 	// Concatenate all chunks
 	if (chunks.length === 0) {
-		return new Uint8Array(0)
+		return Buffer.alloc(0)
 	}
 	if (chunks.length === 1) {
-		return chunks[0]
+		return Buffer.from(chunks[0])
 	}
 
-	const result = new Uint8Array(totalLen)
+	const result = Buffer.alloc(totalLen)
 	let offset = 0
 	for (const chunk of chunks) {
 		result.set(chunk, offset)

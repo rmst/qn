@@ -1,5 +1,6 @@
 import * as std from 'std'
 import * as os from 'os'
+import { Buffer } from 'node:buffer'
 import { readFromFd, readBytesFromFd, indent, checkUnsupportedOptions, NodeCompatibilityError } from 'node/child_process/utils.js'
 
 const UNSUPPORTED_OPTIONS = [
@@ -184,13 +185,13 @@ export function execFileSync(file, args = [], options = {}) {
 	if (stdio[1] === 'pipe') {
 		output = useUtf8 ? readFromFd(stdoutRead) : readBytesFromFd(stdoutRead)
 	} else {
-		output = useUtf8 ? '' : new Uint8Array(0)
+		output = useUtf8 ? '' : Buffer.alloc(0)
 	}
 
 	if (stdio[2] === 'pipe') {
 		errorOutput = useUtf8 ? readFromFd(stderrRead) : readBytesFromFd(stderrRead)
 	} else {
-		errorOutput = useUtf8 ? '' : new Uint8Array(0)
+		errorOutput = useUtf8 ? '' : Buffer.alloc(0)
 	}
 
 	// Helper to get string version of output for error messages
@@ -259,20 +260,7 @@ export function execFileSync(file, args = [], options = {}) {
  * @returns {string}
  */
 function bytesToString(bytes) {
-	const file = std.tmpfile()
-	if (!file) {
-		// Fallback to basic conversion
-		let result = ''
-		for (let i = 0; i < bytes.length; i++) {
-			result += String.fromCharCode(bytes[i])
-		}
-		return result
-	}
-	file.write(bytes.buffer, 0, bytes.length)
-	file.seek(0, std.SEEK_SET)
-	const str = file.readAsString()
-	file.close()
-	return str
+	return std._decodeUtf8(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
 }
 
 /**

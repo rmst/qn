@@ -1,6 +1,7 @@
 import * as os from 'os'
 import * as std from 'std'
 import { EventEmitter } from 'node:events'
+import { Buffer } from 'node:buffer'
 
 /**
  * UTF-8 streaming decoder that handles incomplete multi-byte sequences.
@@ -111,57 +112,7 @@ class Utf8Decoder {
 	 * @returns {string}
 	 */
 	#decodeComplete(bytes) {
-		// Write to temp file and read as string for proper UTF-8 decoding
-		const tmpFile = std.tmpfile()
-		if (!tmpFile) {
-			// Fallback to basic decoding
-			return this.#basicDecode(bytes)
-		}
-		tmpFile.write(bytes.buffer, 0, bytes.length)
-		tmpFile.seek(0, std.SEEK_SET)
-		const str = tmpFile.readAsString()
-		tmpFile.close()
-		return str
-	}
-
-	/**
-	 * Basic UTF-8 decode fallback.
-	 * @param {Uint8Array} bytes
-	 * @returns {string}
-	 */
-	#basicDecode(bytes) {
-		let result = ''
-		let i = 0
-		while (i < bytes.length) {
-			const byte = bytes[i]
-			if ((byte & 0x80) === 0) {
-				// ASCII
-				result += String.fromCharCode(byte)
-				i++
-			} else if ((byte & 0xE0) === 0xC0) {
-				// 2-byte sequence
-				const cp = ((byte & 0x1F) << 6) | (bytes[i + 1] & 0x3F)
-				result += String.fromCharCode(cp)
-				i += 2
-			} else if ((byte & 0xF0) === 0xE0) {
-				// 3-byte sequence
-				const cp = ((byte & 0x0F) << 12) | ((bytes[i + 1] & 0x3F) << 6) | (bytes[i + 2] & 0x3F)
-				result += String.fromCharCode(cp)
-				i += 3
-			} else if ((byte & 0xF8) === 0xF0) {
-				// 4-byte sequence (surrogate pair needed)
-				const cp = ((byte & 0x07) << 18) | ((bytes[i + 1] & 0x3F) << 12) |
-				           ((bytes[i + 2] & 0x3F) << 6) | (bytes[i + 3] & 0x3F)
-				// Convert to surrogate pair
-				const adjusted = cp - 0x10000
-				result += String.fromCharCode(0xD800 + (adjusted >> 10), 0xDC00 + (adjusted & 0x3FF))
-				i += 4
-			} else {
-				// Invalid byte, skip
-				i++
-			}
-		}
-		return result
+		return std._decodeUtf8(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
 	}
 }
 
@@ -172,53 +123,7 @@ class Utf8Decoder {
  * @returns {Uint8Array}
  */
 function encodeUtf8(str) {
-	const tmpFile = std.tmpfile()
-	if (!tmpFile) {
-		return basicEncodeUtf8(str)
-	}
-	tmpFile.puts(str)
-	const len = tmpFile.tell()
-	tmpFile.seek(0, std.SEEK_SET)
-	const buf = new Uint8Array(len)
-	tmpFile.read(buf.buffer, 0, len)
-	tmpFile.close()
-	return buf
-}
-
-/**
- * Basic UTF-8 encode fallback.
- * @param {string} str
- * @returns {Uint8Array}
- */
-function basicEncodeUtf8(str) {
-	const bytes = []
-	for (let i = 0; i < str.length; i++) {
-		let cp = str.charCodeAt(i)
-		// Handle surrogate pairs
-		if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < str.length) {
-			const low = str.charCodeAt(i + 1)
-			if (low >= 0xDC00 && low <= 0xDFFF) {
-				cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00)
-				i++
-			}
-		}
-
-		if (cp < 0x80) {
-			bytes.push(cp)
-		} else if (cp < 0x800) {
-			bytes.push(0xC0 | (cp >> 6), 0x80 | (cp & 0x3F))
-		} else if (cp < 0x10000) {
-			bytes.push(0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F))
-		} else {
-			bytes.push(
-				0xF0 | (cp >> 18),
-				0x80 | ((cp >> 12) & 0x3F),
-				0x80 | ((cp >> 6) & 0x3F),
-				0x80 | (cp & 0x3F)
-			)
-		}
-	}
-	return new Uint8Array(bytes)
+	return new Uint8Array(std._encodeUtf8(str))
 }
 
 /**
@@ -300,8 +205,8 @@ export class Readable extends EventEmitter {
 				if (this.#encoding) {
 					chunk = this.#decoder.decode(bytes)
 				} else {
-					// Return a copy of the subarray to avoid issues with buffer reuse
-					chunk = new Uint8Array(bytes)
+					// Return a Buffer copy to avoid issues with buffer reuse
+					chunk = Buffer.from(bytes)
 				}
 
 				if (this.#flowing) {

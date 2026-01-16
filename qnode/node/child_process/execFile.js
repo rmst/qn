@@ -1,4 +1,5 @@
 import * as os from 'os'
+import { Buffer } from 'node:buffer'
 import { ChildProcess } from 'node/child_process/ChildProcess.js'
 import { spawnWithPipes, NodeCompatibilityError } from 'node/child_process/utils.js'
 
@@ -140,8 +141,8 @@ export function execFile(file, args, options, callback) {
 				stdoutData = stdoutChunks
 				stderrData = stderrChunks
 			} else {
-				stdoutData = concatUint8Arrays(stdoutChunks)
-				stderrData = concatUint8Arrays(stderrChunks)
+				stdoutData = concatToBuffer(stdoutChunks)
+				stderrData = concatToBuffer(stderrChunks)
 			}
 
 			let error = null
@@ -162,20 +163,20 @@ export function execFile(file, args, options, callback) {
 }
 
 /**
- * Concatenate array of Uint8Arrays into a single Uint8Array.
+ * Concatenate array of Uint8Arrays into a single Buffer.
  * @param {Uint8Array[]} arrays
- * @returns {Uint8Array}
+ * @returns {Buffer}
  */
-function concatUint8Arrays(arrays) {
+function concatToBuffer(arrays) {
 	if (arrays.length === 0) {
-		return new Uint8Array(0)
+		return Buffer.alloc(0)
 	}
 	if (arrays.length === 1) {
-		return arrays[0]
+		return Buffer.from(arrays[0])
 	}
 
 	const totalLen = arrays.reduce((sum, arr) => sum + arr.length, 0)
-	const result = new Uint8Array(totalLen)
+	const result = Buffer.alloc(totalLen)
 	let offset = 0
 	for (const arr of arrays) {
 		result.set(arr, offset)
