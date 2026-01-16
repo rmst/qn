@@ -55,20 +55,23 @@ Reference: [Node.js Globals](https://nodejs.org/api/globals.html)
 
 ### Web APIs
 
-| Global | Status |
-|--------|--------|
-| `fetch` | ❌ |
-| `Request` / `Response` / `Headers` | ❌ |
-| `AbortController` / `AbortSignal` | ❌ |
-| `Blob` / `File` | ❌ |
-| `WebSocket` | ❌ |
-| `crypto` (Web Crypto) | ❌ |
+| Global | Status | Notes |
+|--------|--------|-------|
+| `fetch` | ⚠️ | Requires `curl` in PATH; supports GET/POST/PUT/DELETE/etc, headers, body, redirects |
+| `Response` | ✅ | `.text()`, `.json()`, `.arrayBuffer()`, `.clone()`, `Response.json()` |
+| `Headers` | ✅ | Full WHATWG Headers interface |
+| `Request` | ❌ | |
+| `AbortController` / `AbortSignal` | ✅ | Full implementation with `abort()`, `signal.aborted`, events |
+| `DOMException` | ✅ | Used by fetch and AbortController |
+| `Blob` / `File` | ❌ | |
+| `WebSocket` | ❌ | |
+| `crypto` (Web Crypto) | ❌ | |
 
 ### Other
 
 | Global | Status |
 |--------|--------|
-| `process` | ✅ via `import` |
+| `process` | ✅ |
 | `global` / `globalThis` | ✅ |
 | `structuredClone` | ❌ |
 | `performance.now()` | ✅ |
@@ -137,7 +140,7 @@ import { spawn, exec, execFile, execSync, execFileSync } from 'node:child_proces
 | `spawnSync` | ❌ | |
 | `fork` | ❌ | |
 
-**Unsupported options** (throw `NodeCompatibilityError`): `uid`, `gid`, `signal`, `detached`
+**Unsupported options** (throw `NodeCompatibilityError`): `uid`, `gid`, `detached`
 
 **Ignored options**: `maxBuffer`, `windowsHide`
 
@@ -229,6 +232,46 @@ WHATWG URL Standard implementation. Also available as globals.
 | `URLSearchParams` | ✅ | Full query string handling |
 
 **Limitation:** Internationalized Domain Names (IDN) are not supported. URLs with non-ASCII hostnames (e.g., `https://münchen.de/`) will throw a `TypeError`. Use Punycode form instead: `https://xn--mnchen-3ya.de/`
+
+### `node:fetch`
+
+```js
+import { fetch, Headers, Response } from 'node:fetch';
+```
+
+Fetch API implementation using curl. Also available as globals (`fetch`, `Headers`, `Response`).
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `fetch` | ⚠️ | Async HTTP client; requires `curl` in PATH |
+| `Headers` | ✅ | Case-insensitive header management |
+| `Response` | ✅ | Response object with body consumption methods |
+| `Request` | ❌ | Use plain options object instead |
+
+**fetch() options:**
+| Option | Status | Notes |
+|--------|--------|-------|
+| `method` | ✅ | GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS |
+| `headers` | ✅ | Object, array of tuples, or Headers instance |
+| `body` | ✅ | String, Uint8Array, or ArrayBuffer |
+| `redirect` | ✅ | `'follow'` (default), `'manual'`, `'error'` |
+| `signal` | ✅ | AbortSignal for cancellation |
+
+**Response methods:**
+| Method | Status | Notes |
+|--------|--------|-------|
+| `.text()` | ✅ | |
+| `.json()` | ✅ | |
+| `.arrayBuffer()` | ✅ | |
+| `.clone()` | ✅ | |
+| `.body` | ❌ | No streaming; response is fully buffered |
+| `.blob()` | ❌ | |
+| `.formData()` | ❌ | |
+| `Response.json()` | ✅ | |
+| `Response.redirect()` | ✅ | |
+| `Response.error()` | ✅ | |
+
+**Requirement:** `curl` must be available in PATH.
 
 ---
 

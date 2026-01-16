@@ -11,6 +11,7 @@ export let run = () => {
 		RUN nix-env -iA nixpkgs.gnupatch
 		RUN nix-env -iA nixpkgs.nodejs_22
 		RUN nix-env -iA nixpkgs.coreutils nixpkgs.findutils nixpkgs.gnugrep nixpkgs.gnused nixpkgs.gnutar nixpkgs.gzip nixpkgs.gawk
+		RUN nix-env -iA nixpkgs.curl
 
 	`
 	

@@ -7,7 +7,6 @@ const UNSUPPORTED_OPTIONS = [
 	'detached',
 	'uid',
 	'gid',
-	'signal',
 	'timeout',
 	'killSignal',
 	'serialization',
@@ -26,6 +25,7 @@ const UNSUPPORTED_OPTIONS = [
  * @param {Object} [options.env] - Environment variables for the command.
  * @param {string|string[]} [options.stdio='pipe'] - stdio configuration.
  * @param {boolean|string} [options.shell=false] - Run command in shell.
+ * @param {AbortSignal} [options.signal] - AbortSignal to abort the child process.
  * @returns {ChildProcess}
  *
  * @example
@@ -132,7 +132,20 @@ export function spawn(command, args, options) {
 	if (stdio[1] === 'pipe') childOpts.stdoutFd = stdoutRead
 	if (stdio[2] === 'pipe') childOpts.stderrFd = stderrRead
 
-	return new ChildProcess(pid, childOpts)
+	const child = new ChildProcess(pid, childOpts)
+
+	// Handle AbortSignal
+	if (options.signal) {
+		if (options.signal.aborted) {
+			child.kill()
+		} else {
+			options.signal.addEventListener('abort', () => {
+				child.kill()
+			}, { once: true })
+		}
+	}
+
+	return child
 }
 
 /**

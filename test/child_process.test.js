@@ -777,4 +777,54 @@ describe('node:child_process shim', () => {
 		assert.ok(output.includes('error'))
 		assert.ok(output.includes('"resultEmpty":true'))
 	})
+
+	test('spawn with AbortController signal', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { spawn } from 'node:child_process'
+			const controller = new AbortController()
+			const start = Date.now()
+			const child = spawn('sleep', ['10'], { signal: controller.signal })
+			let errorName = null
+			child.on('error', (err) => {
+				errorName = err.name
+			})
+			child.on('close', (code, signal) => {
+				const elapsed = Date.now() - start
+				console.log(JSON.stringify({
+					signal,
+					errorName,
+					elapsedOk: elapsed < 500
+				}))
+			})
+			setTimeout(() => controller.abort(), 50)
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		// Node.js uses signal name 'SIGTERM', qnode uses signal number 15
+		assert.ok(result.signal === 15 || result.signal === 'SIGTERM')
+		assert.strictEqual(result.elapsedOk, true)
+	})
+
+	test('execFile with AbortController signal', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFile } from 'node:child_process'
+			const controller = new AbortController()
+			const start = Date.now()
+			const child = execFile('sleep', ['10'], { signal: controller.signal }, (error) => {
+				const elapsed = Date.now() - start
+				console.log(JSON.stringify({
+					hasError: error !== null,
+					elapsedOk: elapsed < 500
+				}))
+			})
+			child.on('error', () => {}) // Suppress unhandled error in Node.js
+			setTimeout(() => controller.abort(), 50)
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.hasError, true)
+		assert.strictEqual(result.elapsedOk, true)
+	})
 })

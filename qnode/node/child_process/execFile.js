@@ -14,6 +14,7 @@ import { spawnWithPipes, NodeCompatibilityError } from './utils.js'
  * @param {number} [options.timeout=0] - Timeout in milliseconds (0 means no timeout).
  * @param {string} [options.killSignal='SIGTERM'] - Signal to send when timeout expires.
  * @param {string} [options.encoding] - If 'utf8', callback receives strings; otherwise Uint8Array.
+ * @param {AbortSignal} [options.signal] - AbortSignal to abort the child process.
  * @param {Function} [callback] - Called with (error, stdout, stderr) when process completes.
  * @returns {ChildProcess}
  *
@@ -95,6 +96,17 @@ export function execFile(file, args, options, callback) {
 	// Write input if provided and close stdin
 	if (options.input !== undefined) {
 		child.stdin.end(options.input)
+	}
+
+	// Handle AbortSignal
+	if (options.signal) {
+		if (options.signal.aborted) {
+			child.kill(killSignal)
+		} else {
+			options.signal.addEventListener('abort', () => {
+				child.kill(killSignal)
+			}, { once: true })
+		}
 	}
 
 	// If callback provided, collect stream data and call on close

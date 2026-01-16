@@ -8,6 +8,15 @@
 import * as std from "std"
 import * as os from "os"
 
+// DOMException (Web standard, used by fetch and AbortController)
+// Must be defined early before modules that use it are imported
+globalThis.DOMException = class DOMException extends Error {
+	constructor(message = '', name = 'Error') {
+		super(message)
+		this.name = name
+	}
+}
+
 // Node.js compatibility error for unsupported features
 export class NodeCompatibilityError extends Error {
 	constructor(message) {
@@ -141,6 +150,21 @@ globalThis.TextDecoder = class TextDecoder {
 import { URL, URLSearchParams } from "node:url"
 globalThis.URL = URL
 globalThis.URLSearchParams = URLSearchParams
+
+// Fetch API (Web standard, also in Node.js)
+import { fetch, Headers, Response } from "node:fetch"
+globalThis.fetch = fetch
+globalThis.Headers = Headers
+globalThis.Response = Response
+
+// AbortController/AbortSignal (Web standard, also in Node.js)
+import { AbortController, AbortSignal } from "node:abort"
+globalThis.AbortController = AbortController
+globalThis.AbortSignal = AbortSignal
+
+// Process (Node.js global)
+import process from "node:process"
+globalThis.process = process
 
 // Add missing console methods for Node.js compatibility
 console.error = (...args) => { std.err.puts(args.join(' ') + '\n'); std.err.flush() }
