@@ -1,5 +1,5 @@
-import { execFile } from 'node/child_process/execFile.js'
-import { checkUnsupportedOptions, checkEncodingOption } from 'node/child_process/utils.js'
+import { execFile } from './execFile.js'
+import { checkUnsupportedOptions, checkEncodingOption } from './utils.js'
 
 const UNSUPPORTED_OPTIONS = [
 	'timeout',

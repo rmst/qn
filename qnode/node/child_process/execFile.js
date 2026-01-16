@@ -1,7 +1,7 @@
 import * as os from 'os'
 import { Buffer } from 'node:buffer'
-import { ChildProcess } from 'node/child_process/ChildProcess.js'
-import { spawnWithPipes, NodeCompatibilityError } from 'node/child_process/utils.js'
+import { ChildProcess } from './ChildProcess.js'
+import { spawnWithPipes, NodeCompatibilityError } from './utils.js'
 
 /**
  * Execute a file asynchronously.

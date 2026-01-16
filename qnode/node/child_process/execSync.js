@@ -1,6 +1,6 @@
 import * as std from 'std'
 import * as os from 'os'
-import { readFromFd, indent, checkUnsupportedOptions, checkEncodingOption } from 'node/child_process/utils.js'
+import { readFromFd, indent, checkUnsupportedOptions, checkEncodingOption } from './utils.js'
 
 const UNSUPPORTED_OPTIONS = [
 	'timeout',

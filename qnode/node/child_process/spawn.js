@@ -1,7 +1,7 @@
 import * as std from 'std'
 import * as os from 'os'
-import { ChildProcess } from 'node/child_process/ChildProcess.js'
-import { checkUnsupportedOptions } from 'node/child_process/utils.js'
+import { ChildProcess } from './ChildProcess.js'
+import { checkUnsupportedOptions } from './utils.js'
 
 const UNSUPPORTED_OPTIONS = [
 	'detached',

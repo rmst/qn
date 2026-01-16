@@ -1,5 +1,5 @@
---- quickjs/qjsc.c	2026-01-14 15:44:54.815434062 +0000
-+++ /tmp/qjsxc_new.c	2026-01-15 22:02:19.940809003 +0000
+--- quickjs/qjsc.c	2026-01-16 15:28:48.128646013 +0000
++++ /tmp/qjsxc_patched.c	2026-01-16 15:59:56.549556003 +0000
 @@ -1,5 +1,8 @@
  /*
 - * QuickJS command line compiler
@@ -26,17 +26,12 @@
  static uint64_t feature_bitmap;
  static FILE *outfile;
  static BOOL byte_swap;
-@@ -243,17 +248,25 @@
+@@ -243,17 +248,20 @@
      JSModuleDef *m;
      namelist_entry_t *e;
  
-+    /* Normalize the module name for consistent registration/lookup */
-+    char *normalized_name = qjsx_module_normalizer(ctx, "<qjsxc>", module_name, NULL);
-+    if (!normalized_name) {
-+        JS_ThrowOutOfMemory(ctx);
-+        return NULL;
-+    }
-+    const char *reg_name = normalized_name;  /* name used for registration */
++    /* module_name is already normalized by qjsx_module_normalizer (called by QuickJS) */
++    const char *reg_name = module_name;
 +
      /* check if it is a declared C or system module */
 -    e = namelist_find(&cmodule_list, module_name);
@@ -57,7 +52,7 @@
          /* the resulting executable will export its symbols for the
             dynamic library */
          dynamic_export = TRUE;
-@@ -262,16 +275,39 @@
+@@ -262,16 +270,38 @@
          uint8_t *buf;
          char cname[1024];
          int res;
@@ -86,7 +81,6 @@
 +
 +        buf = js_load_file(ctx, &buf_len, resolved_name);
          if (!buf) {
-+            js_free(ctx, normalized_name);
 +            if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
 +            if (index_resolved) js_free(ctx, index_resolved);
              JS_ThrowReferenceError(ctx, "could not load module filename '%s'",
@@ -100,7 +94,7 @@
              /* compile as JSON or JSON5 depending on "type" */
              JSValue val;
              int flags;
-@@ -280,18 +316,25 @@
+@@ -280,18 +310,23 @@
                  flags = JS_PARSE_JSON_EXT;
              else
                  flags = 0;
@@ -109,7 +103,6 @@
              js_free(ctx, buf);
 -            if (JS_IsException(val))
 +            if (JS_IsException(val)) {
-+                js_free(ctx, normalized_name);
 +                if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
 +                if (index_resolved) js_free(ctx, index_resolved);
                  return NULL;
@@ -119,7 +112,6 @@
 +            m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);
              if (!m) {
                  JS_FreeValue(ctx, val);
-+                js_free(ctx, normalized_name);
 +                if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
 +                if (index_resolved) js_free(ctx, index_resolved);
                  return NULL;
@@ -130,7 +122,7 @@
              if (namelist_find(&cname_list, cname)) {
                  find_unique_cname(cname, sizeof(cname));
              }
-@@ -299,31 +342,46 @@
+@@ -299,30 +334,43 @@
              /* output the module name */
              fprintf(outfile, "static const uint8_t %s_module_name[] = {\n",
                      cname);
@@ -154,7 +146,6 @@
              js_free(ctx, buf);
 -            if (JS_IsException(func_val))
 +            if (JS_IsException(func_val)) {
-+                js_free(ctx, normalized_name);
 +                if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
 +                if (index_resolved) js_free(ctx, index_resolved);
                  return NULL;
@@ -178,11 +169,9 @@
 +        if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
 +        if (index_resolved) js_free(ctx, index_resolved);
      }
-+    js_free(ctx, normalized_name);
      return m;
  }
- 
-@@ -761,7 +819,7 @@
+@@ -761,7 +809,7 @@
      JS_SetStripInfo(rt, strip_flags);
  
      /* loader for ES6 modules */
@@ -191,7 +180,7 @@
  
      fprintf(fo, "/* File generated automatically by the QuickJS compiler. */\n"
              "\n"
-@@ -769,8 +827,39 @@
+@@ -769,8 +817,39 @@
  
      if (output_type != OUTPUT_C) {
          fprintf(fo, "#include \"quickjs-libc.h\"\n"
@@ -231,7 +220,26 @@
      } else {
          fprintf(fo, "#include <inttypes.h>\n"
                  "\n"
-@@ -792,6 +881,19 @@
+@@ -784,14 +863,35 @@
+     }
+ 
+     for(i = 0; i < dynamic_module_list.count; i++) {
+-        if (!jsc_module_loader(ctx, dynamic_module_list.array[i].name, NULL, JS_UNDEFINED)) {
+-            fprintf(stderr, "Could not load dynamic module '%s'\n",
+-                    dynamic_module_list.array[i].name);
++        const char *dyn_name = dynamic_module_list.array[i].name;
++        /* Normalize the -D module name (handles colon-to-slash, QJSXPATH resolution) */
++        char *normalized = qjsx_module_normalizer(ctx, "<input>", dyn_name, NULL);
++        if (!normalized) {
++            fprintf(stderr, "Could not normalize dynamic module '%s'\n", dyn_name);
+             exit(1);
+         }
++        if (!jsc_module_loader(ctx, normalized, NULL, JS_UNDEFINED)) {
++            fprintf(stderr, "Could not load dynamic module '%s'\n", dyn_name);
++            js_free(ctx, normalized);
++            exit(1);
++        }
++        js_free(ctx, normalized);
      }
  
      if (output_type != OUTPUT_C) {
@@ -251,7 +259,7 @@
          fprintf(fo,
                  "static JSContext *JS_NewCustomContext(JSRuntime *rt)\n"
                  "{\n"
-@@ -843,7 +945,7 @@
+@@ -843,7 +943,7 @@
  
          /* add the module loader if necessary */
          if (feature_bitmap & (1 << FE_MODULE_LOADER)) {
@@ -260,7 +268,7 @@
          }
  
          fprintf(fo,
-@@ -872,5 +974,6 @@
+@@ -872,5 +972,6 @@
      namelist_free(&cname_list);
      namelist_free(&cmodule_list);
      namelist_free(&init_module_list);

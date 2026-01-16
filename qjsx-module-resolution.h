@@ -267,6 +267,105 @@ static int embedded_module_exists(const char **modules, const char *name) {
 }
 
 /**
+ * Resolve a bare module name to its canonical internal path via QJSXPATH.
+ *
+ * This returns the canonical name with extension (e.g., "node/child_process/index.js")
+ * NOT the filesystem path (e.g., "./qnode/node/child_process/index.js").
+ *
+ * For embedded modules, probes the embedded list.
+ * For filesystem, probes QJSXPATH directories.
+ *
+ * @param ctx - QuickJS context (for memory allocation)
+ * @param name - The bare module name (e.g., "node/child_process")
+ * @param embedded_modules - List of embedded module names, or NULL for filesystem
+ * @return Canonical name with extension, or NULL if not found
+ */
+static char *resolve_qjsxpath_canonical(JSContext *ctx, const char *name,
+                                        const char **embedded_modules) {
+    size_t name_len = strlen(name);
+    size_t buflen = name_len + 20;
+    char *buf = js_malloc(ctx, buflen);
+    if (!buf) return NULL;
+
+    if (embedded_modules) {
+        // For embedded modules: probe the list with extensions
+        if (embedded_module_exists(embedded_modules, name)) {
+            js_free(ctx, buf);
+            return js_strdup(ctx, name);
+        }
+        snprintf(buf, buflen, "%s/index.js", name);
+        if (embedded_module_exists(embedded_modules, buf)) {
+            return buf;
+        }
+        snprintf(buf, buflen, "%s.js", name);
+        if (embedded_module_exists(embedded_modules, buf)) {
+            return buf;
+        }
+    } else {
+        // For filesystem: probe QJSXPATH directories
+        const char *paths = getenv("QJSXPATH");
+        if (!paths) {
+            js_free(ctx, buf);
+            return NULL;
+        }
+
+        char *copy = js_strdup(ctx, paths);
+        if (!copy) {
+            js_free(ctx, buf);
+            return NULL;
+        }
+
+        char *result = NULL;
+        for (char *path = strtok(copy, PATH_SEP); path && !result; path = strtok(NULL, PATH_SEP)) {
+            size_t path_len = strlen(path);
+            if (path_len > 0 && strchr("/\\", path[path_len-1])) {
+                path[path_len-1] = 0;
+                path_len--;
+            }
+
+            size_t full_buflen = path_len + name_len + 20;
+            char *full_path = js_malloc(ctx, full_buflen);
+            if (!full_path) continue;
+
+            // Strategy 1: path/name/index.js -> return "name/index.js"
+            snprintf(full_path, full_buflen, "%s" DIR_SEP "%s" DIR_SEP "index.js", path, name);
+            if (file_exists(full_path)) {
+                snprintf(buf, buflen, "%s/index.js", name);
+                result = buf;
+                js_free(ctx, full_path);
+                break;
+            }
+
+            // Strategy 2: path/name.js -> return "name.js"
+            snprintf(full_path, full_buflen, "%s" DIR_SEP "%s.js", path, name);
+            if (file_exists(full_path)) {
+                snprintf(buf, buflen, "%s.js", name);
+                result = buf;
+                js_free(ctx, full_path);
+                break;
+            }
+
+            // Strategy 3: path/name -> return "name"
+            snprintf(full_path, full_buflen, "%s" DIR_SEP "%s", path, name);
+            if (file_exists(full_path)) {
+                js_free(ctx, buf);
+                result = js_strdup(ctx, name);
+                js_free(ctx, full_path);
+                break;
+            }
+
+            js_free(ctx, full_path);
+        }
+
+        js_free(ctx, copy);
+        if (result) return result;
+    }
+
+    js_free(ctx, buf);
+    return NULL;
+}
+
+/**
  * Probe for module existence with extension fallbacks.
  * Returns the resolved name (with extension) or NULL if not found.
  *
@@ -423,8 +522,16 @@ static char *qjsx_module_normalizer(JSContext *ctx, const char *base_name,
     if (!resolved)
         return NULL;
 
-    // Bare imports (no leading dot) - return unchanged, loader handles QJSXPATH
+    // Bare imports (no leading dot) - resolve via QJSXPATH to get canonical name
     if (name[0] != '.') {
+        if (!is_node_resolution()) {
+            char *canonical = resolve_qjsxpath_canonical(ctx, resolved, embedded_modules);
+            if (canonical) {
+                js_free(ctx, resolved);
+                return canonical;
+            }
+        }
+        // Not found in QJSXPATH or node mode - return as-is, loader will handle/fail
         return resolved;
     }
 

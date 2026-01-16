@@ -1,7 +1,7 @@
 import * as std from 'std'
 import * as os from 'os'
 import { Buffer } from 'node:buffer'
-import { readFromFd, readBytesFromFd, indent, checkUnsupportedOptions, NodeCompatibilityError } from 'node/child_process/utils.js'
+import { readFromFd, readBytesFromFd, indent, checkUnsupportedOptions, NodeCompatibilityError } from './utils.js'
 
 const UNSUPPORTED_OPTIONS = [
 	'uid',
