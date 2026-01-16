@@ -73,14 +73,16 @@ export function execFileSync(file, args = [], options = {}) {
 	const stdio = parseStdio(options.stdio)
 
 	// Create pipes for stdin, stdout, stderr based on stdio config
-	const [stdinRead, stdinWrite] = os.pipe()
+	let stdinRead = null, stdinWrite = null
+	let stdoutRead = null, stdoutWrite = null
+	let stderrRead = null, stderrWrite = null
 
-	let stdoutRead, stdoutWrite
+	if (stdio[0] === 'pipe') {
+		[stdinRead, stdinWrite] = os.pipe()
+	}
 	if (stdio[1] === 'pipe') {
 		[stdoutRead, stdoutWrite] = os.pipe()
 	}
-
-	let stderrRead, stderrWrite
 	if (stdio[2] === 'pipe') {
 		[stderrRead, stderrWrite] = os.pipe()
 	}
@@ -90,37 +92,55 @@ export function execFileSync(file, args = [], options = {}) {
 		block: false,
 		env,
 		cwd,
-		stdin: stdinRead,
 	}
+
+	if (stdio[0] === 'pipe') {
+		execOptions.stdin = stdinRead
+	} else if (stdio[0] === 'ignore') {
+		execOptions.stdin = os.open('/dev/null', os.O_RDONLY)
+	}
+	// 'inherit' means don't set - use parent's
 
 	if (stdio[1] === 'pipe') {
 		execOptions.stdout = stdoutWrite
 	} else if (stdio[1] === 'ignore') {
-		execOptions.stdout = std.open('/dev/null', 'w')
+		execOptions.stdout = os.open('/dev/null', os.O_WRONLY)
 	}
-	// 'inherit' means don't set - use parent's
 
 	if (stdio[2] === 'pipe') {
 		execOptions.stderr = stderrWrite
 	} else if (stdio[2] === 'ignore') {
-		execOptions.stderr = std.open('/dev/null', 'w')
+		execOptions.stderr = os.open('/dev/null', os.O_WRONLY)
 	}
 
 	// Spawn the process
 	const pid = os.exec([file, ...args], execOptions)
 
 	// Close child-side of pipes in parent
-	os.close(stdinRead)
+	if (stdio[0] === 'pipe') os.close(stdinRead)
 	if (stdio[1] === 'pipe') os.close(stdoutWrite)
 	if (stdio[2] === 'pipe') os.close(stderrWrite)
 
+	// Close /dev/null fds we opened for 'ignore'
+	if (stdio[0] === 'ignore' && execOptions.stdin !== undefined) {
+		os.close(execOptions.stdin)
+	}
+	if (stdio[1] === 'ignore' && execOptions.stdout !== undefined) {
+		os.close(execOptions.stdout)
+	}
+	if (stdio[2] === 'ignore' && execOptions.stderr !== undefined) {
+		os.close(execOptions.stderr)
+	}
+
 	// Write input to the process if provided, then close stdin
-	if (options.input !== undefined) {
-		const inputFile = std.fdopen(stdinWrite, 'w')
-		inputFile.puts(options.input)
-		inputFile.close()
-	} else {
-		os.close(stdinWrite)
+	if (stdio[0] === 'pipe') {
+		if (options.input !== undefined) {
+			const inputFile = std.fdopen(stdinWrite, 'w')
+			inputFile.puts(options.input)
+			inputFile.close()
+		} else {
+			os.close(stdinWrite)
+		}
 	}
 
 	// Poll for process exit with timeout support
