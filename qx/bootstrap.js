@@ -8,41 +8,9 @@
  * All modules are embedded at compile time using qjsxc's -D flag.
  */
 
-import * as os from "os"
+import "node-globals"
 import process from "node:process"
 import $, { ProcessPromise, ProcessOutput } from "qx/core"
-
-// Node.js compatibility error for unsupported features
-class NodeCompatibilityError extends Error {
-	constructor(message) {
-		super(message)
-		this.name = 'NodeCompatibilityError'
-	}
-}
-
-// Timer globals (os.setTimeout is the only QuickJS API we need here)
-globalThis.setTimeout = (fn, delay, ...args) => {
-	if (args.length > 0) {
-		throw new NodeCompatibilityError('setTimeout does not support passing arguments to callback. Use an arrow function instead.')
-	}
-	return os.setTimeout(fn, delay)
-}
-
-globalThis.clearTimeout = os.clearTimeout
-
-globalThis.setInterval = () => {
-	throw new NodeCompatibilityError('setInterval is not supported')
-}
-
-globalThis.clearInterval = () => {
-	throw new NodeCompatibilityError('clearInterval is not supported')
-}
-
-// Add missing console methods for Node.js compatibility
-console.error = (...args) => { process.stderr.write(args.join(' ') + '\n') }
-console.warn = console.error
-console.info = console.log
-console.debug = console.log
 
 // Expose $ and related classes globally (like zx)
 globalThis.$ = $

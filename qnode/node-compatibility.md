@@ -39,10 +39,10 @@ Reference: [Node.js Globals](https://nodejs.org/api/globals.html)
 
 ### URL
 
-| Global | Status |
-|--------|--------|
-| `URL` | ❌ |
-| `URLSearchParams` | ❌ |
+| Global | Status | Notes |
+|--------|--------|-------|
+| `URL` | ✅ | IDN not supported (throws on non-ASCII hostnames) |
+| `URLSearchParams` | ✅ | |
 
 ### Encoding
 
@@ -213,6 +213,23 @@ import { Buffer } from 'node:buffer';
 | `buffer.swap*` | ❌ | |
 | `buffer.read*` / `write*` | ❌ | Integer read/write methods |
 
+### `node:url`
+
+```js
+import { URL, URLSearchParams } from 'node:url';
+```
+
+WHATWG URL Standard implementation. Also available as globals.
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `URL` | ✅ | Full WHATWG URL parsing |
+| `URL.canParse` | ✅ | |
+| `URL.parse` | ✅ | |
+| `URLSearchParams` | ✅ | Full query string handling |
+
+**Limitation:** Internationalized Domain Names (IDN) are not supported. URLs with non-ASCII hostnames (e.g., `https://münchen.de/`) will throw a `TypeError`. Use Punycode form instead: `https://xn--mnchen-3ya.de/`
+
 ---
 
 ## Unavailable `node:*` Imports
@@ -242,7 +259,6 @@ The following Node.js built-in modules are **not available**:
 - `node:timers`
 - `node:tls`
 - `node:tty`
-- `node:url`
 - `node:util`
 - `node:v8`
 - `node:vm`
