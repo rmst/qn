@@ -1,11 +1,7 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync, mkdirSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { platform } from 'node:os'
-import { test, $ } from './util.js'
-
-const QJSXC = resolve(`./bin/${platform()}/qjsxc`)
+import { test, $, QJSXC } from './util.js'
 
 describe('qjsxc compiler', () => {
 	describe('standalone compilation', () => {
@@ -28,7 +24,7 @@ describe('qjsxc compiler', () => {
 				}))
 			`)
 
-			$`QJSXPATH=${dir}/modules ${QJSXC} -o ${dir}/app ${dir}/app.js`
+			$`QJSXPATH=${dir}/modules ${QJSXC()} -o ${dir}/app ${dir}/app.js`
 			const output = $`${dir}/app`
 
 			assert.deepStrictEqual(JSON.parse(output.trim()), {
@@ -45,7 +41,7 @@ describe('qjsxc compiler', () => {
 				console.log(JSON.stringify({ msg }))
 			`)
 
-			$`${QJSXC} -o ${dir}/main ${dir}/main.js`
+			$`${QJSXC()} -o ${dir}/main ${dir}/main.js`
 			const output = $`${dir}/main`
 
 			assert.deepStrictEqual(JSON.parse(output.trim()), { msg: "from helper" })
@@ -74,7 +70,7 @@ describe('qjsxc compiler', () => {
 				console.log(JSON.stringify({ result: greet("dynamic") }))
 			`)
 
-			$`${QJSXC} -o ${dir}/runtime ${dir}/runtime.js`
+			$`${QJSXC()} -o ${dir}/runtime ${dir}/runtime.js`
 			const output = $`QJSXPATH=${dir}/modules ${dir}/runtime ${dir}/external.js`
 
 			assert.deepStrictEqual(JSON.parse(output.trim()), { result: "Hello, dynamic" })
@@ -98,7 +94,7 @@ describe('qjsxc compiler', () => {
 				console.log(JSON.stringify({ value }))
 			`)
 
-			$`${QJSXC} -o ${dir}/runtime ${dir}/runtime.js`
+			$`${QJSXC()} -o ${dir}/runtime ${dir}/runtime.js`
 			const output = $`${dir}/runtime ${dir}/script.js`
 
 			assert.deepStrictEqual(JSON.parse(output.trim()), { value: 42 })

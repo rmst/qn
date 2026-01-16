@@ -3,20 +3,20 @@ import assert from 'node:assert'
 import { writeFileSync, readFileSync, mkdirSync, rmSync, mkdtempSync, realpathSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
-import { tmpdir, platform } from 'node:os'
+import { tmpdir } from 'node:os'
+import { QX } from '../util.js'
 
-const QX = resolve(`./bin/${platform()}/qx`)
 const EXAMPLES = resolve('./qx/examples')
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), '/')))
 
 describe('qx examples', () => {
 	test('hello.js - default', () => {
-		const output = execSync(`${QX} ${EXAMPLES}/hello.js`, { encoding: 'utf8' }).trim()
+		const output = execSync(`${QX()} ${EXAMPLES}/hello.js`, { encoding: 'utf8' }).trim()
 		assert.strictEqual(output, 'Hello, World!')
 	})
 
 	test('hello.js - with name', () => {
-		const output = execSync(`${QX} ${EXAMPLES}/hello.js QuickJS`, { encoding: 'utf8' }).trim()
+		const output = execSync(`${QX()} ${EXAMPLES}/hello.js QuickJS`, { encoding: 'utf8' }).trim()
 		assert.strictEqual(output, 'Hello, QuickJS!')
 	})
 
@@ -26,7 +26,7 @@ describe('qx examples', () => {
 			writeFileSync(`${dir}/a.txt`, '12345')
 			writeFileSync(`${dir}/b.txt`, '1234567890')
 
-			const output = execSync(`${QX} ${EXAMPLES}/file-stats.js ${dir}`, { encoding: 'utf8' }).trim()
+			const output = execSync(`${QX()} ${EXAMPLES}/file-stats.js ${dir}`, { encoding: 'utf8' }).trim()
 			const lines = output.split('\n')
 
 			assert.ok(lines.some(l => l.includes('a.txt') && l.includes('5 bytes')))
@@ -42,7 +42,7 @@ describe('qx examples', () => {
 			writeFileSync(`${dir}/test.txt`, 'foo bar foo baz foo')
 
 			const output = execSync(
-				`${QX} ${EXAMPLES}/search-replace.js ${dir}/test.txt foo replaced`,
+				`${QX()} ${EXAMPLES}/search-replace.js ${dir}/test.txt foo replaced`,
 				{ encoding: 'utf8' }
 			).trim()
 
@@ -57,7 +57,7 @@ describe('qx examples', () => {
 
 	test('search-replace.js - error on missing file', () => {
 		try {
-			execSync(`${QX} ${EXAMPLES}/search-replace.js /nonexistent foo bar`, {
+			execSync(`${QX()} ${EXAMPLES}/search-replace.js /nonexistent foo bar`, {
 				encoding: 'utf8',
 				stdio: 'pipe'
 			})
@@ -69,7 +69,7 @@ describe('qx examples', () => {
 
 	test('search-replace.js - shows usage without args', () => {
 		try {
-			execSync(`${QX} ${EXAMPLES}/search-replace.js`, {
+			execSync(`${QX()} ${EXAMPLES}/search-replace.js`, {
 				encoding: 'utf8',
 				stdio: 'pipe'
 			})

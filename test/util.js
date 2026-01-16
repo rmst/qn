@@ -1,14 +1,29 @@
 import { test as nodetest } from 'node:test'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, cpSync } from 'node:fs'
 import { execSync, spawn } from 'node:child_process'
-import { join, resolve } from 'node:path'
+import { join, resolve, dirname } from 'node:path'
 import { tmpdir, platform } from 'node:os'
 
 export const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), '/')))
 
+const ROOT = resolve(dirname(import.meta.filename), '..')
+let buildDir = null
 
+const ensureBuild = () => {
+	if (!buildDir) {
+		buildDir = realpathSync(mkdtempSync(join(tmpdir(), 'qjsx-test-')))
+		console.log(`\n=== Building qjsx in ${buildDir} ===\n`)
+		cpSync(ROOT, buildDir, { recursive: true })
+		execSync('make clean && make build', { cwd: buildDir, stdio: 'inherit' })
+		console.log(`\n=== Build complete ===\n`)
+	}
+	return buildDir
+}
 
-const QNODE = resolve(`./bin/${platform()}/qnode`)
+export const QJSX = () => join(ensureBuild(), 'bin', platform(), 'qjsx')
+export const QNODE = () => join(ensureBuild(), 'bin', platform(), 'qnode')
+export const QJSXC = () => join(ensureBuild(), 'bin', platform(), 'qjsxc')
+export const QX = () => join(ensureBuild(), 'bin', platform(), 'qx')
 
 /**
  * @overload
@@ -79,7 +94,7 @@ export const execAsync = (cmd, args, opts = {}) => {
  * @param {(ctx: { bin: string, dir: string }) => void} fn - Test function receiving { bin, dir }
  */
 export const test = (name, fn) => {
-	for (const bin of ['node', QNODE]) {
+	for (const bin of ['node', QNODE()]) {
 		const label = bin === 'node' ? 'node' : 'qnode'
 		const testFn = async () => {
 			const dir = mktempdir()
@@ -111,7 +126,7 @@ export const testQnodeOnly = (name, fn) => {
 	const testFn = async () => {
 		const dir = mktempdir()
 		try {
-			return await fn({ bin: QNODE, dir })
+			return await fn({ bin: QNODE(), dir })
 		} catch (err) {
 			if (err.stack) {
 				const cwd = process.cwd()

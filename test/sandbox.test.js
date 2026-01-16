@@ -2,12 +2,12 @@ import { describe, test as nodetest } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { execSync } from 'node:child_process'
-import { join, resolve } from 'node:path'
-import { tmpdir, platform } from 'node:os'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { mkdtempSync, realpathSync } from 'node:fs'
+import { QJSX } from './util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), 'sandbox-test-')))
-const QJSX = resolve(`./bin/${platform()}/qjsx`)
 
 const $ = (strings, ...values) => {
 	const cmd = String.raw({ raw: strings }, ...values)
@@ -51,7 +51,7 @@ describe('SandboxedWorker', () => {
 				${eventLoopCode}
 			`)
 
-			const output = $`${QJSX} ${dir}/test.js`
+			const output = $`${QJSX()} ${dir}/test.js`
 			const result = JSON.parse(output)
 			assert.deepStrictEqual(result, { received: { value: 21 }, doubled: 42 })
 		} finally {
@@ -90,7 +90,7 @@ describe('SandboxedWorker', () => {
 				${eventLoopCode}
 			`)
 
-			const output = $`${QJSX} ${dir}/test.js`
+			const output = $`${QJSX()} ${dir}/test.js`
 			const result = JSON.parse(output)
 			assert.strictEqual(result.hasStd, false)
 		} finally {
@@ -129,7 +129,7 @@ describe('SandboxedWorker', () => {
 				${eventLoopCode}
 			`)
 
-			const output = $`${QJSX} ${dir}/test.js`
+			const output = $`${QJSX()} ${dir}/test.js`
 			const result = JSON.parse(output)
 			assert.strictEqual(result.hasOs, false)
 		} finally {
@@ -163,7 +163,7 @@ describe('SandboxedWorker', () => {
 				${eventLoopCode}
 			`)
 
-			const output = $`${QJSX} ${dir}/test.js`
+			const output = $`${QJSX()} ${dir}/test.js`
 			const result = JSON.parse(output)
 			assert.strictEqual(result.hasConsole, true)
 			assert.strictEqual(result.hasLog, true)
@@ -200,7 +200,7 @@ describe('SandboxedWorker', () => {
 				${eventLoopCode}
 			`)
 
-			const output = $`${QJSX} ${dir}/test.js`
+			const output = $`${QJSX()} ${dir}/test.js`
 			const result = JSON.parse(output)
 			assert.strictEqual(result.sum, 31)
 			assert.deepStrictEqual(result.sorted, [1, 1, 2, 3, 4, 5, 6, 9])
@@ -234,7 +234,7 @@ describe('SandboxedWorker', () => {
 				${eventLoopCode}
 			`)
 
-			const output = $`${QJSX} ${dir}/test.js`
+			const output = $`${QJSX()} ${dir}/test.js`
 			const result = JSON.parse(output)
 			assert.strictEqual(result.msg, 'hello from file')
 			assert.strictEqual(result.input, 'test input')
@@ -280,7 +280,7 @@ describe('SandboxedWorker', () => {
 				${eventLoopCode}
 			`)
 
-			const output = $`${QJSX} ${dir}/test.js`
+			const output = $`${QJSX()} ${dir}/test.js`
 			const result = JSON.parse(output)
 			assert.strictEqual(result.doubled, 10)
 			assert.strictEqual(result.squared, 25)

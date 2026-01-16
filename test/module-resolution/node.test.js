@@ -2,12 +2,12 @@ import { describe, test as nodetest } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { execSync } from 'node:child_process'
-import { join, resolve } from 'node:path'
-import { tmpdir, platform } from 'node:os'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { mkdtempSync, realpathSync } from 'node:fs'
+import { QJSX } from '../util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), 'module-res-node-test-')))
-const QJSX = resolve(`./bin/${platform()}/qjsx`)
 
 const $ = (strings, ...values) => {
 	const cmd = String.raw({ raw: strings }, ...values)
@@ -20,7 +20,7 @@ const $ = (strings, ...values) => {
  */
 const test = (name, fn) => {
 	for (const runtime of ['node', 'qjsx']) {
-		const bin = runtime === 'node' ? 'node' : QJSX
+		const bin = runtime === 'node' ? 'node' : QJSX()
 		const env = runtime === 'qjsx' ? 'QJSX_MODULE_RESOLUTION=node' : ''
 		nodetest(`${name} [${runtime}]`, () => {
 			const dir = mktempdir()

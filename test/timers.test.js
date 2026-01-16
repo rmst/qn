@@ -1,10 +1,7 @@
 import { describe, test as nodetest } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync, rmSync } from 'node:fs'
-import { platform } from 'node:os'
-import { test, $, mktempdir } from './util.js'
-
-const QNODE = `./bin/${platform()}/qnode`
+import { test, $, mktempdir, QNODE } from './util.js'
 
 describe('timer globals', () => {
 	test('setTimeout works', ({ bin, dir }) => {
@@ -39,7 +36,7 @@ describe('timer globals', () => {
 					console.log(e.name)
 				}
 			`)
-			const output = $`${QNODE} ${dir}/test.js`
+			const output = $`${QNODE()} ${dir}/test.js`
 			assert.strictEqual(output, 'NodeCompatibilityError')
 		} finally {
 			rmSync(dir, { recursive: true })
@@ -57,7 +54,7 @@ describe('timer globals', () => {
 					console.log(e.name)
 				}
 			`)
-			const output = $`${QNODE} ${dir}/test.js`
+			const output = $`${QNODE()} ${dir}/test.js`
 			assert.strictEqual(output, 'NodeCompatibilityError')
 		} finally {
 			rmSync(dir, { recursive: true })
@@ -75,7 +72,7 @@ describe('timer globals', () => {
 					console.log(e.name)
 				}
 			`)
-			const output = $`${QNODE} ${dir}/test.js`
+			const output = $`${QNODE()} ${dir}/test.js`
 			assert.strictEqual(output, 'NodeCompatibilityError')
 		} finally {
 			rmSync(dir, { recursive: true })

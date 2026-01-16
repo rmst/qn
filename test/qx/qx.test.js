@@ -2,15 +2,15 @@ import { describe, test } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync, mkdirSync, readFileSync, rmSync, mkdtempSync, realpathSync } from 'node:fs'
 import { execSync } from 'node:child_process'
-import { join, resolve } from 'node:path'
-import { tmpdir, platform } from 'node:os'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { QX, QNODE } from '../util.js'
 
-const QX = resolve(`./bin/${platform()}/qx`)
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), '/')))
 
 const runQx = (script, dir) => {
 	writeFileSync(`${dir}/test.js`, script)
-	return execSync(`${QX} ${dir}/test.js`, { encoding: 'utf8', cwd: dir }).trim()
+	return execSync(`${QX()} ${dir}/test.js`, { encoding: 'utf8', cwd: dir }).trim()
 }
 
 describe('qx $ function', () => {
@@ -193,7 +193,7 @@ describe('qx helpers', () => {
 			writeFileSync(`${dir}/test.js`, `
 				console.log(JSON.stringify({ argv }))
 			`)
-			const output = execSync(`${QX} ${dir}/test.js arg1 arg2`, { encoding: 'utf8' }).trim()
+			const output = execSync(`${QX()} ${dir}/test.js arg1 arg2`, { encoding: 'utf8' }).trim()
 			assert.deepStrictEqual(JSON.parse(output), { argv: ['arg1', 'arg2'] })
 		} finally {
 			rmSync(dir, { recursive: true })
@@ -348,14 +348,13 @@ describe('qx shell escaping', () => {
 describe('qx as library in qnode', () => {
 	test('import { $ } from qx works', () => {
 		const dir = mktempdir()
-		const QNODE = resolve(`./bin/${platform()}/qnode`)
 		try {
 			writeFileSync(`${dir}/test.js`, `
 				import { $ } from 'qx'
 				const result = await $\`echo "library test"\`
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`)
-			const output = execSync(`${QNODE} ${dir}/test.js`, { encoding: 'utf8' }).trim()
+			const output = execSync(`${QNODE()} ${dir}/test.js`, { encoding: 'utf8' }).trim()
 			assert.deepStrictEqual(JSON.parse(output), { out: 'library test' })
 		} finally {
 			rmSync(dir, { recursive: true })
@@ -364,14 +363,13 @@ describe('qx as library in qnode', () => {
 
 	test('import $ from qx (default export) works', () => {
 		const dir = mktempdir()
-		const QNODE = resolve(`./bin/${platform()}/qnode`)
 		try {
 			writeFileSync(`${dir}/test.js`, `
 				import $ from 'qx'
 				const result = await $\`echo "default export"\`
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`)
-			const output = execSync(`${QNODE} ${dir}/test.js`, { encoding: 'utf8' }).trim()
+			const output = execSync(`${QNODE()} ${dir}/test.js`, { encoding: 'utf8' }).trim()
 			assert.deepStrictEqual(JSON.parse(output), { out: 'default export' })
 		} finally {
 			rmSync(dir, { recursive: true })

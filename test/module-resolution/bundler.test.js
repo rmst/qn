@@ -2,14 +2,12 @@ import { describe, test as nodetest } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { execSync } from 'node:child_process'
-import { join, resolve } from 'node:path'
-import { tmpdir, platform } from 'node:os'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { mkdtempSync, realpathSync } from 'node:fs'
+import { QJSX, QJSXC, QNODE } from '../util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), 'module-res-test-')))
-const QJSX = resolve(`./bin/${platform()}/qjsx`)
-const QJSXC = resolve(`./bin/${platform()}/qjsxc`)
-const QNODE = resolve(`./bin/${platform()}/qnode`)
 
 const $ = (strings, ...values) => {
 	const cmd = String.raw({ raw: strings }, ...values)
@@ -32,7 +30,7 @@ describe('Bundler Mode (default)', () => {
 			import { add } from './utils';
 			console.log(add(1, 2));
 		`)
-		const output = $`${QJSX} ${dir}/main.js`
+		const output = $`${QJSX()} ${dir}/main.js`
 		assert.strictEqual(output, '3')
 	})
 
@@ -43,7 +41,7 @@ describe('Bundler Mode (default)', () => {
 			import { msg } from './mylib';
 			console.log(msg);
 		`)
-		const output = $`${QJSX} ${dir}/main.js`
+		const output = $`${QJSX()} ${dir}/main.js`
 		assert.strictEqual(output, 'from index')
 	})
 
@@ -54,7 +52,7 @@ describe('Bundler Mode (default)', () => {
 			import { value } from 'node:test';
 			console.log(value);
 		`)
-		const output = $`QJSXPATH=${dir} ${QJSX} ${dir}/main.js`
+		const output = $`QJSXPATH=${dir} ${QJSX()} ${dir}/main.js`
 		assert.strictEqual(output, '42')
 	})
 
@@ -65,7 +63,7 @@ describe('Bundler Mode (default)', () => {
 			import { val } from 'myutil';
 			console.log(val);
 		`)
-		const output = $`QJSXPATH=${dir}/modules ${QJSX} ${dir}/main.js`
+		const output = $`QJSXPATH=${dir}/modules ${QJSX()} ${dir}/main.js`
 		assert.strictEqual(output, 'bare import works')
 	})
 
@@ -79,7 +77,7 @@ describe('Bundler Mode (default)', () => {
 			import { y } from 'bar';
 			console.log(x + y);
 		`)
-		const output = $`QJSXPATH=${dir}/lib1:${dir}/lib2 ${QJSX} ${dir}/main.js`
+		const output = $`QJSXPATH=${dir}/lib1:${dir}/lib2 ${QJSX()} ${dir}/main.js`
 		assert.strictEqual(output, '3')
 	})
 
@@ -92,7 +90,7 @@ describe('Bundler Mode (default)', () => {
 			}
 			main();
 		`)
-		const output = $`${QJSX} ${dir}/main.js`
+		const output = $`${QJSX()} ${dir}/main.js`
 		assert.strictEqual(output, 'loaded dynamically')
 	})
 
@@ -106,7 +104,7 @@ describe('Bundler Mode (default)', () => {
 			}
 			main();
 		`)
-		const output = $`QJSXPATH=${dir} ${QJSX} ${dir}/main.js`
+		const output = $`QJSXPATH=${dir} ${QJSX()} ${dir}/main.js`
 		assert.strictEqual(output, 'from namespace')
 	})
 
@@ -116,7 +114,7 @@ describe('Bundler Mode (default)', () => {
 			import { cwd } from 'node:process';
 			console.log(typeof existsSync, typeof cwd);
 		`)
-		const output = $`${QNODE} ${dir}/test.js`
+		const output = $`${QNODE()} ${dir}/test.js`
 		assert.strictEqual(output, 'function function')
 	})
 
@@ -141,7 +139,7 @@ describe('Bundler Mode (default)', () => {
 			console.log(getAB())
 		`)
 
-		const output = $`${QJSX} ${dir}/main.js`
+		const output = $`${QJSX()} ${dir}/main.js`
 		assert.strictEqual(output, 'AB')
 	})
 })
@@ -154,7 +152,7 @@ describe('Bundler Mode Compilation', () => {
 			import { greet } from 'node:mymod';
 			console.log(greet());
 		`)
-		$`QJSXPATH=${dir} ${QJSXC} -o ${dir}/app ${dir}/main.js`
+		$`QJSXPATH=${dir} ${QJSXC()} -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, 'hello')
 	})
@@ -169,7 +167,7 @@ describe('Bundler Mode Compilation', () => {
 			}
 			main();
 		`)
-		$`QJSXPATH=${dir} ${QJSXC} -D mylibs:dynamic -o ${dir}/app ${dir}/main.js`
+		$`QJSXPATH=${dir} ${QJSXC()} -D mylibs:dynamic -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, '99')
 	})
@@ -181,7 +179,7 @@ describe('Bundler Mode Compilation', () => {
 			import { helper } from './lib/helper.js';
 			console.log(helper(21));
 		`)
-		$`${QJSXC} -o ${dir}/app ${dir}/main.js`
+		$`${QJSXC()} -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, '42')
 	})
@@ -193,7 +191,7 @@ describe('Bundler Mode Compilation', () => {
 			import { val } from 'myutil';
 			console.log(val);
 		`)
-		$`QJSXPATH=${dir}/modules ${QJSXC} -o ${dir}/app ${dir}/main.js`
+		$`QJSXPATH=${dir}/modules ${QJSXC()} -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, 'bare import works')
 	})
