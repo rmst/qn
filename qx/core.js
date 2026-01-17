@@ -197,14 +197,14 @@ export class ProcessPromise extends Promise {
 
 		child.stdout.on('data', (chunk) => {
 			this.#stdoutBuffer += chunk
-			if (!this.#quiet && this.#verbose) {
+			if (!this.#quiet) {
 				process.stdout.write(chunk)
 			}
 		})
 
 		child.stderr.on('data', (chunk) => {
 			this.#stderrBuffer += chunk
-			if (!this.#quiet && this.#verbose) {
+			if (!this.#quiet) {
 				process.stderr.write(chunk)
 			}
 		})
