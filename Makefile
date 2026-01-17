@@ -57,11 +57,11 @@ $(QJSX_PROG): $(BIN_DIR)/obj/qjsx.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj
 	chmod +x $@
 
 # Generate qjsx.c from quickjs/qjs.c by applying the patch
-$(BIN_DIR)/obj/qjsx.c: quickjs/qjs.c qjsx.patch qjsx-module-resolution.h | $(BIN_DIR)/obj
+$(BIN_DIR)/obj/qjsx.c: quickjs/qjs.c qjsx.patch module_resolution/module-resolution.h | $(BIN_DIR)/obj
 	patch -p0 < qjsx.patch -o $@ quickjs/qjs.c
 
 # Build qjsx.o from the patched source
-$(BIN_DIR)/obj/qjsx.o: $(BIN_DIR)/obj/qjsx.c qjsx-module-resolution.h | $(BIN_DIR)/obj
+$(BIN_DIR)/obj/qjsx.o: $(BIN_DIR)/obj/qjsx.c module_resolution/module-resolution.h | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
 # Build qjsxc executable
@@ -69,7 +69,8 @@ $(QJSXC_PROG): $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/o
 	$(CC) $(LDFLAGS) -o $@ $(BIN_DIR)/obj/qjsxc.o $(QUICKJS_OBJS) $(LIBS)
 	chmod +x $@
 	cp $(BIN_DIR)/quickjs/*.h $(BIN_DIR)/
-	cp qjsx-module-resolution.h $(BIN_DIR)/
+	mkdir -p $(BIN_DIR)/module_resolution
+	cp module_resolution/module-resolution.h $(BIN_DIR)/module_resolution/
 	cp $(BIN_DIR)/quickjs/libquickjs.a $(BIN_DIR)/
 	# Replace unpatched quickjs-libc.o with patched version in libquickjs.a
 	# Also add sandboxed-worker.o which is required by the patched quickjs-libc
@@ -77,11 +78,11 @@ $(QJSXC_PROG): $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/o
 	ar r $(BIN_DIR)/libquickjs.a $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o
 
 # Generate qjsxc.c from quickjs/qjsc.c by applying the patch
-$(BIN_DIR)/obj/qjsxc.c: quickjs/qjsc.c qjsxc.patch qjsx-module-resolution.h | $(BIN_DIR)/obj
+$(BIN_DIR)/obj/qjsxc.c: quickjs/qjsc.c qjsxc.patch module_resolution/module-resolution.h | $(BIN_DIR)/obj
 	patch -p0 < qjsxc.patch -o $@ quickjs/qjsc.c
 
 # Build qjsxc.o from the patched source
-$(BIN_DIR)/obj/qjsxc.o: $(BIN_DIR)/obj/qjsxc.c qjsx-module-resolution.h | $(BIN_DIR)/obj
+$(BIN_DIR)/obj/qjsxc.o: $(BIN_DIR)/obj/qjsxc.c module_resolution/module-resolution.h | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -DCONFIG_CC=\"$(CC)\" -DCONFIG_PREFIX=\"/usr/local\" -I. -I$(BIN_DIR)/obj -I$(BIN_DIR)/quickjs -c -o $@ $<
 
 # Patch and build quickjs-libc (adds import.meta.dirname and sandbox support)

@@ -14,7 +14,7 @@
  
  #include "cutils.h"
  #include "quickjs-libc.h"
-+#include "qjsx-module-resolution.h"
++#include "module_resolution/module-resolution.h"
  
  typedef struct {
      char *name;
@@ -190,7 +190,7 @@
                  "\n"
                  );
 +
-+        fprintf(fo, "#include \"qjsx-module-resolution.h\"\n\n");
++        fprintf(fo, "#include \"module_resolution/module-resolution.h\"\n\n");
 +
 +        fprintf(fo,
 +                "static JSModuleDef *qjsx_loader(JSContext *ctx, const char *name, void *opaque, JSValueConst attributes) {\n"

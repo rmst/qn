@@ -8,6 +8,12 @@
  * - QJSXPATH environment variable support (like NODE_PATH)
  * - Node.js-style index.js resolution
  * - Colon-to-slash translation (e.g., "node:fs" -> "node/fs")
+ * - Symlink resolution via realpath() for filesystem paths
+ *
+ * Environment variables:
+ * - QJSXPATH: Colon-separated list of directories to search for bare imports
+ * - QJSX_MODULE_RESOLUTION: Set to "node" for strict Node.js ESM mode
+ * - QJSX_MODULE_DEBUG: Set to "1" to enable debug output
  */
 
 #ifndef QJSX_MODULE_RESOLUTION_H
@@ -18,8 +24,27 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <limits.h>
 #include "quickjs/cutils.h"
 #include "quickjs/quickjs-libc.h"
+
+/* ========================================================================
+ * DEBUG OUTPUT
+ * ======================================================================== */
+
+static int module_debug_enabled(void) {
+    static int cached = -1;
+    if (cached == -1) {
+        const char *v = getenv("QJSX_MODULE_DEBUG");
+        cached = (v && v[0] == '1');
+    }
+    return cached;
+}
+
+#define MODULE_DEBUG(fmt, ...) do { \
+    if (module_debug_enabled()) \
+        fprintf(stderr, "[module] " fmt "\n", ##__VA_ARGS__); \
+} while(0)
 
 /* ========================================================================
  * CROSS-PLATFORM PATH SEPARATORS
@@ -486,6 +511,30 @@ static char *normalize_module_name(JSContext *ctx, const char *base_name,
 }
 
 /**
+ * Check if a path is a filesystem path (relative or absolute).
+ * Filesystem paths start with '/', './', or '../'
+ */
+static int is_filesystem_path(const char *name) {
+    if (name[0] == '/') return 1;
+    if (name[0] == '.' && (name[1] == '/' || name[1] == '\0')) return 1;
+    if (name[0] == '.' && name[1] == '.' && (name[2] == '/' || name[2] == '\0')) return 1;
+    return 0;
+}
+
+/**
+ * Resolve a filesystem path to its canonical absolute path using realpath().
+ * Returns a newly allocated string, or NULL if realpath fails.
+ * Falls back to the original path if realpath fails (e.g., file doesn't exist yet).
+ */
+static char *resolve_realpath(JSContext *ctx, const char *path) {
+    char resolved[PATH_MAX];
+    if (realpath(path, resolved)) {
+        return js_strdup(ctx, resolved);
+    }
+    return NULL;
+}
+
+/**
  * QJSX module normalizer - produces canonical module names.
  *
  * This normalizer is used by both qjsx (interpreter) and compiled binaries.
@@ -494,8 +543,10 @@ static char *normalize_module_name(JSContext *ctx, const char *base_name,
  *
  * Processing steps:
  *   1. Colon-to-slash translation (e.g., "node:fs" -> "node/fs")
- *   2. Resolve relative paths (handle "./" and "../")
- *   3. In bundler mode: probe for existence to find full path with extension
+ *   2. For filesystem paths: resolve base_name via realpath for symlink handling
+ *   3. Resolve relative paths (handle "./" and "../")
+ *   4. For filesystem paths: resolve result via realpath
+ *   5. In bundler mode: probe for existence to find full path with extension
  *
  * @param ctx - QuickJS context
  * @param base_name - The name of the importing module
@@ -508,43 +559,98 @@ static char *qjsx_module_normalizer(JSContext *ctx, const char *base_name,
     QJSXModuleResolverContext *resolver_ctx = (QJSXModuleResolverContext *)opaque;
     const char **embedded_modules = resolver_ctx ? resolver_ctx->embedded_modules : NULL;
 
+    MODULE_DEBUG("normalize: base='%s' name='%s'", base_name, name);
+
     // Step 1: Colon-to-slash translation
     char *translated = translate_colons_to_slashes(ctx, name);
     const char *work_name = translated ? translated : name;
 
-    // Step 2: Resolve relative paths
-    char *resolved = normalize_module_name(ctx, base_name, work_name);
+    // Determine if this is a filesystem path (relative or absolute)
+    int is_fs_path = is_filesystem_path(work_name);
 
-    // Clean up translated name if allocated
+    // Step 2: For filesystem paths, resolve base_name via realpath
+    // This ensures relative imports resolve against the real file location,
+    // not a symlink's location. Skip for embedded modules (files don't exist on disk).
+    char *real_base = NULL;
+    const char *effective_base = base_name;
+
+    if (is_fs_path && is_filesystem_path(base_name)) {
+        int base_is_embedded = embedded_modules && embedded_module_exists(embedded_modules, base_name);
+        if (!base_is_embedded) {
+            real_base = resolve_realpath(ctx, base_name);
+            if (real_base) {
+                MODULE_DEBUG("realpath base: '%s' -> '%s'", base_name, real_base);
+                effective_base = real_base;
+            }
+        }
+    }
+
+    // Step 3: Resolve relative paths (handle "./" and "../")
+    char *resolved = normalize_module_name(ctx, effective_base, work_name);
+
+    // Clean up
     if (translated)
         js_free(ctx, translated);
+    if (real_base)
+        js_free(ctx, real_base);
 
     if (!resolved)
         return NULL;
 
-    // Bare imports (no leading dot) - resolve via QJSXPATH to get canonical name
-    if (name[0] != '.') {
+    MODULE_DEBUG("after normalize: '%s'", resolved);
+
+    // Bare imports (no leading dot or slash) - resolve via QJSXPATH to get canonical name
+    if (!is_filesystem_path(name)) {
         if (!is_node_resolution()) {
             char *canonical = resolve_qjsxpath_canonical(ctx, resolved, embedded_modules);
             if (canonical) {
+                MODULE_DEBUG("QJSXPATH resolved: '%s' -> '%s'", resolved, canonical);
                 js_free(ctx, resolved);
                 return canonical;
             }
         }
         // Not found in QJSXPATH or node mode - return as-is, loader will handle/fail
+        MODULE_DEBUG("result (bare): '%s'", resolved);
         return resolved;
     }
 
-    // Step 3: In bundler mode, probe for existence to find full path with extension
-    if (!is_node_resolution()) {
-        char *probed = probe_module_with_extensions(ctx, resolved, embedded_modules);
-        if (probed) {
+    // Step 4: For filesystem paths, resolve the result via realpath
+    // Skip for embedded modules or if file doesn't exist yet
+    if (!embedded_modules) {
+        // First probe for extensions in bundler mode
+        char *probed = NULL;
+        if (!is_node_resolution()) {
+            probed = probe_module_with_extensions(ctx, resolved, NULL);
+            if (probed) {
+                MODULE_DEBUG("extension probe: '%s' -> '%s'", resolved, probed);
+                js_free(ctx, resolved);
+                resolved = probed;
+            }
+        }
+
+        // Now realpath the result
+        char *real_result = resolve_realpath(ctx, resolved);
+        if (real_result) {
+            MODULE_DEBUG("realpath result: '%s' -> '%s'", resolved, real_result);
             js_free(ctx, resolved);
-            return probed;
+            MODULE_DEBUG("result (filesystem): '%s'", real_result);
+            return real_result;
+        }
+    } else {
+        // For embedded modules, just probe for extensions in bundler mode
+        if (!is_node_resolution()) {
+            char *probed = probe_module_with_extensions(ctx, resolved, embedded_modules);
+            if (probed) {
+                MODULE_DEBUG("extension probe (embedded): '%s' -> '%s'", resolved, probed);
+                js_free(ctx, resolved);
+                MODULE_DEBUG("result (embedded): '%s'", probed);
+                return probed;
+            }
         }
     }
 
-    // Return resolved path (node mode or probe failed - let loader handle it)
+    // Return resolved path (node mode or probe/realpath failed - let loader handle it)
+    MODULE_DEBUG("result: '%s'", resolved);
     return resolved;
 }
 

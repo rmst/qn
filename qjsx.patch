@@ -4,7 +4,7 @@
  
  #include "cutils.h"
  #include "quickjs-libc.h"
-+#include "qjsx-module-resolution.h"
++#include "module_resolution/module-resolution.h"
  
  extern const uint8_t qjsc_repl[];
  extern const uint32_t qjsc_repl_size;
