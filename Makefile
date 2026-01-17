@@ -71,6 +71,7 @@ $(QJSXC_PROG): $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/o
 	cp $(BIN_DIR)/quickjs/*.h $(BIN_DIR)/
 	mkdir -p $(BIN_DIR)/module_resolution
 	cp module_resolution/module-resolution.h $(BIN_DIR)/module_resolution/
+	cp exit-handler.h $(BIN_DIR)/
 	cp $(BIN_DIR)/quickjs/libquickjs.a $(BIN_DIR)/
 	# Replace unpatched quickjs-libc.o with patched version in libquickjs.a
 	# Also add sandboxed-worker.o which is required by the patched quickjs-libc

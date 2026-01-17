@@ -1,10 +1,11 @@
 --- quickjs/qjs.c	2025-10-08 10:58:22.940197863 +0000
-+++ /tmp/qjsx_work.c	2026-01-14 23:49:02.491548000 +0000
-@@ -42,10 +42,39 @@
++++ bin/linux/obj/qjsx.c	2026-01-17 22:06:16.144952052 +0000
+@@ -42,10 +42,40 @@
  
  #include "cutils.h"
  #include "quickjs-libc.h"
 +#include "module_resolution/module-resolution.h"
++#include "exit-handler.h"
  
  extern const uint8_t qjsc_repl[];
  extern const uint32_t qjsc_repl_size;
@@ -40,7 +41,7 @@
  static int eval_buf(JSContext *ctx, const void *buf, int buf_len,
                      const char *filename, int eval_flags)
  {
-@@ -283,11 +312,11 @@
+@@ -283,11 +313,11 @@
      return v;
  }
  
@@ -54,7 +55,7 @@
             "usage: " PROG_NAME " [options] [file [args]]\n"
             "-h  --help         list options\n"
             "-e  --eval EXPR    evaluate EXPR\n"
-@@ -303,7 +332,11 @@
+@@ -303,7 +333,11 @@
             "    --no-unhandled-rejection  ignore unhandled promise rejections\n"
             "-s                    strip all the debug info\n"
             "    --strip-source    strip the source code\n"
@@ -67,7 +68,7 @@
      exit(1);
  }
  
-@@ -465,7 +498,7 @@
+@@ -465,7 +499,7 @@
      }
  
      /* loader for ES6 modules */
@@ -76,3 +77,20 @@
  
      if (dump_unhandled_promise_rejection) {
          JS_SetHostPromiseRejectionTracker(rt, js_std_promise_rejection_tracker,
+@@ -508,6 +542,7 @@
+         }
+         js_std_loop(ctx);
+     }
++    int exit_code = qjsx_call_exit_handler(ctx);
+ 
+     if (dump_memory) {
+         JSMemoryUsage stats;
+@@ -542,7 +577,7 @@
+                best[1] + best[2] + best[3] + best[4],
+                best[1], best[2], best[3], best[4]);
+     }
+-    return 0;
++    return exit_code;
+  fail:
+     js_std_free_handlers(rt);
+     JS_FreeContext(ctx);

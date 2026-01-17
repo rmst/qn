@@ -1,7 +1,8 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync } from 'node:fs'
-import { test, $ } from './util.js'
+import { spawnSync } from 'node:child_process'
+import { test, testQnodeOnly, $ } from './util.js'
 
 describe('node:process shim', () => {
 	test('process.argv structure matches Node.js', ({ bin, dir }) => {
@@ -119,5 +120,41 @@ describe('node:process shim', () => {
 			platformType: 'string',
 			envType: 'object'
 		})
+	})
+
+	test('process.exitCode sets exit code', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import process from 'node:process'
+			process.exitCode = 42
+		`)
+
+		const result = spawnSync(bin, [`${dir}/test.js`], { encoding: 'utf8' })
+		assert.strictEqual(result.status, 42)
+	})
+
+	test('process.on exit handler is called', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import process from 'node:process'
+			process.on('exit', (code) => {
+				console.log('exit handler called with code ' + code)
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.strictEqual(output, 'exit handler called with code 0')
+	})
+
+	test('process.on exit handler receives exitCode', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import process from 'node:process'
+			process.on('exit', (code) => {
+				console.log('exit code: ' + code)
+			})
+			process.exitCode = 7
+		`)
+
+		const result = spawnSync(bin, [`${dir}/test.js`], { encoding: 'utf8' })
+		assert.strictEqual(result.status, 7)
+		assert.strictEqual(result.stdout.trim(), 'exit code: 7')
 	})
 })

@@ -54,6 +54,14 @@ const process = {
   // Command line arguments
   argv: [...scriptArgs],  // TODO: maybe we have to unwrap these
 
+  // Exit code - synced with globalThis.__qjsx_exitCode for C-level exit handler
+  get exitCode() {
+    return globalThis.__qjsx_exitCode || 0;
+  },
+  set exitCode(code) {
+    globalThis.__qjsx_exitCode = code;
+  },
+
   // Environment variables - using Proxy to allow dynamic read/write
   env: new Proxy({}, {
     get: (_, p) => typeof p === 'string' ? std.getenv(p) : undefined,
@@ -66,7 +74,10 @@ const process = {
   }),
 
   // Process control
-  exit: std.exit,
+  exit(code) {
+    (eventHandlers.get('exit') || []).forEach(h => { try { h(code ?? 0); } catch {} });
+    std.exit(code ?? 0);
+  },
 
   // Current working directory
   cwd: () => {
@@ -111,12 +122,22 @@ const process = {
     quickjs: '1.0.0'
   },
 
-  // Event emitter methods for signal handling
+  // Event emitter methods for signal and exit handling
   on(event, handler) {
     if (!eventHandlers.has(event)) {
       eventHandlers.set(event, []);
     }
     eventHandlers.get(event).push(handler);
+
+    // Register exit handler with C runtime
+    if (event === 'exit') {
+      globalThis.__qjsx_exitHandler = (code) => {
+        const handlers = eventHandlers.get('exit');
+        if (handlers) handlers.forEach(h => {
+          try { h(code); } catch (e) { console.error(e); }
+        });
+      };
+    }
 
     // Register signal handler with os.signal if it's a signal event
     const signum = signalMap[event];
@@ -126,7 +147,7 @@ const process = {
         os.signal(signum, () => {
           const handlers = eventHandlers.get(event);
           if (handlers) {
-            handlers.forEach(h => h());
+            handlers.forEach(h => { try { h(); } catch (e) { console.error(e); } });
           }
         });
       }
@@ -157,5 +178,5 @@ const process = {
 export default process;
 
 // Also export individual properties for named imports
-export const { argv, exit, cwd, chdir, pid, platform, version, versions, stdin, stdout, stderr } = process;
+export const { argv, exit, exitCode, cwd, chdir, pid, platform, version, versions, stdin, stdout, stderr } = process;
 export const env = process.env;  // Export env separately to preserve the Proxy

@@ -123,7 +123,9 @@ import process from 'node:process';
 | `version` | ⚠️ | Returns `'v1.0.0-quickjs'` |
 | `stdin` | ⚠️ | Has `isTTY` only |
 | `stdout` / `stderr` | ⚠️ | Has `write` and `isTTY` |
-| `on` | ⚠️ | Signals only |
+| `exitCode` | ✅ | |
+| `on('exit')` | ✅ | No `beforeExit`; microtasks in handler don't run |
+| `on(<signal>)` | ✅ | SIGINT, SIGTERM, etc. |
 
 ### `node:child_process`
 
