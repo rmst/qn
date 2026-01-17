@@ -5,9 +5,9 @@ Standalone QuickJS executable with embedded Node.js-compatible modules.
 ## Building
 
 Built automatically via `make build`. The build:
-- Compiles `qnode/bootstrap.js` with `qjsxc`
-- Embeds all modules from `qnode/node/` directory
-- Uses `QJSXPATH=./qnode` for module resolution
+- Compiles `node/bootstrap.js` with `qjsxc`
+- Embeds all modules from `node/node/` directory
+- Uses `QJSXPATH=./node` for module resolution
 
 Note: `node:*` imports (e.g., `node:fs`, `node:process`) are normalized to `node/*` paths, so QJSXPATH must point to the parent directory containing the `node/` folder.
 

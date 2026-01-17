@@ -295,7 +295,7 @@ static int embedded_module_exists(const char **modules, const char *name) {
  * Resolve a bare module name to its canonical internal path via QJSXPATH.
  *
  * This returns the canonical name with extension (e.g., "node/child_process/index.js")
- * NOT the filesystem path (e.g., "./qnode/node/child_process/index.js").
+ * NOT the filesystem path (e.g., "./node/node/child_process/index.js").
  *
  * For embedded modules, probes the embedded list.
  * For filesystem, probes QJSXPATH directories.

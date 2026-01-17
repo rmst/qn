@@ -71,7 +71,7 @@ import path from 'node:path'
 import process from 'node:process'
 ```
 
-See [node-compatibility.md](../qnode/node-compatibility.md) for details.
+See [node-compatibility.md](../node/node-compatibility.md) for details.
 
 ## Configuration
 

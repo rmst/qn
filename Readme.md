@@ -45,7 +45,7 @@ This works like `NODE_PATH` in Node.js. `QJSXPATH` enables bare module imports (
 ./bin/qn script.js
 ```
 
-`script.js` can use a subset of node:fs, node:child_process, etc (see `qnode/node`)
+`script.js` can use a subset of node:fs, node:child_process, etc (see `node/node`)
 
 
 ### Building Standalone Applications

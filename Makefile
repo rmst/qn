@@ -99,12 +99,12 @@ $(BIN_DIR)/obj/sandboxed-worker.o: sandboxed-worker/sandboxed-worker.c sandboxed
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
 # Build qn (standalone executable with embedded node modules and qx)
-$(QN_PROG): qnode/bootstrap.js qnode/node-globals.js qnode/node/* qnode/node/*/* qnode/repl.js qx/index.js qx/core.js $(QJSXC_PROG) quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./qnode:./qx $(QJSXC_PROG) -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D qx -o $@ qnode/bootstrap.js
+$(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js $(QJSXC_PROG) quickjs-deps | $(BIN_DIR)
+	QJSXPATH=./node:./qx $(QJSXC_PROG) -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D qx -o $@ node/bootstrap.js
 
 # Build qx (zx-compatible shell scripting with $ function)
-$(QX_PROG): qx/bootstrap.js qnode/node-globals.js qx/* qnode/node/* qnode/node/*/* qnode/repl.js $(QJSXC_PROG) quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./qnode:./qx $(QJSXC_PROG) -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D qx/core -o $@ qx/bootstrap.js
+$(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js $(QJSXC_PROG) quickjs-deps | $(BIN_DIR)
+	QJSXPATH=./node:./qx $(QJSXC_PROG) -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D qx/core -o $@ qx/bootstrap.js
 
 # Create convenience symlinks in bin/ directory
 convenience-links: $(QJSX_PROG) $(QN_PROG) $(QX_PROG) $(QJSXC_PROG)
