@@ -65,5 +65,16 @@ globalThis.argv = process.argv.slice(2)
 if (process.argv.length < 2) {
 	await import("repl")
 } else {
-	await process._runScript(process.argv[1])
+	const scriptPath = process.argv[1]
+
+	// Load and execute the user's script
+	try {
+		await import(scriptPath)
+	} catch (e) {
+		process.stderr.write("Error loading script: " + e.message + "\n")
+		if (e.stack) {
+			process.stderr.write(e.stack + "\n")
+		}
+		process.exit(1)
+	}
 }

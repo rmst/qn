@@ -49,21 +49,10 @@ const signalMap = {
   'SIGSEGV': os.SIGSEGV
 };
 
-// Exit code to use when process exits
-let _exitCode = 0;
-
 // Process object that mimics Node.js process module
 const process = {
   // Command line arguments
   argv: [...scriptArgs],  // TODO: maybe we have to unwrap these
-
-  // Exit code property
-  get exitCode() {
-    return _exitCode;
-  },
-  set exitCode(code) {
-    _exitCode = code;
-  },
 
   // Environment variables - using Proxy to allow dynamic read/write
   env: new Proxy({}, {
@@ -77,12 +66,7 @@ const process = {
   }),
 
   // Process control
-  exit(code) {
-    if (code !== undefined) {
-      _exitCode = code;
-    }
-    std.exit(_exitCode);
-  },
+  exit: std.exit,
 
   // Current working directory
   cwd: () => {
@@ -166,47 +150,6 @@ const process = {
       }
     }
     return this;
-  },
-
-  // Internal: get handlers for an event (used by bootstrap)
-  _getHandlers(event) {
-    return eventHandlers.get(event) || [];
-  },
-
-  // Internal: emit exit event (used by bootstrap)
-  _emitExit(code) {
-    const handlers = eventHandlers.get('exit');
-    if (handlers) {
-      handlers.forEach(h => {
-        try {
-          h(code);
-        } catch (e) {
-          // Ignore errors in exit handlers
-        }
-      });
-    }
-  },
-
-  // Internal: run a script with proper exit/exception handling (used by bootstraps)
-  async _runScript(scriptPath) {
-    try {
-      await import(scriptPath);
-    } catch (e) {
-      const handlers = eventHandlers.get('uncaughtException');
-      if (handlers && handlers.length) {
-        handlers.forEach(h => h(e));
-      } else {
-        std.err.puts("Error loading script: " + e.message + "\n");
-        if (e.stack) {
-          std.err.puts(e.stack + "\n");
-        }
-        std.err.flush();
-        _exitCode = 1;
-      }
-    } finally {
-      this._emitExit(_exitCode);
-      std.exit(_exitCode);
-    }
   }
 };
 
@@ -214,5 +157,5 @@ const process = {
 export default process;
 
 // Also export individual properties for named imports
-export const { argv, exit, cwd, chdir, pid, platform, version, versions, stdin, stdout, stderr, on, removeAllListeners, _getHandlers, _emitExit } = process;
+export const { argv, exit, cwd, chdir, pid, platform, version, versions, stdin, stdout, stderr } = process;
 export const env = process.env;  // Export env separately to preserve the Proxy

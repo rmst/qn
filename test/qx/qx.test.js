@@ -18,7 +18,7 @@ describe('qx $ function', () => {
 		const dir = mktempdir()
 		try {
 			const output = runQx(`
-				const result = await $\`echo "Hello World"\`
+				const result = await $\`echo "Hello World"\`.quiet()
 				console.log(JSON.stringify({ stdout: result.stdout, exitCode: result.exitCode }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { stdout: 'Hello World\n', exitCode: 0 })
@@ -31,7 +31,7 @@ describe('qx $ function', () => {
 		const dir = mktempdir()
 		try {
 			const output = runQx(`
-				const text = await $\`echo "Hello"\`.text()
+				const text = await $\`echo "Hello"\`.quiet().text()
 				console.log(JSON.stringify({ text }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { text: 'Hello' })
@@ -44,7 +44,7 @@ describe('qx $ function', () => {
 		const dir = mktempdir()
 		try {
 			const output = runQx(`
-				const lines = await $\`echo "line1\\nline2\\nline3"\`.lines()
+				const lines = await $\`echo "line1\\nline2\\nline3"\`.quiet().lines()
 				console.log(JSON.stringify({ lines }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { lines: ['line1', 'line2', 'line3'] })
@@ -57,7 +57,7 @@ describe('qx $ function', () => {
 		const dir = mktempdir()
 		try {
 			const output = runQx(`
-				const data = await $\`echo '{"name":"test","value":42}'\`.json()
+				const data = await $\`echo '{"name":"test","value":42}'\`.quiet().json()
 				console.log(JSON.stringify(data))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { name: 'test', value: 42 })
@@ -70,7 +70,7 @@ describe('qx $ function', () => {
 		const dir = mktempdir()
 		try {
 			const output = runQx(`
-				const result = await $\`sh -c 'exit 1'\`.nothrow()
+				const result = await $\`sh -c 'exit 1'\`.quiet().nothrow()
 				console.log(JSON.stringify({ exitCode: result.exitCode }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { exitCode: 1 })
@@ -83,7 +83,7 @@ describe('qx $ function', () => {
 		const dir = mktempdir()
 		try {
 			const output = runQx(`
-				const result = await $\`echo "hello world" | tr ' ' '_'\`
+				const result = await $\`echo "hello world" | tr ' ' '_'\`.quiet()
 				console.log(JSON.stringify({ stdout: result.stdout.trim() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { stdout: 'hello_world' })
@@ -97,7 +97,7 @@ describe('qx $ function', () => {
 		try {
 			const output = runQx(`
 				const name = "qx"
-				const result = await $\`echo "Hello \${name}"\`
+				const result = await $\`echo "Hello \${name}"\`.quiet()
 				console.log(JSON.stringify({ stdout: result.stdout.trim() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { stdout: 'Hello qx' })
@@ -110,7 +110,7 @@ describe('qx $ function', () => {
 		const dir = mktempdir()
 		try {
 			const output = runQx(`
-				const result = await $\`echo "hello"\`.pipe($\`cat\`)
+				const result = await $\`echo "hello"\`.quiet().pipe($\`cat\`.quiet())
 				console.log(JSON.stringify({ stdout: result.stdout.trim() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { stdout: 'hello' })
@@ -124,7 +124,7 @@ describe('qx $ function', () => {
 		try {
 			const output = runQx(`
 				import { readFileSync } from 'node:fs'
-				await $\`echo file_content\`.pipe('${dir}/output.txt')
+				await $\`echo file_content\`.quiet().pipe('${dir}/output.txt')
 				const content = readFileSync('${dir}/output.txt', 'utf8')
 				console.log(JSON.stringify({ content: content.trim() }))
 			`, dir)
@@ -206,7 +206,7 @@ describe('qx ProcessOutput', () => {
 		const dir = mktempdir()
 		try {
 			const output = runQx(`
-				const result = await $\`echo "test"\`
+				const result = await $\`echo "test"\`.quiet()
 				console.log(JSON.stringify({ str: result.toString() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { str: 'test' })
@@ -219,7 +219,7 @@ describe('qx ProcessOutput', () => {
 		const dir = mktempdir()
 		try {
 			const output = runQx(`
-				const result = await $\`/bin/sh -c "echo error >&2"\`.nothrow()
+				const result = await $\`/bin/sh -c "echo error >&2"\`.quiet().nothrow()
 				console.log(JSON.stringify({ stderr: result.stderr.trim() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { stderr: 'error' })
@@ -235,7 +235,7 @@ describe('qx shell escaping', () => {
 		try {
 			const output = runQx(`
 				const path = "hello world"
-				const result = await $\`echo \${path}\`
+				const result = await $\`echo \${path}\`.quiet()
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { out: 'hello world' })
@@ -249,7 +249,7 @@ describe('qx shell escaping', () => {
 		try {
 			const output = runQx(`
 				const val = 'say "hello"'
-				const result = await $\`echo \${val}\`
+				const result = await $\`echo \${val}\`.quiet()
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { out: 'say "hello"' })
@@ -263,7 +263,7 @@ describe('qx shell escaping', () => {
 		try {
 			const output = runQx(`
 				const val = "price is $100"
-				const result = await $\`echo \${val}\`
+				const result = await $\`echo \${val}\`.quiet()
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { out: 'price is $100' })
@@ -277,7 +277,7 @@ describe('qx shell escaping', () => {
 		try {
 			const output = runQx(`
 				const val = "test\`cmd\`test"
-				const result = await $\`echo \${val}\`
+				const result = await $\`echo \${val}\`.quiet()
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { out: 'test`cmd`test' })
@@ -291,7 +291,7 @@ describe('qx shell escaping', () => {
 		try {
 			const output = runQx(`
 				const val = "it's working"
-				const result = await $\`echo \${val}\`
+				const result = await $\`echo \${val}\`.quiet()
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { out: "it's working" })
@@ -307,7 +307,7 @@ describe('qx shell escaping', () => {
 				import { writeFileSync } from 'node:fs'
 				writeFileSync('${dir}/my file.txt', 'content here')
 				const path = '${dir}/my file.txt'
-				const result = await $\`cat \${path}\`
+				const result = await $\`cat \${path}\`.quiet()
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { out: 'content here' })
@@ -321,7 +321,7 @@ describe('qx shell escaping', () => {
 		try {
 			const output = runQx(`
 				const val = "*.txt"
-				const result = await $\`echo \${val}\`
+				const result = await $\`echo \${val}\`.quiet()
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { out: '*.txt' })
@@ -335,7 +335,7 @@ describe('qx shell escaping', () => {
 		try {
 			const output = runQx(`
 				const args = ['one', 'two', 'three']
-				const result = await $\`echo \${args}\`
+				const result = await $\`echo \${args}\`.quiet()
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { out: 'one two three' })
@@ -351,7 +351,7 @@ describe('qx as library in qnode', () => {
 		try {
 			writeFileSync(`${dir}/test.js`, `
 				import { $ } from 'qx'
-				const result = await $\`echo "library test"\`
+				const result = await $\`echo "library test"\`.quiet()
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`)
 			const output = execSync(`${QNODE()} ${dir}/test.js`, { encoding: 'utf8' }).trim()
@@ -366,7 +366,7 @@ describe('qx as library in qnode', () => {
 		try {
 			writeFileSync(`${dir}/test.js`, `
 				import $ from 'qx'
-				const result = await $\`echo "default export"\`
+				const result = await $\`echo "default export"\`.quiet()
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`)
 			const output = execSync(`${QNODE()} ${dir}/test.js`, { encoding: 'utf8' }).trim()
