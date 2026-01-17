@@ -99,6 +99,34 @@ export function readBytesFromFd(fd) {
 }
 
 /**
+ * Write input data to a file descriptor.
+ * Supports string, Buffer, TypedArray, or ArrayBuffer.
+ * @param {number} fd - The file descriptor to write to.
+ * @param {string|Buffer|Uint8Array|ArrayBuffer} input - The data to write.
+ */
+export function writeInputToFd(fd, input) {
+	const file = std.fdopen(fd, 'w')
+	if (file === null) {
+		throw new Error(`Failed to open file descriptor for writing: ${fd}`)
+	}
+
+	if (typeof input === 'string') {
+		file.puts(input)
+	} else if (Buffer.isBuffer(input) || input instanceof Uint8Array) {
+		file.write(input.buffer, input.byteOffset, input.byteLength)
+	} else if (input instanceof ArrayBuffer) {
+		file.write(input, 0, input.byteLength)
+	} else if (ArrayBuffer.isView(input)) {
+		file.write(input.buffer, input.byteOffset, input.byteLength)
+	} else {
+		file.close()
+		throw new TypeError('input must be a string, Buffer, TypedArray, or ArrayBuffer')
+	}
+
+	file.close()
+}
+
+/**
  * Prefix each line of a string.
  * @param {string} prefix
  * @param {string} str

@@ -102,6 +102,8 @@ import { readFileSync, writeFileSync, existsSync, ... } from 'node:fs';
 | `renameSync` | ✅ | |
 | `realpathSync` | ✅ | |
 | `rmSync` | ✅ | Supports `recursive` and `force` |
+| `openSync` | ✅ | Returns file descriptor; supports `'r'` and `'w'` flags |
+| `closeSync` | ✅ | Closes file descriptor |
 | `linkSync` | ❌ | Throws |
 
 ### `node:process`
@@ -134,8 +136,8 @@ import { spawn, exec, execFile, execSync, execFileSync } from 'node:child_proces
 | `spawn` | ✅ | Supports `cwd`, `env`, `stdio`, `shell` |
 | `exec` | ✅ | Async with callback, runs via shell |
 | `execFile` | ✅ | Async with callback and events; supports `timeout`, `killSignal` |
-| `execSync` | ✅ | Supports `cwd`, `env`, `input`, `shell` |
-| `execFileSync` | ✅ | Supports `cwd`, `env`, `input`, `timeout`, `killSignal`, `stdio` |
+| `execSync` | ✅ | Supports `cwd`, `env`, `input` (string/Buffer), `shell` |
+| `execFileSync` | ✅ | Supports `cwd`, `env`, `input` (string/Buffer), `timeout`, `killSignal`, `stdio` (including numeric fds) |
 | `ChildProcess` | ✅ | EventEmitter with streaming stdio |
 | `spawnSync` | ❌ | |
 | `fork` | ❌ | |

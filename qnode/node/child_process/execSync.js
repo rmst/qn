@@ -1,6 +1,6 @@
 import * as std from 'std'
 import * as os from 'os'
-import { readFromFd, indent, checkUnsupportedOptions, checkEncodingOption } from './utils.js'
+import { readFromFd, indent, checkUnsupportedOptions, checkEncodingOption, writeInputToFd } from './utils.js'
 
 const UNSUPPORTED_OPTIONS = [
 	'timeout',
@@ -76,9 +76,7 @@ export function execSync(command, options = {}) {
 
 	// Write input to the process if provided
 	if (options.input) {
-		const inputFile = std.fdopen(stdinWrite, 'w')
-		inputFile.puts(options.input)
-		inputFile.close()
+		writeInputToFd(stdinWrite, options.input)
 	}
 
 	const exitCode = os.exec([shell, '-c', command], execOptions)

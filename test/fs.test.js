@@ -409,4 +409,19 @@ describe('node:fs shim', () => {
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { length: 256, match: true })
 	})
+
+	testQnodeOnly('openSync and closeSync', ({ bin, dir }) => {
+		writeFileSync(`${dir}/input.txt`, 'file descriptor test')
+		writeFileSync(`${dir}/test.js`, `
+			import { openSync, closeSync } from 'node:fs'
+			const fd = openSync('${dir}/input.txt', 'r')
+			const fdIsNumber = typeof fd === 'number'
+			const fdPositive = fd >= 0
+			closeSync(fd)
+			console.log(JSON.stringify({ fdIsNumber, fdPositive }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { fdIsNumber: true, fdPositive: true })
+	})
 })

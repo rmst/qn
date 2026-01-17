@@ -1,7 +1,7 @@
 import * as std from 'std'
 import * as os from 'os'
 import { Buffer } from 'node:buffer'
-import { readFromFd, readBytesFromFd, indent, checkUnsupportedOptions, NodeCompatibilityError } from './utils.js'
+import { readFromFd, readBytesFromFd, indent, checkUnsupportedOptions, NodeCompatibilityError, writeInputToFd } from './utils.js'
 
 const UNSUPPORTED_OPTIONS = [
 	'uid',
@@ -99,6 +99,8 @@ export function execFileSync(file, args = [], options = {}) {
 		execOptions.stdin = stdinRead
 	} else if (stdio[0] === 'ignore') {
 		execOptions.stdin = os.open('/dev/null', os.O_RDONLY)
+	} else if (typeof stdio[0] === 'number') {
+		execOptions.stdin = stdio[0]
 	}
 	// 'inherit' means don't set - use parent's
 
@@ -106,12 +108,16 @@ export function execFileSync(file, args = [], options = {}) {
 		execOptions.stdout = stdoutWrite
 	} else if (stdio[1] === 'ignore') {
 		execOptions.stdout = os.open('/dev/null', os.O_WRONLY)
+	} else if (typeof stdio[1] === 'number') {
+		execOptions.stdout = stdio[1]
 	}
 
 	if (stdio[2] === 'pipe') {
 		execOptions.stderr = stderrWrite
 	} else if (stdio[2] === 'ignore') {
 		execOptions.stderr = os.open('/dev/null', os.O_WRONLY)
+	} else if (typeof stdio[2] === 'number') {
+		execOptions.stderr = stdio[2]
 	}
 
 	// Spawn the process
@@ -136,9 +142,7 @@ export function execFileSync(file, args = [], options = {}) {
 	// Write input to the process if provided, then close stdin
 	if (stdio[0] === 'pipe') {
 		if (options.input !== undefined) {
-			const inputFile = std.fdopen(stdinWrite, 'w')
-			inputFile.puts(options.input)
-			inputFile.close()
+			writeInputToFd(stdinWrite, options.input)
 		} else {
 			os.close(stdinWrite)
 		}

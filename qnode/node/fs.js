@@ -163,6 +163,22 @@ export function existsSync(path) {
 	return err === 0;
 }
 
+export function openSync(path, flags) {
+	const osFlags = flags === 'r' ? os.O_RDONLY : os.O_WRONLY | os.O_CREAT | os.O_TRUNC;
+	const fd = os.open(path, osFlags);
+	if (fd < 0) {
+		throw new Error(`Failed to open file: ${path}`);
+	}
+	return fd;
+}
+
+export function closeSync(fd) {
+	const result = os.close(fd);
+	if (result < 0) {
+		throw new Error(`Failed to close file descriptor: ${fd}`);
+	}
+}
+
 export function unlinkSync(path) {
 	const result = os.remove(path);
 	if (result !== 0) {

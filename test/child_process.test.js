@@ -37,6 +37,34 @@ describe('node:child_process shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { output: 'piped input' })
 	})
 
+	test('execFileSync with Buffer input', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFileSync } from 'node:child_process'
+			import { Buffer } from 'node:buffer'
+			const buf = Buffer.from('buffer input')
+			const output = execFileSync('cat', [], { input: buf, encoding: 'utf8' })
+			console.log(JSON.stringify({ output: output.trim() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { output: 'buffer input' })
+	})
+
+	test('execFileSync with binary input', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFileSync } from 'node:child_process'
+			// Binary data with null bytes and non-ASCII values
+			const input = new Uint8Array([0x00, 0x01, 0x02, 0xff, 0xfe, 0x00, 0x80])
+			const output = execFileSync('cat', [], { input })
+			// Verify we get the exact same bytes back
+			const match = output.length === input.length && input.every((b, i) => output[i] === b)
+			console.log(JSON.stringify({ match, inLen: input.length, outLen: output.length }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { match: true, inLen: 7, outLen: 7 })
+	})
+
 	test('execFileSync with special characters in args', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFileSync } from 'node:child_process'
@@ -826,5 +854,20 @@ describe('node:child_process shim', () => {
 		const result = JSON.parse(output)
 		assert.strictEqual(result.hasError, true)
 		assert.strictEqual(result.elapsedOk, true)
+	})
+
+	testQnodeOnly('execFileSync with numeric fd for stdin', ({ bin, dir }) => {
+		writeFileSync(`${dir}/input.txt`, 'content from file')
+		writeFileSync(`${dir}/test.js`, `
+			import { execFileSync } from 'node:child_process'
+			import { openSync, closeSync } from 'node:fs'
+			const fd = openSync('${dir}/input.txt', 'r')
+			const output = execFileSync('cat', [], { stdio: [fd, 'pipe', 'pipe'], encoding: 'utf8' })
+			closeSync(fd)
+			console.log(JSON.stringify({ output }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { output: 'content from file' })
 	})
 })
