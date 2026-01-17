@@ -1,7 +1,7 @@
 import { describe, test as nodetest } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync, rmSync } from 'node:fs'
-import { test, $, mktempdir, QNODE } from './util.js'
+import { test, $, mktempdir, QN } from './util.js'
 
 describe('timer globals', () => {
 	test('setTimeout works', ({ bin, dir }) => {
@@ -24,8 +24,8 @@ describe('timer globals', () => {
 		assert.strictEqual(output, 'done')
 	})
 
-	// qnode specific tests (behavior differs from Node.js)
-	nodetest('setTimeout with extra args throws NodeCompatibilityError [qnode]', () => {
+	// qn specific tests (behavior differs from Node.js)
+	nodetest('setTimeout with extra args throws NodeCompatibilityError [qn]', () => {
 		const dir = mktempdir()
 		try {
 			writeFileSync(`${dir}/test.js`, `
@@ -36,14 +36,14 @@ describe('timer globals', () => {
 					console.log(e.name)
 				}
 			`)
-			const output = $`${QNODE()} ${dir}/test.js`
+			const output = $`${QN()} ${dir}/test.js`
 			assert.strictEqual(output, 'NodeCompatibilityError')
 		} finally {
 			rmSync(dir, { recursive: true })
 		}
 	})
 
-	nodetest('setInterval throws NodeCompatibilityError [qnode]', () => {
+	nodetest('setInterval throws NodeCompatibilityError [qn]', () => {
 		const dir = mktempdir()
 		try {
 			writeFileSync(`${dir}/test.js`, `
@@ -54,14 +54,14 @@ describe('timer globals', () => {
 					console.log(e.name)
 				}
 			`)
-			const output = $`${QNODE()} ${dir}/test.js`
+			const output = $`${QN()} ${dir}/test.js`
 			assert.strictEqual(output, 'NodeCompatibilityError')
 		} finally {
 			rmSync(dir, { recursive: true })
 		}
 	})
 
-	nodetest('clearInterval throws NodeCompatibilityError [qnode]', () => {
+	nodetest('clearInterval throws NodeCompatibilityError [qn]', () => {
 		const dir = mktempdir()
 		try {
 			writeFileSync(`${dir}/test.js`, `
@@ -72,7 +72,7 @@ describe('timer globals', () => {
 					console.log(e.name)
 				}
 			`)
-			const output = $`${QNODE()} ${dir}/test.js`
+			const output = $`${QN()} ${dir}/test.js`
 			assert.strictEqual(output, 'NodeCompatibilityError')
 		} finally {
 			rmSync(dir, { recursive: true })

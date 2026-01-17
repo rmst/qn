@@ -2,7 +2,7 @@ import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { test, testQnodeOnly, $ } from './util.js'
+import { test, testQnOnly, $ } from './util.js'
 
 describe('node:process shim', () => {
 	test('process.argv structure matches Node.js', ({ bin, dir }) => {

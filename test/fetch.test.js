@@ -2,7 +2,7 @@ import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
-import { test, testQnodeOnly, $, execAsync } from './util.js'
+import { test, testQnOnly, $, execAsync } from './util.js'
 
 // TODO: Add HTTPS tests (requires creating self-signed certs or using curl --insecure)
 

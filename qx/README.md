@@ -11,7 +11,7 @@ Commands run via `/bin/sh` (POSIX shell). Interpolated values are safely escaped
 ./bin/qx script.js
 ```
 
-**As a library in qnode:**
+**As a library in qn:**
 ```javascript
 import { $, ProcessPromise, ProcessOutput } from 'qx'
 // or
@@ -63,7 +63,7 @@ await within(async () => {
 
 ## Node.js Modules
 
-All qnode shims are available:
+All qn shims are available:
 
 ```javascript
 import { readFileSync } from 'node:fs'

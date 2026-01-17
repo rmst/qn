@@ -1,7 +1,7 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync, mkdirSync } from 'node:fs'
-import { test, testQnodeOnly, $ } from './util.js'
+import { test, testQnOnly, $ } from './util.js'
 
 describe('node:child_process shim', () => {
 	test('execFileSync returns stdout', ({ bin, dir }) => {
@@ -248,7 +248,7 @@ describe('node:child_process shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { stderr: 'error' })
 	})
 
-	// Note: execFile with input option is a qnode extension, not supported in Node.js
+	// Note: execFile with input option is a qn extension, not supported in Node.js
 	// Use stdin.write() instead for cross-platform compatibility (see streaming tests below)
 
 	test('execFile callback receives error on non-zero exit', ({ bin, dir }) => {
@@ -644,9 +644,9 @@ describe('node:child_process shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { stdout: 'hello from spawn' })
 	})
 
-	// Raw bytes vs UTF-8 encoding tests (qnode-specific behavior)
-	// Note: Node.js returns strings by default, qnode returns Uint8Array by default
-	testQnodeOnly('execFileSync returns Uint8Array by default', ({ bin, dir }) => {
+	// Raw bytes vs UTF-8 encoding tests (qn-specific behavior)
+	// Note: Node.js returns strings by default, qn returns Uint8Array by default
+	testQnOnly('execFileSync returns Uint8Array by default', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFileSync } from 'node:child_process'
 			const output = execFileSync('echo', ['hello'])
@@ -662,7 +662,7 @@ describe('node:child_process shim', () => {
 		assert.strictEqual(result.firstByte, 104) // 'h' = 104
 	})
 
-	testQnodeOnly('execFileSync returns string with encoding utf8', ({ bin, dir }) => {
+	testQnOnly('execFileSync returns string with encoding utf8', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFileSync } from 'node:child_process'
 			const output = execFileSync('echo', ['hello'], { encoding: 'utf8' })
@@ -674,7 +674,7 @@ describe('node:child_process shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { isString: true, output: 'hello' })
 	})
 
-	testQnodeOnly('execFile callback receives Uint8Array by default', ({ bin, dir }) => {
+	testQnOnly('execFile callback receives Uint8Array by default', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFile } from 'node:child_process'
 			execFile('echo', ['hello'], (error, stdout, stderr) => {
@@ -692,7 +692,7 @@ describe('node:child_process shim', () => {
 		assert.strictEqual(result.firstByte, 104) // 'h' = 104
 	})
 
-	testQnodeOnly('execFile callback receives string with encoding utf8', ({ bin, dir }) => {
+	testQnOnly('execFile callback receives string with encoding utf8', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFile } from 'node:child_process'
 			execFile('echo', ['hello'], { encoding: 'utf8' }, (error, stdout, stderr) => {
@@ -706,7 +706,7 @@ describe('node:child_process shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { stdoutIsString: true, stderrIsString: true, output: 'hello' })
 	})
 
-	testQnodeOnly('stream emits Uint8Array by default', ({ bin, dir }) => {
+	testQnOnly('stream emits Uint8Array by default', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { spawn } from 'node:child_process'
 			const child = spawn('echo', ['test'])
@@ -729,7 +729,7 @@ describe('node:child_process shim', () => {
 		assert.strictEqual(result.firstByte, 116) // 't' = 116
 	})
 
-	testQnodeOnly('stream emits string after setEncoding', ({ bin, dir }) => {
+	testQnOnly('stream emits string after setEncoding', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { spawn } from 'node:child_process'
 			const child = spawn('echo', ['test'])
@@ -751,7 +751,7 @@ describe('node:child_process shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { chunkType: 'string', content: 'test' })
 	})
 
-	testQnodeOnly('stdin accepts both string and Uint8Array', ({ bin, dir }) => {
+	testQnOnly('stdin accepts both string and Uint8Array', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { spawn } from 'node:child_process'
 			const child = spawn('cat')
@@ -778,7 +778,7 @@ describe('node:child_process shim', () => {
 			// When stdio is 'inherit', output goes directly to parent
 			// The return value should be null or empty
 			const result = execFileSync('echo', ['inherited output'], { stdio: 'inherit', encoding: 'utf8' })
-			// Result should be null (Node) or empty string (qnode) since stdout was inherited
+			// Result should be null (Node) or empty string (qn) since stdout was inherited
 			console.log(JSON.stringify({ resultEmpty: result === null || result === '' }))
 		`)
 
@@ -796,7 +796,7 @@ describe('node:child_process shim', () => {
 				stdio: ['pipe', 'inherit', 'inherit'],
 				encoding: 'utf8'
 			})
-			// Result should be null (Node) or empty string (qnode) since stdout was inherited
+			// Result should be null (Node) or empty string (qn) since stdout was inherited
 			console.log(JSON.stringify({ resultEmpty: result === null || result === '' }))
 		`)
 
@@ -829,7 +829,7 @@ describe('node:child_process shim', () => {
 
 		const output = $`${bin} ${dir}/test.js`
 		const result = JSON.parse(output)
-		// Node.js uses signal name 'SIGTERM', qnode uses signal number 15
+		// Node.js uses signal name 'SIGTERM', qn uses signal number 15
 		assert.ok(result.signal === 15 || result.signal === 'SIGTERM')
 		assert.strictEqual(result.elapsedOk, true)
 	})
@@ -856,7 +856,7 @@ describe('node:child_process shim', () => {
 		assert.strictEqual(result.elapsedOk, true)
 	})
 
-	testQnodeOnly('execFileSync with numeric fd for stdin', ({ bin, dir }) => {
+	testQnOnly('execFileSync with numeric fd for stdin', ({ bin, dir }) => {
 		writeFileSync(`${dir}/input.txt`, 'content from file')
 		writeFileSync(`${dir}/test.js`, `
 			import { execFileSync } from 'node:child_process'

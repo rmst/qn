@@ -1,5 +1,5 @@
 /**
- * Shared Node.js-compatible globals for qnode and qx
+ * Shared Node.js-compatible globals for qn and qx
  *
  * This module sets up global APIs that are standard in both browsers and Node.js.
  * Import this module early in bootstrap to make these globals available.

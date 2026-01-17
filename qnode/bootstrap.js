@@ -1,4 +1,4 @@
-#!/usr/bin/env qnode
+#!/usr/bin/env qn
 /**
  * QJSX-Node Bootstrap
  *

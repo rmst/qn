@@ -4,7 +4,7 @@ import { writeFileSync, mkdirSync, readFileSync, rmSync, mkdtempSync, realpathSy
 import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { QX, QNODE } from '../util.js'
+import { QX, QN } from '../util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), '/')))
 
@@ -345,7 +345,7 @@ describe('qx shell escaping', () => {
 	})
 })
 
-describe('qx as library in qnode', () => {
+describe('qx as library in qn', () => {
 	test('import { $ } from qx works', () => {
 		const dir = mktempdir()
 		try {
@@ -354,7 +354,7 @@ describe('qx as library in qnode', () => {
 				const result = await $\`echo "library test"\`.quiet()
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`)
-			const output = execSync(`${QNODE()} ${dir}/test.js`, { encoding: 'utf8' }).trim()
+			const output = execSync(`${QN()} ${dir}/test.js`, { encoding: 'utf8' }).trim()
 			assert.deepStrictEqual(JSON.parse(output), { out: 'library test' })
 		} finally {
 			rmSync(dir, { recursive: true })
@@ -369,7 +369,7 @@ describe('qx as library in qnode', () => {
 				const result = await $\`echo "default export"\`.quiet()
 				console.log(JSON.stringify({ out: result.stdout.trim() }))
 			`)
-			const output = execSync(`${QNODE()} ${dir}/test.js`, { encoding: 'utf8' }).trim()
+			const output = execSync(`${QN()} ${dir}/test.js`, { encoding: 'utf8' }).trim()
 			assert.deepStrictEqual(JSON.parse(output), { out: 'default export' })
 		} finally {
 			rmSync(dir, { recursive: true })

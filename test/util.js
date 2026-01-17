@@ -10,7 +10,7 @@ const ROOT = resolve(dirname(import.meta.filename), '..')
 const BIN = join(ROOT, 'bin', platform())
 
 export const QJSX = () => join(BIN, 'qjsx')
-export const QNODE = () => join(BIN, 'qnode')
+export const QN = () => join(BIN, 'qn')
 export const QJSXC = () => join(BIN, 'qjsxc')
 export const QX = () => join(BIN, 'qx')
 
@@ -77,14 +77,14 @@ export const execAsync = (cmd, args, opts = {}) => {
 }
 
 /**
- * Run a test twice: once with Node.js, once with qnode.
+ * Run a test twice: once with Node.js, once with qn.
  * Both runs must produce identical output.
  * @param {string} name - Test name
  * @param {(ctx: { bin: string, dir: string }) => void} fn - Test function receiving { bin, dir }
  */
 export const test = (name, fn) => {
-	for (const bin of ['node', QNODE()]) {
-		const label = bin === 'node' ? 'node' : 'qnode'
+	for (const bin of ['node', QN()]) {
+		const label = bin === 'node' ? 'node' : 'qn'
 		const testFn = async () => {
 			const dir = mktempdir()
 			try {
@@ -106,16 +106,16 @@ export const test = (name, fn) => {
 }
 
 /**
- * Run a test only with qnode (not Node.js).
- * Use this for testing qnode-specific behavior that differs from Node.js.
+ * Run a test only with qn (not Node.js).
+ * Use this for testing qn-specific behavior that differs from Node.js.
  * @param {string} name - Test name
  * @param {(ctx: { bin: string, dir: string }) => void} fn - Test function receiving { bin, dir }
  */
-export const testQnodeOnly = (name, fn) => {
+export const testQnOnly = (name, fn) => {
 	const testFn = async () => {
 		const dir = mktempdir()
 		try {
-			return await fn({ bin: QNODE(), dir })
+			return await fn({ bin: QN(), dir })
 		} catch (err) {
 			if (err.stack) {
 				const cwd = process.cwd()
@@ -126,5 +126,5 @@ export const testQnodeOnly = (name, fn) => {
 			rmSync(dir, { recursive: true })
 		}
 	}
-	nodetest(`${name} [qnode]`, testFn)
+	nodetest(`${name} [qn]`, testFn)
 }

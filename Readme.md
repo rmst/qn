@@ -8,7 +8,7 @@ QuickJS-x is [QuickJS](https://bellard.org/quickjs) with a few additional featur
 
 2. `import.meta.dirname` and `import.meta.filename`
 
-3. `qnode` binary with Node.js standard library shims (`node:fs`, `node:child_process`, etc.)
+3. `qn` binary with Node.js standard library shims (`node:fs`, `node:child_process`, etc.)
 
 4. `os.SandboxedWorker` for running JS in a restricted environment (see [test](test/sandbox.test.js))
 
@@ -21,7 +21,7 @@ Building QuickJS-x, like QuickJS, should take less than a minute.
 ```bash
 git clone --recurse-submodules https://github.com/rmst/quickjs-x.git
 cd quickjs-x
-make build  # Builds ./bin/qjsx, ./bin/qnode, and ./bin/qjsxc
+make build  # Builds ./bin/qjsx, ./bin/qn, and ./bin/qjsxc
 ```
 
 
@@ -42,7 +42,7 @@ This works like `NODE_PATH` in Node.js. `QJSXPATH` enables bare module imports (
 
 **With Node.js compatibility modules**
 ```bash
-./bin/qnode script.js
+./bin/qn script.js
 ```
 
 `script.js` can use a subset of node:fs, node:child_process, etc (see `qnode/node`)
@@ -72,7 +72,7 @@ QJSXPATH=./libs ./bin/qjsxc -D utils -D config -o runtime bootstrap.js
 ./runtime external-script.js      # Can use import { ... } from "utils"
 ```
 
-This is how `qnode` is built - it compiles a minimal bootstrap with all node modules embedded using `-D` flags, creating a single native executable that can run any script with Node.js compatibility.
+This is how `qn` is built - it compiles a minimal bootstrap with all node modules embedded using `-D` flags, creating a single native executable that can run any script with Node.js compatibility.
 
 ### Architecture
 The following files are used to compile the `qjsx` binary:

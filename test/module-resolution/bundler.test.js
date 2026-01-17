@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync, realpathSync } from 'node:fs'
-import { QJSX, QJSXC, QNODE } from '../util.js'
+import { QJSX, QJSXC, QN } from '../util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), 'module-res-test-')))
 
@@ -108,13 +108,13 @@ describe('Bundler Mode (default)', () => {
 		assert.strictEqual(output, 'from namespace')
 	})
 
-	test('qnode imports with node:* protocol', ({ dir }) => {
+	test('qn imports with node:* protocol', ({ dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { existsSync } from 'node:fs';
 			import { cwd } from 'node:process';
 			console.log(typeof existsSync, typeof cwd);
 		`)
-		const output = $`${QNODE()} ${dir}/test.js`
+		const output = $`${QN()} ${dir}/test.js`
 		assert.strictEqual(output, 'function function')
 	})
 

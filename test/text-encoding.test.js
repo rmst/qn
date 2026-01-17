@@ -1,7 +1,7 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync } from 'node:fs'
-import { test, testQnodeOnly, $ } from './util.js'
+import { test, testQnOnly, $ } from './util.js'
 
 describe('TextEncoder', () => {
 	test('encode ASCII string', ({ bin, dir }) => {

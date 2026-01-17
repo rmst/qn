@@ -1,7 +1,7 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync, mkdirSync } from 'node:fs'
-import { test, testQnodeOnly, $ } from './util.js'
+import { test, testQnOnly, $ } from './util.js'
 
 describe('node:fs shim', () => {
 	test('writeFileSync and readFileSync', ({ bin, dir }) => {
@@ -361,7 +361,7 @@ describe('node:fs shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { target: `${dir}/target.txt` })
 	})
 
-	testQnodeOnly('readFileSync without encoding returns Buffer', ({ bin, dir }) => {
+	testQnOnly('readFileSync without encoding returns Buffer', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { writeFileSync, readFileSync } from 'node:fs'
 			writeFileSync('${dir}/binary.bin', new Uint8Array([0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd]))
@@ -381,7 +381,7 @@ describe('node:fs shim', () => {
 		})
 	})
 
-	testQnodeOnly('writeFileSync accepts ArrayBuffer', ({ bin, dir }) => {
+	testQnOnly('writeFileSync accepts ArrayBuffer', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { writeFileSync, readFileSync } from 'node:fs'
 			const buffer = new ArrayBuffer(4)
@@ -395,7 +395,7 @@ describe('node:fs shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { bytes: [0x10, 0x20, 0x30, 0x40] })
 	})
 
-	testQnodeOnly('binary roundtrip preserves data', ({ bin, dir }) => {
+	testQnOnly('binary roundtrip preserves data', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { writeFileSync, readFileSync } from 'node:fs'
 			const original = new Uint8Array(256)
@@ -410,7 +410,7 @@ describe('node:fs shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { length: 256, match: true })
 	})
 
-	testQnodeOnly('openSync and closeSync', ({ bin, dir }) => {
+	testQnOnly('openSync and closeSync', ({ bin, dir }) => {
 		writeFileSync(`${dir}/input.txt`, 'file descriptor test')
 		writeFileSync(`${dir}/test.js`, `
 			import { openSync, closeSync } from 'node:fs'

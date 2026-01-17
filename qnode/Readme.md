@@ -1,4 +1,4 @@
-# qnode
+# qn
 
 Standalone QuickJS executable with embedded Node.js-compatible modules.
 
@@ -14,7 +14,7 @@ Note: `node:*` imports (e.g., `node:fs`, `node:process`) are normalized to `node
 ## Usage
 
 ```bash
-./bin/qnode script.js
+./bin/qn script.js
 ```
 
 The executable includes built-in support for:

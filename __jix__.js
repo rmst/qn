@@ -21,7 +21,7 @@ const binDir = () => {
 		make build
 		mkdir -p "$out"
 		cp ./bin/${platform}/qjsx "$out/"
-		cp ./bin/${platform}/qnode "$out/"
+		cp ./bin/${platform}/qn "$out/"
 		cp ./bin/${platform}/qjsxc "$out/"
 		cp ./bin/${platform}/qx "$out/"
 	`
@@ -30,7 +30,7 @@ const binDir = () => {
 
 const bin = {
 	qjsx: () => `${binDir}/qjsx`,
-	qnode: () => `${binDir}/qnode`,
+	qn: () => `${binDir}/qn`,
 	qjsxc: () => `${binDir}/qjsxc`,
 	qx: () => `${binDir}/qx`,
 }

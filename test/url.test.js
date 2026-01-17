@@ -1,7 +1,7 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync } from 'node:fs'
-import { test, testQnodeOnly, $ } from './util.js'
+import { test, testQnOnly, $ } from './util.js'
 
 describe('URL constructor', () => {
 	test('parses full URL with all components', ({ bin, dir }) => {
@@ -440,7 +440,7 @@ describe('URLSearchParams', () => {
 })
 
 describe('URL IDN limitation', () => {
-	testQnodeOnly('throws on non-ASCII hostname', ({ bin, dir }) => {
+	testQnOnly('throws on non-ASCII hostname', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			try {
 				new URL('https://münchen.de/')

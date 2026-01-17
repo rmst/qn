@@ -1,10 +1,10 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync } from 'node:fs'
-import { testQnodeOnly, $ } from './util.js'
+import { testQnOnly, $ } from './util.js'
 
 describe('std._encodeUtf8 and std._decodeUtf8', () => {
-	testQnodeOnly('encodeUtf8 returns ArrayBuffer with UTF-8 bytes', ({ bin, dir }) => {
+	testQnOnly('encodeUtf8 returns ArrayBuffer with UTF-8 bytes', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import * as std from 'std'
 			const ab = std._encodeUtf8('hello')
@@ -21,7 +21,7 @@ describe('std._encodeUtf8 and std._decodeUtf8', () => {
 		})
 	})
 
-	testQnodeOnly('decodeUtf8 converts ArrayBuffer to string', ({ bin, dir }) => {
+	testQnOnly('decodeUtf8 converts ArrayBuffer to string', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import * as std from 'std'
 			const ab = new Uint8Array([104, 101, 108, 108, 111]).buffer
@@ -32,7 +32,7 @@ describe('std._encodeUtf8 and std._decodeUtf8', () => {
 		assert.deepStrictEqual(JSON.parse(output), { str: 'hello' })
 	})
 
-	testQnodeOnly('roundtrip ASCII string', ({ bin, dir }) => {
+	testQnOnly('roundtrip ASCII string', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import * as std from 'std'
 			const original = 'The quick brown fox'
@@ -44,7 +44,7 @@ describe('std._encodeUtf8 and std._decodeUtf8', () => {
 		assert.deepStrictEqual(JSON.parse(output), { match: true })
 	})
 
-	testQnodeOnly('roundtrip Unicode string (multi-byte)', ({ bin, dir }) => {
+	testQnOnly('roundtrip Unicode string (multi-byte)', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import * as std from 'std'
 			const original = 'Hello 世界 🌍'
@@ -58,7 +58,7 @@ describe('std._encodeUtf8 and std._decodeUtf8', () => {
 		assert.strictEqual(result.original, result.decoded)
 	})
 
-	testQnodeOnly('encodeUtf8 produces correct UTF-8 bytes for multi-byte chars', ({ bin, dir }) => {
+	testQnOnly('encodeUtf8 produces correct UTF-8 bytes for multi-byte chars', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import * as std from 'std'
 			// '世' is U+4E16, UTF-8: E4 B8 96
@@ -72,7 +72,7 @@ describe('std._encodeUtf8 and std._decodeUtf8', () => {
 		})
 	})
 
-	testQnodeOnly('encodeUtf8 produces correct UTF-8 bytes for emoji (4-byte)', ({ bin, dir }) => {
+	testQnOnly('encodeUtf8 produces correct UTF-8 bytes for emoji (4-byte)', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import * as std from 'std'
 			// '🌍' is U+1F30D, UTF-8: F0 9F 8C 8D
@@ -86,7 +86,7 @@ describe('std._encodeUtf8 and std._decodeUtf8', () => {
 		})
 	})
 
-	testQnodeOnly('empty string roundtrip', ({ bin, dir }) => {
+	testQnOnly('empty string roundtrip', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import * as std from 'std'
 			const encoded = std._encodeUtf8('')

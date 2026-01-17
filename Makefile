@@ -24,7 +24,7 @@ BIN_DIR ?= bin/$(PLATFORM)
 
 # Program names
 QJSX_PROG = $(BIN_DIR)/qjsx
-QNODE_PROG = $(BIN_DIR)/qnode
+QN_PROG = $(BIN_DIR)/qn
 QX_PROG = $(BIN_DIR)/qx
 QJSXC_PROG = $(BIN_DIR)/qjsxc
 
@@ -37,12 +37,12 @@ QUICKJS_OBJS = $(BIN_DIR)/quickjs/.obj/quickjs.o $(BIN_DIR)/quickjs/.obj/librege
 
 # Convenience symlinks
 QJSX_LINK = bin/qjsx
-QNODE_LINK = bin/qnode
+QN_LINK = bin/qn
 QX_LINK = bin/qx
 QJSXC_LINK = bin/qjsxc
 
 # Default target
-all: quickjs-deps $(QJSX_PROG) $(QNODE_PROG) $(QX_PROG) $(QJSXC_PROG) convenience-links
+all: quickjs-deps $(QJSX_PROG) $(QN_PROG) $(QX_PROG) $(QJSXC_PROG) convenience-links
 
 # Create directories
 $(BIN_DIR):
@@ -98,8 +98,8 @@ $(BIN_DIR)/obj/quickjs-libc.o: $(BIN_DIR)/obj/quickjs-libc.c | $(BIN_DIR)/obj
 $(BIN_DIR)/obj/sandboxed-worker.o: sandboxed-worker/sandboxed-worker.c sandboxed-worker/sandboxed-worker.h | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
-# Build qnode (standalone executable with embedded node modules and qx)
-$(QNODE_PROG): qnode/bootstrap.js qnode/node-globals.js qnode/node/* qnode/node/*/* qnode/repl.js qx/index.js qx/core.js $(QJSXC_PROG) quickjs-deps | $(BIN_DIR)
+# Build qn (standalone executable with embedded node modules and qx)
+$(QN_PROG): qnode/bootstrap.js qnode/node-globals.js qnode/node/* qnode/node/*/* qnode/repl.js qx/index.js qx/core.js $(QJSXC_PROG) quickjs-deps | $(BIN_DIR)
 	QJSXPATH=./qnode:./qx $(QJSXC_PROG) -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D qx -o $@ qnode/bootstrap.js
 
 # Build qx (zx-compatible shell scripting with $ function)
@@ -107,10 +107,10 @@ $(QX_PROG): qx/bootstrap.js qnode/node-globals.js qx/* qnode/node/* qnode/node/*
 	QJSXPATH=./qnode:./qx $(QJSXC_PROG) -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D qx/core -o $@ qx/bootstrap.js
 
 # Create convenience symlinks in bin/ directory
-convenience-links: $(QJSX_PROG) $(QNODE_PROG) $(QX_PROG) $(QJSXC_PROG)
+convenience-links: $(QJSX_PROG) $(QN_PROG) $(QX_PROG) $(QJSXC_PROG)
 	@mkdir -p bin
 	@ln -sf $(PLATFORM)/qjsx $(QJSX_LINK)
-	@ln -sf $(PLATFORM)/qnode $(QNODE_LINK)
+	@ln -sf $(PLATFORM)/qn $(QN_LINK)
 	@ln -sf $(PLATFORM)/qx $(QX_LINK)
 	@ln -sf $(PLATFORM)/qjsxc $(QJSXC_LINK)
 
@@ -133,11 +133,11 @@ clean-all:
 # Build everything (QuickJS + qjsx)
 build: quickjs-deps all
 
-# Install qjsx, qnode, qx, and qjsxc
-install: $(QJSX_PROG) $(QNODE_PROG) $(QX_PROG) $(QJSXC_PROG)
+# Install qjsx, qn, qx, and qjsxc
+install: $(QJSX_PROG) $(QN_PROG) $(QX_PROG) $(QJSXC_PROG)
 	mkdir -p "$(DESTDIR)$(PREFIX)/bin"
 	install -m755 $(QJSX_PROG) "$(DESTDIR)$(PREFIX)/bin"
-	install -m755 $(QNODE_PROG) "$(DESTDIR)$(PREFIX)/bin"
+	install -m755 $(QN_PROG) "$(DESTDIR)$(PREFIX)/bin"
 	install -m755 $(QX_PROG) "$(DESTDIR)$(PREFIX)/bin"
 	install -m755 $(QJSXC_PROG) "$(DESTDIR)$(PREFIX)/bin"
 
@@ -152,7 +152,7 @@ test2:
 # Help target
 help:
 	@echo "QJSX Makefile targets:"
-	@echo "  all         - Build qjsx, qnode, qx, and qjsxc executables"
+	@echo "  all         - Build qjsx, qn, qx, and qjsxc executables"
 	@echo "  build       - Build QuickJS dependencies and all programs"
 	@echo "  test        - Build and run tests"
 	@echo "  clean       - Clean build artifacts"
