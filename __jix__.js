@@ -1,8 +1,7 @@
 
 export const run = {
-	default: jix.script`
-
-	`,
+	// default: () => jix.script`
+	// `,
 }
 
 
