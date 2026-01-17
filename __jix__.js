@@ -1,4 +1,3 @@
-import { execSync } from 'node:child_process'
 
 export const run = {
 	default: jix.script`
@@ -9,9 +8,8 @@ export const run = {
 
 const binDir = () => {
 
-	let repo = jix.git.checkout({
-		repo: import.meta.dirname,
-		commit: execSync('git rev-parse HEAD', { cwd: import.meta.dirname, encoding: 'utf8' }).trim()
+	let repo = jix.importDir(import.meta.dirname, {
+		respectGitignore: true,
 	})
 
 	// let repo = import.meta.dirname

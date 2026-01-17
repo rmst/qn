@@ -14,7 +14,7 @@ export { Headers, Response }
  */
 function buildCurlArgs(url, options) {
 	const args = [
-		'-s',           // Silent mode (no progress)
+		'-sS',          // Silent mode (no progress) but show errors
 		'-i',           // Include response headers
 		'-L',           // Follow redirects
 		'--max-redirs', '20',
@@ -247,7 +247,12 @@ export function fetch(input, init = {}) {
 					return
 				}
 				// curl failed (network error, DNS failure, etc.)
-				reject(new TypeError(`fetch failed: ${error.message}`))
+				// stderr contains the actual curl error message
+				const stderrText = stderr && stderr.length > 0
+					? (typeof stderr === 'string' ? stderr : new TextDecoder().decode(stderr)).trim()
+					: null
+				const errorDetail = stderrText || error.message
+				reject(new TypeError(`fetch failed: ${errorDetail}`))
 				return
 			}
 
