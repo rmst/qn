@@ -1,5 +1,5 @@
 import { test as nodetest } from 'node:test'
-import { mkdtempSync, realpathSync, rmSync, cpSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { execSync, spawn } from 'node:child_process'
 import { join, resolve, dirname } from 'node:path'
 import { tmpdir, platform } from 'node:os'
@@ -7,23 +7,12 @@ import { tmpdir, platform } from 'node:os'
 export const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), '/')))
 
 const ROOT = resolve(dirname(import.meta.filename), '..')
-let buildDir = null
+const BIN = join(ROOT, 'bin', platform())
 
-const ensureBuild = () => {
-	if (!buildDir) {
-		buildDir = realpathSync(mkdtempSync(join(tmpdir(), 'qjsx-test-')))
-		console.log(`\n=== Building qjsx in ${buildDir} ===\n`)
-		cpSync(ROOT, buildDir, { recursive: true })
-		execSync('make clean && make build', { cwd: buildDir, stdio: 'inherit' })
-		console.log(`\n=== Build complete ===\n`)
-	}
-	return buildDir
-}
-
-export const QJSX = () => join(ensureBuild(), 'bin', platform(), 'qjsx')
-export const QNODE = () => join(ensureBuild(), 'bin', platform(), 'qnode')
-export const QJSXC = () => join(ensureBuild(), 'bin', platform(), 'qjsxc')
-export const QX = () => join(ensureBuild(), 'bin', platform(), 'qx')
+export const QJSX = () => join(BIN, 'qjsx')
+export const QNODE = () => join(BIN, 'qnode')
+export const QJSXC = () => join(BIN, 'qjsxc')
+export const QX = () => join(BIN, 'qx')
 
 /**
  * @overload

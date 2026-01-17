@@ -12,7 +12,7 @@ Never write comments describing what changed in a code edit. Comments should des
 Never edit a patch file directly. Instead update the resulting code file and then regenerate the patch file from that.
 
 ### Tests
-Run all tests via `node --test --experimental-test-isolation=none test/*.test.js test/**/*.test.js`
+Run all tests via `node --test test/*.test.js test/**/*.test.js`. Make sure that binaries are fresh.
 
 ### Git commits
 Never commit without being explicitly asked to. When making a commit, always add `Co-Authored-By: ai <noreply@ai.simonramstedt.com>` as the last line of the commit message. Before making a commit check if the commit fixed a bug or implemented a feature listed in Issues.md and if so remove it as part of the commit. Don't include trivial details. All commit messages should start with a tag (e.g. "feat" or "fix"). Be careful not to include \n characters instead of proper newlines.
