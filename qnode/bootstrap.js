@@ -11,26 +11,12 @@
  * are available to dynamically loaded scripts without needing external files.
  */
 
-import * as std from "std"
 import "node-globals"
+import process from "node:process"
 
 // If no script provided, start the REPL
 if (scriptArgs.length < 2) {
 	await import("repl")
 } else {
-	const scriptPath = scriptArgs[1]
-
-	// Keep scriptArgs as-is to match Node.js argv behavior:
-	// argv[0] = interpreter, argv[1] = script, argv[2+] = args
-
-	// Load and execute the user's script
-	try {
-		await import(scriptPath)
-	} catch (e) {
-		std.err.puts("Error loading script: " + e.message + "\n")
-		if (e.stack) {
-			std.err.puts(e.stack + "\n")
-		}
-		std.exit(1)
-	}
+	await process._runScript(scriptArgs[1])
 }
