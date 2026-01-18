@@ -12,6 +12,8 @@ QuickJS-x is [QuickJS](https://bellard.org/quickjs) with a few additional featur
 
 4. `os.SandboxedWorker` for running JS in a restricted environment (see [test](test/sandbox.test.js))
 
+5. Import errors include source location (e.g. `Could not find export 'foo' in module 'bar.js' (imported at main.js:5)`)
+
 All original QuickJS features are preserved.
 
 
@@ -77,6 +79,7 @@ This is how `qn` is built - it compiles a minimal bootstrap with all node module
 ### Architecture
 The following files are used to compile the `qjsx` binary:
 
+- `quickjs.patch` is applied to `quickjs/quickjs.c` (import error locations)
 - `qjsx.patch` is applied to `quickjs/qjs.c`
 - `qjsxc.patch` is applied to `quickjs/qjsc.c`
 - `quickjs-libc.patch` is applied to `quickjs/quickjs-libc.c`
