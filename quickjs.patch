@@ -1,0 +1,53 @@
+--- quickjs/quickjs.c	2026-01-16 11:05:44.126418007 +0000
++++ quickjs/quickjs.c	2026-01-18 16:52:56.111118227 +0000
+@@ -794,6 +794,7 @@
+     BOOL is_star; /* import_name = '*' is a valid import name, so need a flag */
+     JSAtom import_name;
+     int req_module_idx; /* in req_module_entries */
++    int line_num; /* line number of the import statement */
+ } JSImportEntry;
+ 
+ typedef enum {
+@@ -29454,7 +29455,29 @@
+                 ret = js_resolve_export(ctx, &res_m,
+                                         &res_me, m1, mi->import_name);
+                 if (ret != JS_RESOLVE_RES_FOUND) {
+-                    js_resolve_export_throw_error(ctx, ret, m1, mi->import_name);
++                    char buf1[ATOM_GET_STR_BUF_SIZE];
++                    char buf2[ATOM_GET_STR_BUF_SIZE];
++                    char buf3[ATOM_GET_STR_BUF_SIZE];
++                    const char *export_str = JS_AtomGetStr(ctx, buf1, sizeof(buf1), mi->import_name);
++                    const char *target_str = JS_AtomGetStr(ctx, buf2, sizeof(buf2), m1->module_name);
++                    const char *import_str = JS_AtomGetStr(ctx, buf3, sizeof(buf3), m->module_name);
++                    switch (ret) {
++                    case JS_RESOLVE_RES_EXCEPTION:
++                        break;
++                    default:
++                    case JS_RESOLVE_RES_NOT_FOUND:
++                        JS_ThrowSyntaxError(ctx, "Could not find export '%s' in module '%s' (imported at %s:%d)",
++                                            export_str, target_str, import_str, mi->line_num);
++                        break;
++                    case JS_RESOLVE_RES_CIRCULAR:
++                        JS_ThrowSyntaxError(ctx, "circular reference when looking for export '%s' in module '%s' (imported at %s:%d)",
++                                            export_str, target_str, import_str, mi->line_num);
++                        break;
++                    case JS_RESOLVE_RES_AMBIGUOUS:
++                        JS_ThrowSyntaxError(ctx, "export '%s' in module '%s' is ambiguous (imported at %s:%d)",
++                                            export_str, target_str, import_str, mi->line_num);
++                        break;
++                    }
+                     goto fail;
+                 }
+                 if (res_me->local_name == JS_ATOM__star_) {
+@@ -30605,6 +30628,11 @@
+     mi->import_name = JS_DupAtom(ctx, import_name);
+     mi->var_idx = var_idx;
+     mi->is_star = is_star;
++    {
++        int col_num;
++        mi->line_num = get_line_col(&col_num, s->buf_start,
++                                    s->token.ptr - s->buf_start) + 1;
++    }
+     return 0;
+ }
+ 

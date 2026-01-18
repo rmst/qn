@@ -144,6 +144,8 @@ quickjs-deps: | $(BIN_DIR)
 	@if [ ! -d "$(BIN_DIR)/quickjs" ]; then \
 		echo "Copying QuickJS to $(BIN_DIR)/quickjs..."; \
 		cp -r quickjs $(BIN_DIR)/quickjs; \
+		echo "Applying quickjs.patch..."; \
+		patch -p0 -d $(BIN_DIR) < quickjs.patch; \
 	fi
 	$(MAKE) -C $(BIN_DIR)/quickjs .obj/quickjs.o .obj/libregexp.o .obj/libunicode.o .obj/cutils.o .obj/dtoa.o .obj/repl.o libquickjs.a
 
