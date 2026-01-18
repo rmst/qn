@@ -5,7 +5,7 @@
  * https://github.com/jsdom/whatwg-url
  * Copyright (c) Sebastian Mayr
  *
- * Converted to ES modules for QuickJS-x
+ * Converted to ES modules for Qn
  * Uses native std._encodeUtf8/_decodeUtf8 directly to avoid bootstrap ordering issues
  */
 

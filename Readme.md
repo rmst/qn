@@ -1,6 +1,6 @@
-# QuickJS-x
+# Qn - Quickjs+Node.js
 
-QuickJS-x is [QuickJS](https://bellard.org/quickjs) with a few additional features:
+Qn is [QuickJS](https://bellard.org/quickjs) with a few additional features:
 
 1. **Module resolution** with two modes (see [tests](test/module-resolution/)):
    - **Bundler mode** (default): `QJSXPATH` for bare imports, `.js` and `/index.js` fallbacks
@@ -18,11 +18,11 @@ All original QuickJS features are preserved.
 
 
 ### Build
-Building QuickJS-x, like QuickJS, should take less than a minute.
+Building Qn, like QuickJS, should take less than a minute.
 
 ```bash
-git clone --recurse-submodules https://github.com/rmst/quickjs-x.git
-cd quickjs-x
+git clone --recurse-submodules https://github.com/rmst/qn.git
+cd qn
 make build  # Builds ./bin/qjsx, ./bin/qn, and ./bin/qjsxc
 ```
 

@@ -1,5 +1,5 @@
 /**
- * Node.js util module compatibility for QuickJS-x.
+ * Node.js util module compatibility for Qn.
  * @see https://nodejs.org/api/util.html
  */
 

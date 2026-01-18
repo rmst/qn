@@ -1,11 +1,11 @@
 /**
- * WHATWG URL Standard implementation for QuickJS-x
+ * WHATWG URL Standard implementation for Qn
  *
  * Ported from jsdom/whatwg-url (MIT License)
  * https://github.com/jsdom/whatwg-url
  * Copyright (c) Sebastian Mayr
  *
- * This is a simplified port for QuickJS-x with the following changes:
+ * This is a simplified port for Qn with the following changes:
  * - Converted from CommonJS to ES modules
  * - Removed webidl2js wrapper layer
  * - Removed tr46 dependency (IDN/Punycode not supported)

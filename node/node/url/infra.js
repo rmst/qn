@@ -5,7 +5,7 @@
  * https://github.com/jsdom/whatwg-url
  * Copyright (c) Sebastian Mayr
  *
- * Converted to ES modules for QuickJS-x
+ * Converted to ES modules for Qn
  */
 
 // Note: These functions operate on code points as JS numbers, not JS strings.

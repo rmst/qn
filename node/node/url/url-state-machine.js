@@ -5,7 +5,7 @@
  * https://github.com/jsdom/whatwg-url
  * Copyright (c) Sebastian Mayr
  *
- * Converted to ES modules for QuickJS-x
+ * Converted to ES modules for Qn
  * Note: Internationalized Domain Names (IDN/Punycode) are NOT supported.
  * URLs with non-ASCII hostnames will throw an error.
  */

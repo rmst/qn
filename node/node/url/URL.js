@@ -5,7 +5,7 @@
  * https://github.com/jsdom/whatwg-url
  * Copyright (c) Sebastian Mayr
  *
- * Converted to ES modules for QuickJS-x
+ * Converted to ES modules for Qn
  * Simplified to remove webidl2js wrapper layer
  */
 

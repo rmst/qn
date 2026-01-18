@@ -1,6 +1,6 @@
 # WHATWG URL Implementation
 
-This is a port of the WHATWG URL Standard implementation for QuickJS-x.
+This is a port of the WHATWG URL Standard implementation for Qn.
 
 ## Source
 
@@ -12,7 +12,7 @@ This code is ported from:
 
 ## Modifications
 
-The following changes were made for QuickJS-x compatibility:
+The following changes were made for Qn compatibility:
 
 1. **ES Modules:** Converted from CommonJS (`require`/`module.exports`) to ES modules (`import`/`export`)
 2. **No webidl2js:** Removed the webidl2js wrapper layer, implementing URL and URLSearchParams as plain classes
