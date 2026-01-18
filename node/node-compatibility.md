@@ -277,6 +277,49 @@ Fetch API implementation using curl. Also available as globals (`fetch`, `Header
 
 **Requirement:** `curl` must be available in PATH.
 
+### `node:sqlite`
+
+```js
+import { DatabaseSync } from 'node:sqlite';
+```
+
+SQLite database support using the embedded SQLite 3.51.2 amalgamation.
+
+| Class | Status | Notes |
+|-------|--------|-------|
+| `DatabaseSync` | ✅ | Synchronous database connection |
+| `StatementSync` | ✅ | Prepared statement |
+
+**DatabaseSync:**
+| Method/Property | Status | Notes |
+|-----------------|--------|-------|
+| `constructor(path, options?)` | ⚠️ | Only `open` option supported |
+| `exec(sql)` | ✅ | |
+| `prepare(sql)` | ✅ | |
+| `close()` | ✅ | |
+| `open()` | ✅ | |
+| `isOpen` | ✅ | |
+| `isTransaction` | ❌ | |
+| `function()` | ❌ | User-defined functions |
+| `aggregate()` | ❌ | User-defined aggregates |
+| `createSession()` | ❌ | Change tracking |
+| `applyChangeset()` | ❌ | |
+| `loadExtension()` | ❌ | |
+| `setAuthorizer()` | ❌ | |
+
+**StatementSync:**
+| Method/Property | Status | Notes |
+|-----------------|--------|-------|
+| `all(...params)` | ✅ | Anonymous parameters only |
+| `get(...params)` | ✅ | Anonymous parameters only |
+| `run(...params)` | ✅ | Returns `{ changes, lastInsertRowid }` |
+| `iterate()` | ❌ | |
+| `columns()` | ❌ | |
+| `sourceSQL` | ❌ | |
+| Named parameters | ❌ | Use `?` placeholders |
+
+**Transactions:** Use `exec('BEGIN')`, `exec('COMMIT')`, `exec('ROLLBACK')`.
+
 ---
 
 ## Unavailable `node:*` Imports

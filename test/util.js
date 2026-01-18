@@ -1,5 +1,5 @@
 import { test as nodetest } from 'node:test'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { execSync, spawn } from 'node:child_process'
 import { join, resolve, dirname } from 'node:path'
 import { tmpdir, platform } from 'node:os'
@@ -32,7 +32,7 @@ export const QX = () => join(BIN, 'qx')
 export const $ = (strings, ...values) => {
 	// NO_COLOR disables ANSI color codes in Node.js console output
 	const { FORCE_COLOR, NODE_OPTIONS, ...env } = process.env
-	const defaultOpts = { encoding: 'utf8', env: { ...env, NO_COLOR: '1', NODE_OPTIONS: '--experimental-default-type=module' } }
+	const defaultOpts = { encoding: 'utf8', env: { ...env, NO_COLOR: '1' } }
 	if (typeof strings === 'string' || /** @type {TemplateStringsArray} */ (strings).raw === undefined) {
 		const opts = /** @type {import('child_process').ExecSyncOptions} */ (strings)
 		return (/** @type {TemplateStringsArray} */ strings, /** @type {any[]} */ ...values) => {
@@ -55,7 +55,7 @@ export const execAsync = (cmd, args, opts = {}) => {
 	return new Promise((resolve, reject) => {
 		const { FORCE_COLOR, NODE_OPTIONS, ...env } = process.env
 		const child = spawn(cmd, args, {
-			env: { ...env, NO_COLOR: '1', NODE_OPTIONS: '--experimental-default-type=module', ...opts.env },
+			env: { ...env, NO_COLOR: '1', ...opts.env },
 			cwd: opts.cwd,
 		})
 		let stdout = ''
@@ -87,6 +87,8 @@ export const test = (name, fn) => {
 		const label = bin === 'node' ? 'node' : 'qn'
 		const testFn = async () => {
 			const dir = mktempdir()
+			// Write package.json to enable ESM for .js files
+			writeFileSync(join(dir, 'package.json'), '{"type":"module"}')
 			try {
 				return await fn({ bin, dir })
 			} catch (err) {
