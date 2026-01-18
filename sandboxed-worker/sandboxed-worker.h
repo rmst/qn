@@ -20,6 +20,15 @@
 #ifdef USE_SANDBOX
 
 /*
+ * Accessor for the port_list in JSThreadState.
+ * Defined in quickjs-libc.c to avoid exposing internal structure layout.
+ *
+ * @param rt - JSRuntime to get the port list from
+ * @return Pointer to the port_list, or NULL if thread state not initialized
+ */
+struct list_head *js_std_get_port_list(JSRuntime *rt);
+
+/*
  * Initialize the SandboxedWorker class and add it to the os module.
  * Called from quickjs-libc.c during os module initialization.
  *

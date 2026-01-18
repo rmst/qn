@@ -79,17 +79,7 @@ typedef struct {
     JSValue worker_parent;
 } SandboxThreadState;
 
-/*
- * Partial JSThreadState for accessing the main thread's port_list.
- * This must match the layout in quickjs-libc.c.
- * SandboxMessageHandler is memory-compatible with JSWorkerMessageHandler.
- */
-typedef struct {
-    struct list_head os_rw_handlers;
-    struct list_head os_signal_handlers;
-    struct list_head os_timers;
-    struct list_head port_list;
-} MainThreadState;
+/* SandboxMessageHandler is memory-compatible with JSWorkerMessageHandler. */
 
 /* Class ID for SandboxedWorker */
 static JSClassID js_sandboxed_worker_class_id;
@@ -895,13 +885,15 @@ static JSValue js_sandboxed_worker_set_onmessage(JSContext *ctx, JSValueConst th
 {
     SandboxedWorkerData *worker = JS_GetOpaque2(ctx, this_val, js_sandboxed_worker_class_id);
     SandboxMessageHandler *port;
-    MainThreadState *mts;
+    struct list_head *port_list;
 
     if (!worker)
         return JS_EXCEPTION;
 
-    /* Get the main thread state to access port_list for event loop integration */
-    mts = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
+    /* Get the port_list for event loop integration via accessor */
+    port_list = js_std_get_port_list(JS_GetRuntime(ctx));
+    if (!port_list)
+        return JS_ThrowInternalError(ctx, "Thread state not initialized");
 
     port = worker->msg_handler;
     if (JS_IsNull(func)) {
@@ -923,7 +915,7 @@ static JSValue js_sandboxed_worker_set_onmessage(JSContext *ctx, JSValueConst th
             port->recv_pipe = sandbox_dup_message_pipe(worker->recv_pipe);
             port->on_message_func = JS_NULL;
             /* Add to main thread's port_list for event loop polling */
-            list_add_tail(&port->link, &mts->port_list);
+            list_add_tail(&port->link, port_list);
             worker->msg_handler = port;
         }
         JS_FreeValue(ctx, port->on_message_func);

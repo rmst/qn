@@ -1,5 +1,5 @@
 --- quickjs/quickjs-libc.c	2026-01-16 11:05:44.122933386 +0000
-+++ bin/linux/obj/quickjs-libc.c	2026-01-16 13:41:38.512191602 +0000
++++ bin/linux/obj/quickjs-libc.c	2026-01-18 01:43:18.340582455 +0000
 @@ -80,6 +80,10 @@
  #define PATH_MAX 4096
  #endif
@@ -99,7 +99,22 @@
  
      /* FILE I/O */
      JS_CFUNC_DEF("open", 2, js_std_open ),
-@@ -3990,6 +4061,10 @@
+@@ -3958,6 +4029,14 @@
+ #endif
+ };
+ 
++#ifdef USE_SANDBOX
++/* Accessor for sandbox integration - avoids exposing JSThreadState layout */
++struct list_head *js_std_get_port_list(JSRuntime *rt) {
++    JSThreadState *ts = JS_GetRuntimeOpaque(rt);
++    return ts ? &ts->port_list : NULL;
++}
++#endif
++
+ static int js_os_init(JSContext *ctx, JSModuleDef *m)
+ {
+     os_poll_func = js_os_poll;
+@@ -3990,6 +4069,10 @@
      }
  #endif /* USE_WORKER */
  
@@ -110,7 +125,7 @@
      return JS_SetModuleExportList(ctx, m, js_os_funcs,
                                    countof(js_os_funcs));
  }
-@@ -4004,6 +4079,9 @@
+@@ -4004,6 +4087,9 @@
  #ifdef USE_WORKER
      JS_AddModuleExport(ctx, m, "Worker");
  #endif
