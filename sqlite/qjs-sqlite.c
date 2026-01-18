@@ -20,13 +20,12 @@ static JSClassID js_sqlite_db_class_id;
 /* Statement class */
 typedef struct {
     sqlite3_stmt *stmt;
-    sqlite3 *db;  /* reference to parent db for error messages */
 } JSQLiteStmt;
 
 static JSClassID js_sqlite_stmt_class_id;
 
 /* Forward declarations */
-static JSValue js_sqlite_stmt_new(JSContext *ctx, sqlite3_stmt *stmt, sqlite3 *db);
+static JSValue js_sqlite_stmt_new(JSContext *ctx, sqlite3_stmt *stmt);
 
 /* Statement finalizer */
 static void js_sqlite_stmt_finalizer(JSRuntime *rt, JSValue val) {
@@ -43,7 +42,7 @@ static void js_sqlite_db_finalizer(JSRuntime *rt, JSValue val) {
     JSQLiteDB *db = JS_GetOpaque(val, js_sqlite_db_class_id);
     if (db) {
         if (db->db)
-            sqlite3_close(db->db);
+            sqlite3_close_v2(db->db);
         js_free_rt(rt, db);
     }
 }
@@ -88,7 +87,7 @@ static JSValue js_sqlite_db_ctor(JSContext *ctx, JSValueConst new_target,
     if (rc != SQLITE_OK) {
         const char *errmsg = db->db ? sqlite3_errmsg(db->db) : "Failed to open database";
         if (db->db)
-            sqlite3_close(db->db);
+            sqlite3_close_v2(db->db);
         js_free(ctx, db);
         JS_FreeValue(ctx, obj);
         return JS_ThrowInternalError(ctx, "%s", errmsg);
@@ -149,7 +148,7 @@ static JSValue js_sqlite_db_prepare(JSContext *ctx, JSValueConst this_val,
     if (!stmt)
         return JS_ThrowInternalError(ctx, "Empty SQL statement");
 
-    return js_sqlite_stmt_new(ctx, stmt, db->db);
+    return js_sqlite_stmt_new(ctx, stmt);
 }
 
 /* db.close() */
@@ -161,7 +160,7 @@ static JSValue js_sqlite_db_close(JSContext *ctx, JSValueConst this_val,
         return JS_EXCEPTION;
 
     if (db->db) {
-        sqlite3_close(db->db);
+        sqlite3_close_v2(db->db);
         db->db = NULL;
     }
 
@@ -202,7 +201,7 @@ static JSValue js_sqlite_db_errmsg(JSContext *ctx, JSValueConst this_val,
 }
 
 /* Statement: create new statement object */
-static JSValue js_sqlite_stmt_new(JSContext *ctx, sqlite3_stmt *stmt, sqlite3 *db) {
+static JSValue js_sqlite_stmt_new(JSContext *ctx, sqlite3_stmt *stmt) {
     JSQLiteStmt *s;
     JSValue obj;
 
@@ -217,7 +216,6 @@ static JSValue js_sqlite_stmt_new(JSContext *ctx, sqlite3_stmt *stmt, sqlite3 *d
     }
 
     s->stmt = stmt;
-    s->db = db;
     JS_SetOpaque(obj, s);
     return obj;
 }
@@ -241,7 +239,7 @@ static JSValue js_sqlite_stmt_step(JSContext *ctx, JSValueConst this_val,
     case SQLITE_BUSY:
         return JS_ThrowInternalError(ctx, "Database is busy");
     default:
-        return JS_ThrowInternalError(ctx, "%s", sqlite3_errmsg(s->db));
+        return JS_ThrowInternalError(ctx, "%s", sqlite3_errmsg(sqlite3_db_handle(s->stmt)));
     }
 }
 
@@ -337,7 +335,7 @@ static JSValue js_sqlite_stmt_bind(JSContext *ctx, JSValueConst this_val,
     }
 
     if (rc != SQLITE_OK)
-        return JS_ThrowInternalError(ctx, "%s", sqlite3_errmsg(s->db));
+        return JS_ThrowInternalError(ctx, "%s", sqlite3_errmsg(sqlite3_db_handle(s->stmt)));
 
     return JS_UNDEFINED;
 }
