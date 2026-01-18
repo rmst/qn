@@ -1,5 +1,6 @@
 import { execFile } from './execFile.js'
 import { checkUnsupportedOptions, checkEncodingOption } from './utils.js'
+import { promisify } from 'node:util'
 
 const UNSUPPORTED_OPTIONS = [
 	'timeout',
@@ -58,4 +59,18 @@ export function exec(command, options, callback) {
 	}
 
 	return execFile(shell, ['-c', command], execFileOptions, callback)
+}
+
+exec[promisify.custom] = (command, options) => {
+	return new Promise((resolve, reject) => {
+		exec(command, options, (err, stdout, stderr) => {
+			if (err) {
+				err.stdout = stdout
+				err.stderr = stderr
+				reject(err)
+			} else {
+				resolve({ stdout, stderr })
+			}
+		})
+	})
 }

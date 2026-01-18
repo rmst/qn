@@ -2,6 +2,7 @@ import * as os from 'os'
 import { Buffer } from 'node:buffer'
 import { ChildProcess } from './ChildProcess.js'
 import { spawnWithPipes, NodeCompatibilityError } from './utils.js'
+import { promisify } from 'node:util'
 
 /**
  * Execute a file asynchronously.
@@ -172,6 +173,20 @@ export function execFile(file, args, options, callback) {
 	}
 
 	return child
+}
+
+execFile[promisify.custom] = (file, args, options) => {
+	return new Promise((resolve, reject) => {
+		execFile(file, args, options, (err, stdout, stderr) => {
+			if (err) {
+				err.stdout = stdout
+				err.stderr = stderr
+				reject(err)
+			} else {
+				resolve({ stdout, stderr })
+			}
+		})
+	})
 }
 
 /**
