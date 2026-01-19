@@ -3,7 +3,7 @@
 Closure introspection and function serialization for Qn.
 
 ```javascript
-import { getClosureVars, serialize, deserialize } from 'qn:introspect';
+import { getClosureVars, closureToSource } from 'qn:introspect';
 ```
 
 ## API
@@ -18,47 +18,54 @@ let f = () => x + y;
 getClosureVars(f)  // { x: 5, y: 10 }
 ```
 
-### serialize(fn, options?)
+### closureToSource(fn)
 
-Serializes a function and its closure variables to a JSON string. Uses a tagged union format where all values are wrapped with type information.
+Converts a function to standalone JavaScript source code. The returned code, when evaluated, produces the function with all closure variables embedded.
 
 ```javascript
 let multiplier = 3;
 let f = (x) => x * multiplier;
-serialize(f)  // '{"t":"function","code":"(x) => x * multiplier","closureVars":{...}}'
+
+closureToSource(f)
+// Returns:
+// (() => {
+//   let multiplier = 3;
+//   return (x) => x * multiplier;
+// })()
 ```
 
-Options:
-- `replacer(value)` - Custom serialization for non-standard types. Must return `{ t: 'TypeName', ...data }` or `undefined` to use default handling.
+The output is portable JavaScript that works in any JS environment - Node.js, browsers, Deno, etc. No deserialization library needed.
 
 ```javascript
-serialize(fn, {
-    replacer: (value) => {
-        if (value instanceof Date) {
-            return { t: 'Date', iso: value.toISOString() };
-        }
-    }
-});
+// Generate standalone code
+let code = closureToSource(f);
+
+// Use it anywhere
+let restored = eval(code);
+// Or: new Function('return ' + code)()
+// Or: write to file and import
 ```
 
-### deserialize(str, options?)
-
-Restores a function from its serialized form.
+Nested functions are handled recursively:
 
 ```javascript
-let restored = deserialize(str);
-restored(5)  // works like the original
-```
+// utils.js
+let secret = 42;
+export function helper(x) { return x + secret; }
 
-Options:
-- `reviver(type, data)` - Custom deserialization for types created by a replacer.
+// main.js
+import { helper } from './utils.js';
+let f = (x) => helper(x) + 100;
 
-```javascript
-deserialize(str, {
-    reviver: (type, data) => {
-        if (type === 'Date') return new Date(data.iso);
-    }
-});
+closureToSource(f)
+// Returns:
+// (() => {
+//   let helper = (() => {
+//     let secret = 42;
+//     return function helper(x) { return x + secret; };
+//   })();
+//   return (x) => helper(x) + 100;
+// })()
 ```
 
 ## Limitations
@@ -77,36 +84,35 @@ import { helper } from './utils.js';  // captured (including helper's own closur
 let multiplier = 2;                    // captured
 
 let f = (x) => helper(x) * multiplier;
-serialize(f);  // captures: helper (with secret=42), multiplier
+closureToSource(f);  // captures: helper (with secret=42), multiplier
 ```
 
 Imported functions are serialized recursively with their own closure variables.
 
-**Not captured:** True globals like `console`, `Math`, `fetch` that aren't defined in any module scope. These must exist in the deserialize environment.
+**Not captured:** True globals like `console`, `Math`, `fetch` that aren't defined in any module scope. These must exist in the execution environment.
 
-### Types requiring custom replacer/reviver
+### Supported types
 
-- `Date`, `RegExp`, `Error`
-- `Map`, `Set`
-- `BigInt`
-- `ArrayBuffer`, typed arrays (`Uint8Array`, etc.)
-- Class instances (prototype chain is lost without custom handling)
+- Primitives: `number`, `string`, `boolean`, `null`, `undefined`
+- `Array`
+- Plain objects
+- Functions (recursively with their closures)
 
-### Cannot be serialized
+### Cannot be converted
 
 - **Native functions** - `.toString()` returns `[native code]`
-- **WeakMap/WeakSet** - contents cannot be enumerated
-- **Symbols** - not JSON-serializable
-- **Circular object references** - JSON.stringify throws
+- **Date, RegExp, Map, Set, etc.** - not yet supported (custom type support planned)
+- **Symbols** - not representable as source code
+- **Circular function references** - throws an error
+- **Class instances** - converted to plain objects (prototype lost)
 
 ### Behavioral limitations
 
-- **Object identity** - same object in multiple places becomes distinct objects after deserialize
-- **Prototype chains** - plain objects only; class instances lose their prototype
+- **Object identity** - same object referenced multiple times becomes distinct objects
 - **Property descriptors** - getters, setters, non-enumerable properties are lost
-- **`this` binding** - `.bind()` is not preserved; method context depends on call site
-- **Self-referential named functions** - `function f() { return f(); }` won't work (f is undefined after deserialize)
+- **`this` binding** - `.bind()` is not preserved
+- **Self-referential named functions** - `function f() { return f(); }` won't work
 
 ### Security
 
-Uses `new Function()` internally. **Never deserialize untrusted input.**
+The output is executable code. **Never execute untrusted output.**

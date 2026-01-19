@@ -55,27 +55,27 @@ describe('qn:introspect getClosureVars', () => {
     })
 })
 
-describe('qn:introspect serialize/deserialize', () => {
-    testQnOnly('serialize returns a string', ({ bin, dir }) => {
+describe('qn:introspect closureToSource', () => {
+    testQnOnly('returns a string', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
-            import { serialize } from 'qn:introspect';
+            import { closureToSource } from 'qn:introspect';
             let x = 5;
             let f = () => x * 2;
-            const str = serialize(f);
-            console.log(JSON.stringify({ isString: typeof str === 'string' }));
+            const code = closureToSource(f);
+            console.log(typeof code === 'string' ? 'OK' : 'FAIL');
         `)
-        const output = JSON.parse($`${bin} ${dir}/test.js`)
-        assert.strictEqual(output.isString, true)
+        const output = $`${bin} ${dir}/test.js`
+        assert.strictEqual(output, 'OK')
     })
 
-    testQnOnly('serializes and deserializes a simple closure', ({ bin, dir }) => {
+    testQnOnly('produces working code for simple closure', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
-            import { serialize, deserialize } from 'qn:introspect';
+            import { closureToSource } from 'qn:introspect';
             let foo = 3;
-            let bar = "hello";
-            let f = () => foo + bar.length;
-            const str = serialize(f);
-            const restored = deserialize(str);
+            let bar = 5;
+            let f = () => foo + bar;
+            const code = closureToSource(f);
+            const restored = eval(code);
             console.log(JSON.stringify({
                 original: f(),
                 restored: restored()
@@ -86,13 +86,13 @@ describe('qn:introspect serialize/deserialize', () => {
         assert.strictEqual(output.restored, 8)
     })
 
-    testQnOnly('serializes nested function closures', ({ bin, dir }) => {
+    testQnOnly('handles nested function closures', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
-            import { serialize, deserialize } from 'qn:introspect';
+            import { closureToSource } from 'qn:introspect';
             let helper = (x) => x * 2;
             let outer = (x) => helper(x) + 1;
-            const str = serialize(outer);
-            const restored = deserialize(str);
+            const code = closureToSource(outer);
+            const restored = eval(code);
             console.log(JSON.stringify({
                 original: outer(5),
                 restored: restored(5)
@@ -103,14 +103,14 @@ describe('qn:introspect serialize/deserialize', () => {
         assert.strictEqual(output.restored, 11)
     })
 
-    testQnOnly('serializes multiple levels of nested functions', ({ bin, dir }) => {
+    testQnOnly('handles multiple levels of nested functions', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
-            import { serialize, deserialize } from 'qn:introspect';
+            import { closureToSource } from 'qn:introspect';
             let a = (x) => x + 1;
             let b = (x) => a(x) * 2;
             let c = (x) => b(x) + 3;
-            const str = serialize(c);
-            const restored = deserialize(str);
+            const code = closureToSource(c);
+            const restored = eval(code);
             console.log(JSON.stringify({
                 original: c(5),
                 restored: restored(5)
@@ -123,12 +123,12 @@ describe('qn:introspect serialize/deserialize', () => {
 
     testQnOnly('handles arrays and objects in closures', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
-            import { serialize, deserialize } from 'qn:introspect';
+            import { closureToSource } from 'qn:introspect';
             let items = [1, 2, 3];
             let config = { multiplier: 2 };
             let process = () => items.map(x => x * config.multiplier);
-            const str = serialize(process);
-            const restored = deserialize(str);
+            const code = closureToSource(process);
+            const restored = eval(code);
             console.log(JSON.stringify({
                 original: process(),
                 restored: restored()
@@ -141,12 +141,12 @@ describe('qn:introspect serialize/deserialize', () => {
 
     testQnOnly('handles null and undefined in closures', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
-            import { serialize, deserialize } from 'qn:introspect';
+            import { closureToSource } from 'qn:introspect';
             let n = null;
             let u = undefined;
             let f = () => ({ n, u });
-            const str = serialize(f);
-            const restored = deserialize(str);
+            const code = closureToSource(f);
+            const restored = eval(code);
             const result = restored();
             console.log(JSON.stringify({
                 nIsNull: result.n === null,
@@ -160,9 +160,9 @@ describe('qn:introspect serialize/deserialize', () => {
 
     testQnOnly('throws on non-function input', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
-            import { serialize } from 'qn:introspect';
+            import { closureToSource } from 'qn:introspect';
             try {
-                serialize("not a function");
+                closureToSource("not a function");
                 console.log("NO_ERROR");
             } catch (e) {
                 console.log("ERROR:" + e.name);
@@ -174,12 +174,12 @@ describe('qn:introspect serialize/deserialize', () => {
 
     testQnOnly('detects circular function references', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
-            import { serialize } from 'qn:introspect';
+            import { closureToSource } from 'qn:introspect';
             let a, b;
             a = () => b();
             b = () => a();
             try {
-                serialize(a);
+                closureToSource(a);
                 console.log("NO_ERROR");
             } catch (e) {
                 console.log("ERROR:" + (e.message.includes('Circular') ? 'correct' : e.message));
@@ -189,17 +189,17 @@ describe('qn:introspect serialize/deserialize', () => {
         assert.strictEqual(output, "ERROR:correct")
     })
 
-    testQnOnly('serializes imported functions with their closures', ({ bin, dir }) => {
+    testQnOnly('handles imported functions with their closures', ({ bin, dir }) => {
         writeFileSync(`${dir}/utils.js`, `
             let secret = 42;
             export function helper(x) { return x + secret; }
         `)
         writeFileSync(`${dir}/test.js`, `
-            import { serialize, deserialize } from 'qn:introspect';
+            import { closureToSource } from 'qn:introspect';
             import { helper } from './utils.js';
             let f = (x) => helper(x) + 100;
-            const str = serialize(f);
-            const restored = deserialize(str);
+            const code = closureToSource(f);
+            const restored = eval(code);
             console.log(JSON.stringify({
                 original: f(10),
                 restored: restored(10)
@@ -209,179 +209,70 @@ describe('qn:introspect serialize/deserialize', () => {
         assert.strictEqual(output.original, 152)
         assert.strictEqual(output.restored, 152)
     })
-})
 
-describe('qn:introspect replacer/reviver', () => {
-    testQnOnly('custom replacer handles Date objects', ({ bin, dir }) => {
+    testQnOnly('produces nicely formatted output', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
-            import { serialize, deserialize } from 'qn:introspect';
-            let timestamp = new Date('2024-01-15T12:00:00Z');
-            let getTime = () => timestamp.getTime();
-
-            const str = serialize(getTime, {
-                replacer: (value) => {
-                    if (value instanceof Date) {
-                        return { t: 'Date', iso: value.toISOString() };
-                    }
-                }
-            });
-
-            const restored = deserialize(str, {
-                reviver: (type, data) => {
-                    if (type === 'Date') return new Date(data.iso);
-                }
-            });
-
-            console.log(JSON.stringify({
-                original: getTime(),
-                restored: restored()
-            }));
+            import { closureToSource } from 'qn:introspect';
+            let x = 5;
+            let f = () => x * 2;
+            const code = closureToSource(f);
+            // Check it has proper formatting
+            const hasNewlines = code.includes('\\n');
+            const hasIndent = code.includes('  let');
+            const hasIIFE = code.startsWith('(() =>');
+            console.log(JSON.stringify({ hasNewlines, hasIndent, hasIIFE }));
         `)
         const output = JSON.parse($`${bin} ${dir}/test.js`)
-        assert.strictEqual(output.original, 1705320000000)
-        assert.strictEqual(output.restored, 1705320000000)
+        assert.strictEqual(output.hasNewlines, true)
+        assert.strictEqual(output.hasIndent, true)
+        assert.strictEqual(output.hasIIFE, true)
     })
 
-    testQnOnly('custom replacer handles Map objects', ({ bin, dir }) => {
+    testQnOnly('function without closures returns just the code', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
-            import { serialize, deserialize } from 'qn:introspect';
-            let lookup = new Map([['a', 1], ['b', 2]]);
-            let getValue = (key) => lookup.get(key);
-
-            const str = serialize(getValue, {
-                replacer: (value) => {
-                    if (value instanceof Map) {
-                        return { t: 'Map', entries: [...value.entries()] };
-                    }
-                }
-            });
-
-            const restored = deserialize(str, {
-                reviver: (type, data) => {
-                    if (type === 'Map') return new Map(data.entries);
-                }
-            });
-
-            console.log(JSON.stringify({
-                originalA: getValue('a'),
-                restoredA: restored('a'),
-                originalB: getValue('b'),
-                restoredB: restored('b')
-            }));
-        `)
-        const output = JSON.parse($`${bin} ${dir}/test.js`)
-        assert.strictEqual(output.originalA, 1)
-        assert.strictEqual(output.restoredA, 1)
-        assert.strictEqual(output.originalB, 2)
-        assert.strictEqual(output.restoredB, 2)
-    })
-
-    testQnOnly('custom replacer handles Set objects', ({ bin, dir }) => {
-        writeFileSync(`${dir}/test.js`, `
-            import { serialize, deserialize } from 'qn:introspect';
-            let items = new Set([1, 2, 3]);
-            let hasItem = (x) => items.has(x);
-
-            const str = serialize(hasItem, {
-                replacer: (value) => {
-                    if (value instanceof Set) {
-                        return { t: 'Set', values: [...value] };
-                    }
-                }
-            });
-
-            const restored = deserialize(str, {
-                reviver: (type, data) => {
-                    if (type === 'Set') return new Set(data.values);
-                }
-            });
-
-            console.log(JSON.stringify({
-                has2: hasItem(2),
-                restored2: restored(2),
-                has5: hasItem(5),
-                restored5: restored(5)
-            }));
-        `)
-        const output = JSON.parse($`${bin} ${dir}/test.js`)
-        assert.strictEqual(output.has2, true)
-        assert.strictEqual(output.restored2, true)
-        assert.strictEqual(output.has5, false)
-        assert.strictEqual(output.restored5, false)
-    })
-
-    testQnOnly('replacer must return object with t property', ({ bin, dir }) => {
-        writeFileSync(`${dir}/test.js`, `
-            import { serialize } from 'qn:introspect';
-            let d = new Date();
-            let f = () => d;
-            try {
-                serialize(f, {
-                    replacer: (value) => {
-                        if (value instanceof Date) {
-                            return { invalid: 'no t property' };
-                        }
-                    }
-                });
-                console.log("NO_ERROR");
-            } catch (e) {
-                console.log("ERROR:" + (e.message.includes('"t"') ? 'correct' : e.message));
-            }
+            import { closureToSource } from 'qn:introspect';
+            let f = (x) => x * 2;
+            const code = closureToSource(f);
+            console.log(code);
         `)
         const output = $`${bin} ${dir}/test.js`
-        assert.strictEqual(output, "ERROR:correct")
+        assert.strictEqual(output, '(x) => x * 2')
     })
 
-    testQnOnly('unknown type without reviver throws', ({ bin, dir }) => {
+    testQnOnly('throws for non-plain objects instead of silent failure', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
-            import { serialize, deserialize } from 'qn:introspect';
-            let d = new Date();
-            let f = () => d;
-            const str = serialize(f, {
-                replacer: (value) => {
-                    if (value instanceof Date) {
-                        return { t: 'CustomDate', iso: value.toISOString() };
-                    }
+            import { closureToSource } from 'qn:introspect';
+            let errors = [];
+
+            for (let [name, val] of [
+                ['RegExp', /test/],
+                ['Date', new Date()],
+                ['Map', new Map()],
+                ['Set', new Set()],
+            ]) {
+                try {
+                    closureToSource(() => val);
+                    errors.push(name + ':no_error');
+                } catch (e) {
+                    errors.push(name + ':' + e.message.includes(name));
                 }
-            });
-            try {
-                deserialize(str); // no reviver
-                console.log("NO_ERROR");
-            } catch (e) {
-                console.log("ERROR:" + (e.message.includes('Unknown type') ? 'correct' : e.message));
             }
+            console.log(errors.join(','));
         `)
         const output = $`${bin} ${dir}/test.js`
-        assert.strictEqual(output, "ERROR:correct")
+        assert.strictEqual(output, 'RegExp:true,Date:true,Map:true,Set:true')
     })
 
-    testQnOnly('nested custom types work correctly', ({ bin, dir }) => {
+    testQnOnly('handles BigInt correctly', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
-            import { serialize, deserialize } from 'qn:introspect';
-            let dates = [new Date('2024-01-01'), new Date('2024-06-15')];
-            let getYears = () => dates.map(d => d.getFullYear());
-
-            const str = serialize(getYears, {
-                replacer: (value) => {
-                    if (value instanceof Date) {
-                        return { t: 'Date', iso: value.toISOString() };
-                    }
-                }
-            });
-
-            const restored = deserialize(str, {
-                reviver: (type, data) => {
-                    if (type === 'Date') return new Date(data.iso);
-                }
-            });
-
-            console.log(JSON.stringify({
-                original: getYears(),
-                restored: restored()
-            }));
+            import { closureToSource } from 'qn:introspect';
+            let big = 123n;
+            let f = () => big * 2n;
+            const code = closureToSource(f);
+            const restored = eval(code);
+            console.log(String(restored()));
         `)
-        const output = JSON.parse($`${bin} ${dir}/test.js`)
-        assert.deepStrictEqual(output.original, [2024, 2024])
-        assert.deepStrictEqual(output.restored, [2024, 2024])
+        const output = $`${bin} ${dir}/test.js`
+        assert.strictEqual(output, '246')
     })
 })

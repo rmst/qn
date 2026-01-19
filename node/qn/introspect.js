@@ -11,39 +11,70 @@ export function getClosureVars(fn) {
 }
 
 /**
- * Encode a value into tagged format.
- * @param {any} value
- * @param {Function} [replacer]
- * @param {WeakSet} [seenFunctions]
- * @returns {{ t: string, [key: string]: any }}
+ * Re-indent code to match target indentation.
+ * @param {string} code
+ * @param {string} targetIndent
+ * @returns {string}
  */
-function encode(value, replacer, seenFunctions = new WeakSet()) {
-    // Try custom replacer first
-    if (replacer) {
-        const custom = replacer(value);
-        if (custom !== undefined) {
-            // Validate custom result has a type tag
-            if (!custom || typeof custom.t !== 'string') {
-                throw new Error('Replacer must return an object with a "t" property');
-            }
-            return custom;
+function reindent(code, targetIndent) {
+    const lines = code.split('\n');
+    if (lines.length === 1) return code;
+
+    // Find minimum indentation (ignoring empty lines and first line)
+    let minIndent = Infinity;
+    for (let i = 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.trim() === '') continue;
+        const match = line.match(/^(\s*)/);
+        if (match && match[1].length < minIndent) {
+            minIndent = match[1].length;
         }
     }
+    if (minIndent === Infinity) minIndent = 0;
 
+    // Re-indent: strip base indent, add target indent
+    return lines.map((line, i) => {
+        if (i === 0) return line;
+        if (line.trim() === '') return '';
+        return targetIndent + line.slice(minIndent);
+    }).join('\n');
+}
+
+/**
+ * Convert a value to JavaScript source code.
+ * @param {any} value
+ * @param {string} indent
+ * @param {WeakSet} seenFunctions
+ * @returns {string}
+ */
+function toSource(value, indent = '', seenFunctions = new WeakSet()) {
     // Handle null
     if (value === null) {
-        return { t: 'null' };
+        return 'null';
     }
 
     // Handle undefined
     if (value === undefined) {
-        return { t: 'undefined' };
+        return 'undefined';
     }
 
-    // Handle primitives
     const type = typeof value;
-    if (type === 'boolean' || type === 'number' || type === 'string') {
-        return { t: type, v: value };
+
+    // Handle primitives
+    if (type === 'boolean' || type === 'number') {
+        return String(value);
+    }
+
+    if (type === 'string') {
+        return JSON.stringify(value);
+    }
+
+    if (type === 'bigint') {
+        return `${value}n`;
+    }
+
+    if (type === 'symbol') {
+        throw new Error('Symbol cannot be converted to source');
     }
 
     // Handle functions
@@ -54,127 +85,87 @@ function encode(value, replacer, seenFunctions = new WeakSet()) {
         seenFunctions.add(value);
 
         const code = value.toString();
-        const rawClosureVars = std.getClosureVars(value) || {};
-        const closureVars = {};
+        const closureVars = std.getClosureVars(value) || {};
+        const varNames = Object.keys(closureVars);
 
-        for (const [name, v] of Object.entries(rawClosureVars)) {
-            closureVars[name] = encode(v, replacer, seenFunctions);
+        // No closure vars - just return the function code
+        if (varNames.length === 0) {
+            return code;
         }
 
-        return { t: 'function', code, closureVars };
+        // Has closure vars - wrap in IIFE
+        const innerIndent = indent + '  ';
+        const reindentedCode = reindent(code, innerIndent);
+        let result = '(() => {\n';
+        for (const name of varNames) {
+            let varSource = toSource(closureVars[name], innerIndent, seenFunctions);
+            // Reindent multi-line values for proper alignment
+            if (varSource.includes('\n')) {
+                varSource = reindent(varSource, innerIndent);
+            }
+            result += `${innerIndent}let ${name} = ${varSource};\n`;
+        }
+        result += `${innerIndent}return ${reindentedCode};\n`;
+        result += `${indent}})()`;
+        return result;
     }
 
     // Handle arrays
     if (Array.isArray(value)) {
-        return { t: 'array', v: value.map(v => encode(v, replacer, seenFunctions)) };
+        if (value.length === 0) {
+            return '[]';
+        }
+        const innerIndent = indent + '  ';
+        const items = value.map(v => toSource(v, innerIndent, seenFunctions));
+        // Simple arrays on one line, complex on multiple
+        const oneLine = '[' + items.join(', ') + ']';
+        if (oneLine.length < 60 && !oneLine.includes('\n')) {
+            return oneLine;
+        }
+        return '[\n' + items.map(item => innerIndent + item).join(',\n') + '\n' + indent + ']';
     }
 
-    // Handle plain objects
+    // Handle plain objects only - reject other object types
     if (type === 'object') {
-        const encoded = {};
-        for (const [k, v] of Object.entries(value)) {
-            encoded[k] = encode(v, replacer, seenFunctions);
+        const proto = Object.getPrototypeOf(value);
+        if (proto !== null && proto !== Object.prototype) {
+            const name = value.constructor?.name || 'object';
+            throw new Error(`${name} cannot be converted to source`);
         }
-        return { t: 'object', v: encoded };
+        const entries = Object.entries(value);
+        if (entries.length === 0) {
+            return '{}';
+        }
+        const innerIndent = indent + '  ';
+        const props = entries.map(([k, v]) => {
+            const key = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(k) ? k : JSON.stringify(k);
+            const valSource = toSource(v, innerIndent, seenFunctions);
+            return `${key}: ${valSource}`;
+        });
+        // Simple objects on one line, complex on multiple
+        const oneLine = '{ ' + props.join(', ') + ' }';
+        if (oneLine.length < 60 && !oneLine.includes('\n')) {
+            return oneLine;
+        }
+        return '{\n' + props.map(prop => innerIndent + prop).join(',\n') + '\n' + indent + '}';
     }
 
-    throw new Error(`Cannot serialize value of type ${type}`);
+    throw new Error(`Cannot convert value of type ${type} to source`);
 }
 
 /**
- * Decode a tagged value back to its original form.
- * @param {{ t: string, [key: string]: any }} tagged
- * @param {Function} [reviver]
- * @returns {any}
- */
-function decode(tagged, reviver) {
-    if (!tagged || typeof tagged.t !== 'string') {
-        throw new Error('Invalid tagged value: missing "t" property');
-    }
-
-    const { t: type, ...data } = tagged;
-
-    // Try custom reviver first for non-builtin types
-    if (reviver && !['null', 'undefined', 'boolean', 'number', 'string', 'array', 'object', 'function'].includes(type)) {
-        const custom = reviver(type, data);
-        if (custom !== undefined) {
-            return custom;
-        }
-        throw new Error(`Unknown type "${type}" and reviver returned undefined`);
-    }
-
-    // Handle built-in types
-    switch (type) {
-        case 'null':
-            return null;
-        case 'undefined':
-            return undefined;
-        case 'boolean':
-        case 'number':
-        case 'string':
-            return data.v;
-        case 'array':
-            return data.v.map(v => decode(v, reviver));
-        case 'object': {
-            const decoded = {};
-            for (const [k, v] of Object.entries(data.v)) {
-                decoded[k] = decode(v, reviver);
-            }
-            return decoded;
-        }
-        case 'function': {
-            const closureVars = {};
-            for (const [name, v] of Object.entries(data.closureVars)) {
-                closureVars[name] = decode(v, reviver);
-            }
-            const varNames = Object.keys(closureVars);
-            const varValues = Object.values(closureVars);
-            const factory = new Function(...varNames, `return ${data.code}`);
-            return factory(...varValues);
-        }
-        default:
-            // Unknown type without reviver
-            if (reviver) {
-                const custom = reviver(type, data);
-                if (custom !== undefined) {
-                    return custom;
-                }
-            }
-            throw new Error(`Unknown type "${type}"`);
-    }
-}
-
-/**
- * Serialize a function including its closure variables.
- * Returns a JSON string with all values tagged by type.
+ * Convert a function to standalone JavaScript source code.
+ * The returned code, when evaluated, produces the function with all
+ * closure variables embedded.
  *
- * @param {Function} fn - The function to serialize
- * @param {{ replacer?: (value: any) => { t: string, [key: string]: any } | undefined }} [options]
- * @returns {string} JSON string
+ * @param {Function} fn - The function to convert
+ * @returns {string} JavaScript source code
  * @throws {TypeError} If fn is not a function
- * @throws {Error} If circular function references are detected or values are not serializable
+ * @throws {Error} If circular function references are detected or values cannot be converted
  */
-export function serialize(fn, options = {}) {
+export function closureToSource(fn) {
     if (typeof fn !== 'function') {
         throw new TypeError('Expected a function');
     }
-    const encoded = encode(fn, options.replacer);
-    return JSON.stringify(encoded);
-}
-
-/**
- * Deserialize a function from its serialized string form.
- *
- * @param {string} str - The serialized string
- * @param {{ reviver?: (type: string, data: object) => any | undefined }} [options]
- * @returns {Function} The restored function
- * @throws {TypeError} If str is not a string
- * @throws {Error} If the format is invalid or types cannot be revived
- */
-export function deserialize(str, options = {}) {
-    if (typeof str !== 'string') {
-        throw new TypeError('Expected a string');
-    }
-    const tagged = JSON.parse(str);
-    return decode(tagged, options.reviver);
+    return toSource(fn);
 }
