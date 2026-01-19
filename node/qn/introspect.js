@@ -1,7 +1,5 @@
 import * as std from 'std';
 
-const FUNCTION_MARKER = '__serialized_function__';
-
 /**
  * Get the closure variables of a function.
  *
@@ -13,76 +11,170 @@ export function getClosureVars(fn) {
 }
 
 /**
- * Serialize a function including its closure variables.
- * Recursively serializes any function-valued closure variables.
- *
- * @param {Function} fn - The function to serialize
- * @returns {{ code: string, closureVars: Record<string, any> }} Serialized form
- * @throws {TypeError} If fn is not a function
- * @throws {Error} If circular function references are detected or closure vars are not serializable
+ * Encode a value into tagged format.
+ * @param {any} value
+ * @param {Function} [replacer]
+ * @param {WeakSet} [seenFunctions]
+ * @returns {{ t: string, [key: string]: any }}
  */
-export function serialize(fn, _seen = new WeakSet()) {
-    if (typeof fn !== 'function') {
-        throw new TypeError('Expected a function');
-    }
-
-    if (_seen.has(fn)) {
-        throw new Error('Circular function reference detected');
-    }
-    _seen.add(fn);
-
-    const code = fn.toString();
-    const rawClosureVars = std.getClosureVars(fn) || {};
-    const closureVars = {};
-
-    for (const [name, value] of Object.entries(rawClosureVars)) {
-        if (typeof value === 'function') {
-            closureVars[name] = {
-                [FUNCTION_MARKER]: true,
-                ...serialize(value, _seen)
-            };
-        } else {
-            try {
-                JSON.stringify(value);
-            } catch (e) {
-                throw new Error(`Closure variable '${name}' is not JSON-serializable: ${e.message}`);
+function encode(value, replacer, seenFunctions = new WeakSet()) {
+    // Try custom replacer first
+    if (replacer) {
+        const custom = replacer(value);
+        if (custom !== undefined) {
+            // Validate custom result has a type tag
+            if (!custom || typeof custom.t !== 'string') {
+                throw new Error('Replacer must return an object with a "t" property');
             }
-            closureVars[name] = value;
+            return custom;
         }
     }
 
-    return { code, closureVars };
+    // Handle null
+    if (value === null) {
+        return { t: 'null' };
+    }
+
+    // Handle undefined
+    if (value === undefined) {
+        return { t: 'undefined' };
+    }
+
+    // Handle primitives
+    const type = typeof value;
+    if (type === 'boolean' || type === 'number' || type === 'string') {
+        return { t: type, v: value };
+    }
+
+    // Handle functions
+    if (type === 'function') {
+        if (seenFunctions.has(value)) {
+            throw new Error('Circular function reference detected');
+        }
+        seenFunctions.add(value);
+
+        const code = value.toString();
+        const rawClosureVars = std.getClosureVars(value) || {};
+        const closureVars = {};
+
+        for (const [name, v] of Object.entries(rawClosureVars)) {
+            closureVars[name] = encode(v, replacer, seenFunctions);
+        }
+
+        return { t: 'function', code, closureVars };
+    }
+
+    // Handle arrays
+    if (Array.isArray(value)) {
+        return { t: 'array', v: value.map(v => encode(v, replacer, seenFunctions)) };
+    }
+
+    // Handle plain objects
+    if (type === 'object') {
+        const encoded = {};
+        for (const [k, v] of Object.entries(value)) {
+            encoded[k] = encode(v, replacer, seenFunctions);
+        }
+        return { t: 'object', v: encoded };
+    }
+
+    throw new Error(`Cannot serialize value of type ${type}`);
 }
 
 /**
- * Deserialize a function from its serialized form.
- * Recursively deserializes any function-valued closure variables.
- *
- * @param {{ code: string, closureVars: Record<string, any> }} serialized
- * @returns {Function} The restored function
- * @throws {TypeError} If the serialized form is invalid
+ * Decode a tagged value back to its original form.
+ * @param {{ t: string, [key: string]: any }} tagged
+ * @param {Function} [reviver]
+ * @returns {any}
  */
-export function deserialize({ code, closureVars }) {
-    if (typeof code !== 'string') {
-        throw new TypeError('Expected code to be a string');
-    }
-    if (typeof closureVars !== 'object' || closureVars === null) {
-        throw new TypeError('Expected closureVars to be an object');
+function decode(tagged, reviver) {
+    if (!tagged || typeof tagged.t !== 'string') {
+        throw new Error('Invalid tagged value: missing "t" property');
     }
 
-    const resolvedClosureVars = {};
-    for (const [name, value] of Object.entries(closureVars)) {
-        if (value && typeof value === 'object' && value[FUNCTION_MARKER]) {
-            const { [FUNCTION_MARKER]: _, ...funcData } = value;
-            resolvedClosureVars[name] = deserialize(funcData);
-        } else {
-            resolvedClosureVars[name] = value;
+    const { t: type, ...data } = tagged;
+
+    // Try custom reviver first for non-builtin types
+    if (reviver && !['null', 'undefined', 'boolean', 'number', 'string', 'array', 'object', 'function'].includes(type)) {
+        const custom = reviver(type, data);
+        if (custom !== undefined) {
+            return custom;
         }
+        throw new Error(`Unknown type "${type}" and reviver returned undefined`);
     }
 
-    const varNames = Object.keys(resolvedClosureVars);
-    const varValues = Object.values(resolvedClosureVars);
+    // Handle built-in types
+    switch (type) {
+        case 'null':
+            return null;
+        case 'undefined':
+            return undefined;
+        case 'boolean':
+        case 'number':
+        case 'string':
+            return data.v;
+        case 'array':
+            return data.v.map(v => decode(v, reviver));
+        case 'object': {
+            const decoded = {};
+            for (const [k, v] of Object.entries(data.v)) {
+                decoded[k] = decode(v, reviver);
+            }
+            return decoded;
+        }
+        case 'function': {
+            const closureVars = {};
+            for (const [name, v] of Object.entries(data.closureVars)) {
+                closureVars[name] = decode(v, reviver);
+            }
+            const varNames = Object.keys(closureVars);
+            const varValues = Object.values(closureVars);
+            const factory = new Function(...varNames, `return ${data.code}`);
+            return factory(...varValues);
+        }
+        default:
+            // Unknown type without reviver
+            if (reviver) {
+                const custom = reviver(type, data);
+                if (custom !== undefined) {
+                    return custom;
+                }
+            }
+            throw new Error(`Unknown type "${type}"`);
+    }
+}
 
-    const factory = new Function(...varNames, `return ${code}`);
-    return factory(...varValues);
+/**
+ * Serialize a function including its closure variables.
+ * Returns a JSON string with all values tagged by type.
+ *
+ * @param {Function} fn - The function to serialize
+ * @param {{ replacer?: (value: any) => { t: string, [key: string]: any } | undefined }} [options]
+ * @returns {string} JSON string
+ * @throws {TypeError} If fn is not a function
+ * @throws {Error} If circular function references are detected or values are not serializable
+ */
+export function serialize(fn, options = {}) {
+    if (typeof fn !== 'function') {
+        throw new TypeError('Expected a function');
+    }
+    const encoded = encode(fn, options.replacer);
+    return JSON.stringify(encoded);
+}
+
+/**
+ * Deserialize a function from its serialized string form.
+ *
+ * @param {string} str - The serialized string
+ * @param {{ reviver?: (type: string, data: object) => any | undefined }} [options]
+ * @returns {Function} The restored function
+ * @throws {TypeError} If str is not a string
+ * @throws {Error} If the format is invalid or types cannot be revived
+ */
+export function deserialize(str, options = {}) {
+    if (typeof str !== 'string') {
+        throw new TypeError('Expected a string');
+    }
+    const tagged = JSON.parse(str);
+    return decode(tagged, options.reviver);
 }

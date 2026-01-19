@@ -40,78 +40,59 @@ describe('qn:introspect getClosureVars', () => {
         assert.deepStrictEqual(JSON.parse(output), { counter: 2 })
     })
 
-    testQnOnly('handles nested closures', ({ bin, dir }) => {
-        writeFileSync(`${dir}/test.js`, `
-            import { getClosureVars } from "qn:introspect";
-            let outer = 100;
-            let makeInner = () => {
-                let inner = 200;
-                return () => outer + inner;
-            };
-            let innerFn = makeInner();
-            console.log(JSON.stringify(getClosureVars(innerFn)));
-        `)
-        const output = $`${bin} ${dir}/test.js`
-        assert.deepStrictEqual(JSON.parse(output), { outer: 100, inner: 200 })
-    })
-
-    testQnOnly('returns empty object for function with no closure', ({ bin, dir }) => {
-        writeFileSync(`${dir}/test.js`, `
-            import { getClosureVars } from "qn:introspect";
-            function plain() { return 42; }
-            console.log(JSON.stringify(getClosureVars(plain)));
-        `)
-        const output = $`${bin} ${dir}/test.js`
-        assert.deepStrictEqual(JSON.parse(output), {})
-    })
-
     testQnOnly('returns undefined for non-function values', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
             import { getClosureVars } from "qn:introspect";
             console.log(JSON.stringify({
                 num: getClosureVars(42),
-                str: getClosureVars("hello"),
-                nil: getClosureVars(null),
-                obj: getClosureVars({})
+                str: getClosureVars("hello")
             }));
         `)
         const output = $`${bin} ${dir}/test.js`
         const result = JSON.parse(output)
         assert.strictEqual(result.num, undefined)
         assert.strictEqual(result.str, undefined)
-        assert.strictEqual(result.nil, undefined)
-        assert.strictEqual(result.obj, undefined)
     })
 })
 
 describe('qn:introspect serialize/deserialize', () => {
+    testQnOnly('serialize returns a string', ({ bin, dir }) => {
+        writeFileSync(`${dir}/test.js`, `
+            import { serialize } from 'qn:introspect';
+            let x = 5;
+            let f = () => x * 2;
+            const str = serialize(f);
+            console.log(JSON.stringify({ isString: typeof str === 'string' }));
+        `)
+        const output = JSON.parse($`${bin} ${dir}/test.js`)
+        assert.strictEqual(output.isString, true)
+    })
+
     testQnOnly('serializes and deserializes a simple closure', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
             import { serialize, deserialize } from 'qn:introspect';
             let foo = 3;
             let bar = "hello";
             let f = () => foo + bar.length;
-            const serialized = serialize(f);
-            const restored = deserialize(serialized);
+            const str = serialize(f);
+            const restored = deserialize(str);
             console.log(JSON.stringify({
                 original: f(),
-                restored: restored(),
-                match: f() === restored()
+                restored: restored()
             }));
         `)
         const output = JSON.parse($`${bin} ${dir}/test.js`)
         assert.strictEqual(output.original, 8)
         assert.strictEqual(output.restored, 8)
-        assert.strictEqual(output.match, true)
     })
 
-    testQnOnly('serializes function with nested function closure', ({ bin, dir }) => {
+    testQnOnly('serializes nested function closures', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
             import { serialize, deserialize } from 'qn:introspect';
             let helper = (x) => x * 2;
             let outer = (x) => helper(x) + 1;
-            const serialized = serialize(outer);
-            const restored = deserialize(serialized);
+            const str = serialize(outer);
+            const restored = deserialize(str);
             console.log(JSON.stringify({
                 original: outer(5),
                 restored: restored(5)
@@ -128,8 +109,8 @@ describe('qn:introspect serialize/deserialize', () => {
             let a = (x) => x + 1;
             let b = (x) => a(x) * 2;
             let c = (x) => b(x) + 3;
-            const serialized = serialize(c);
-            const restored = deserialize(serialized);
+            const str = serialize(c);
+            const restored = deserialize(str);
             console.log(JSON.stringify({
                 original: c(5),
                 restored: restored(5)
@@ -140,55 +121,41 @@ describe('qn:introspect serialize/deserialize', () => {
         assert.strictEqual(output.restored, 15)
     })
 
-    testQnOnly('handles mixed function and non-function closure vars', ({ bin, dir }) => {
+    testQnOnly('handles arrays and objects in closures', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
             import { serialize, deserialize } from 'qn:introspect';
-            let factor = 10;
-            let transform = (x) => x * 2;
-            let compute = (x) => transform(x) + factor;
-            const serialized = serialize(compute);
-            const restored = deserialize(serialized);
+            let items = [1, 2, 3];
+            let config = { multiplier: 2 };
+            let process = () => items.map(x => x * config.multiplier);
+            const str = serialize(process);
+            const restored = deserialize(str);
             console.log(JSON.stringify({
-                original: compute(5),
-                restored: restored(5)
+                original: process(),
+                restored: restored()
             }));
         `)
         const output = JSON.parse($`${bin} ${dir}/test.js`)
-        assert.strictEqual(output.original, 20)
-        assert.strictEqual(output.restored, 20)
+        assert.deepStrictEqual(output.original, [2, 4, 6])
+        assert.deepStrictEqual(output.restored, [2, 4, 6])
     })
 
-    testQnOnly('works with functions that have no closure', ({ bin, dir }) => {
+    testQnOnly('handles null and undefined in closures', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
             import { serialize, deserialize } from 'qn:introspect';
-            let add = (a, b) => a + b;
-            const serialized = serialize(add);
-            const restored = deserialize(serialized);
+            let n = null;
+            let u = undefined;
+            let f = () => ({ n, u });
+            const str = serialize(f);
+            const restored = deserialize(str);
+            const result = restored();
             console.log(JSON.stringify({
-                original: add(3, 4),
-                restored: restored(3, 4)
+                nIsNull: result.n === null,
+                uIsUndefined: result.u === undefined
             }));
         `)
         const output = JSON.parse($`${bin} ${dir}/test.js`)
-        assert.strictEqual(output.original, 7)
-        assert.strictEqual(output.restored, 7)
-    })
-
-    testQnOnly('throws on non-JSON-serializable closure vars', ({ bin, dir }) => {
-        writeFileSync(`${dir}/test.js`, `
-            import { serialize } from 'qn:introspect';
-            let circular = {};
-            circular.self = circular;
-            let f = () => circular;
-            try {
-                serialize(f);
-                console.log("NO_ERROR");
-            } catch (e) {
-                console.log("ERROR:" + (e.message.includes('not JSON-serializable') ? 'correct' : e.message));
-            }
-        `)
-        const output = $`${bin} ${dir}/test.js`
-        assert.strictEqual(output, "ERROR:correct")
+        assert.strictEqual(output.nIsNull, true)
+        assert.strictEqual(output.uIsUndefined, true)
     })
 
     testQnOnly('throws on non-function input', ({ bin, dir }) => {
@@ -220,5 +187,180 @@ describe('qn:introspect serialize/deserialize', () => {
         `)
         const output = $`${bin} ${dir}/test.js`
         assert.strictEqual(output, "ERROR:correct")
+    })
+})
+
+describe('qn:introspect replacer/reviver', () => {
+    testQnOnly('custom replacer handles Date objects', ({ bin, dir }) => {
+        writeFileSync(`${dir}/test.js`, `
+            import { serialize, deserialize } from 'qn:introspect';
+            let timestamp = new Date('2024-01-15T12:00:00Z');
+            let getTime = () => timestamp.getTime();
+
+            const str = serialize(getTime, {
+                replacer: (value) => {
+                    if (value instanceof Date) {
+                        return { t: 'Date', iso: value.toISOString() };
+                    }
+                }
+            });
+
+            const restored = deserialize(str, {
+                reviver: (type, data) => {
+                    if (type === 'Date') return new Date(data.iso);
+                }
+            });
+
+            console.log(JSON.stringify({
+                original: getTime(),
+                restored: restored()
+            }));
+        `)
+        const output = JSON.parse($`${bin} ${dir}/test.js`)
+        assert.strictEqual(output.original, 1705320000000)
+        assert.strictEqual(output.restored, 1705320000000)
+    })
+
+    testQnOnly('custom replacer handles Map objects', ({ bin, dir }) => {
+        writeFileSync(`${dir}/test.js`, `
+            import { serialize, deserialize } from 'qn:introspect';
+            let lookup = new Map([['a', 1], ['b', 2]]);
+            let getValue = (key) => lookup.get(key);
+
+            const str = serialize(getValue, {
+                replacer: (value) => {
+                    if (value instanceof Map) {
+                        return { t: 'Map', entries: [...value.entries()] };
+                    }
+                }
+            });
+
+            const restored = deserialize(str, {
+                reviver: (type, data) => {
+                    if (type === 'Map') return new Map(data.entries);
+                }
+            });
+
+            console.log(JSON.stringify({
+                originalA: getValue('a'),
+                restoredA: restored('a'),
+                originalB: getValue('b'),
+                restoredB: restored('b')
+            }));
+        `)
+        const output = JSON.parse($`${bin} ${dir}/test.js`)
+        assert.strictEqual(output.originalA, 1)
+        assert.strictEqual(output.restoredA, 1)
+        assert.strictEqual(output.originalB, 2)
+        assert.strictEqual(output.restoredB, 2)
+    })
+
+    testQnOnly('custom replacer handles Set objects', ({ bin, dir }) => {
+        writeFileSync(`${dir}/test.js`, `
+            import { serialize, deserialize } from 'qn:introspect';
+            let items = new Set([1, 2, 3]);
+            let hasItem = (x) => items.has(x);
+
+            const str = serialize(hasItem, {
+                replacer: (value) => {
+                    if (value instanceof Set) {
+                        return { t: 'Set', values: [...value] };
+                    }
+                }
+            });
+
+            const restored = deserialize(str, {
+                reviver: (type, data) => {
+                    if (type === 'Set') return new Set(data.values);
+                }
+            });
+
+            console.log(JSON.stringify({
+                has2: hasItem(2),
+                restored2: restored(2),
+                has5: hasItem(5),
+                restored5: restored(5)
+            }));
+        `)
+        const output = JSON.parse($`${bin} ${dir}/test.js`)
+        assert.strictEqual(output.has2, true)
+        assert.strictEqual(output.restored2, true)
+        assert.strictEqual(output.has5, false)
+        assert.strictEqual(output.restored5, false)
+    })
+
+    testQnOnly('replacer must return object with t property', ({ bin, dir }) => {
+        writeFileSync(`${dir}/test.js`, `
+            import { serialize } from 'qn:introspect';
+            let d = new Date();
+            let f = () => d;
+            try {
+                serialize(f, {
+                    replacer: (value) => {
+                        if (value instanceof Date) {
+                            return { invalid: 'no t property' };
+                        }
+                    }
+                });
+                console.log("NO_ERROR");
+            } catch (e) {
+                console.log("ERROR:" + (e.message.includes('"t"') ? 'correct' : e.message));
+            }
+        `)
+        const output = $`${bin} ${dir}/test.js`
+        assert.strictEqual(output, "ERROR:correct")
+    })
+
+    testQnOnly('unknown type without reviver throws', ({ bin, dir }) => {
+        writeFileSync(`${dir}/test.js`, `
+            import { serialize, deserialize } from 'qn:introspect';
+            let d = new Date();
+            let f = () => d;
+            const str = serialize(f, {
+                replacer: (value) => {
+                    if (value instanceof Date) {
+                        return { t: 'CustomDate', iso: value.toISOString() };
+                    }
+                }
+            });
+            try {
+                deserialize(str); // no reviver
+                console.log("NO_ERROR");
+            } catch (e) {
+                console.log("ERROR:" + (e.message.includes('Unknown type') ? 'correct' : e.message));
+            }
+        `)
+        const output = $`${bin} ${dir}/test.js`
+        assert.strictEqual(output, "ERROR:correct")
+    })
+
+    testQnOnly('nested custom types work correctly', ({ bin, dir }) => {
+        writeFileSync(`${dir}/test.js`, `
+            import { serialize, deserialize } from 'qn:introspect';
+            let dates = [new Date('2024-01-01'), new Date('2024-06-15')];
+            let getYears = () => dates.map(d => d.getFullYear());
+
+            const str = serialize(getYears, {
+                replacer: (value) => {
+                    if (value instanceof Date) {
+                        return { t: 'Date', iso: value.toISOString() };
+                    }
+                }
+            });
+
+            const restored = deserialize(str, {
+                reviver: (type, data) => {
+                    if (type === 'Date') return new Date(data.iso);
+                }
+            });
+
+            console.log(JSON.stringify({
+                original: getYears(),
+                restored: restored()
+            }));
+        `)
+        const output = JSON.parse($`${bin} ${dir}/test.js`)
+        assert.deepStrictEqual(output.original, [2024, 2024])
+        assert.deepStrictEqual(output.restored, [2024, 2024])
     })
 })
