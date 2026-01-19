@@ -10,12 +10,17 @@
 
 import "node-globals"
 import process from "node:process"
-import $, { ProcessPromise, ProcessOutput } from "qx/core"
+import { Buffer } from "node:buffer"
+import $, { ProcessPromise, ProcessOutput, retry } from "qx/core"
+
+// Expose Buffer globally
+globalThis.Buffer = Buffer
 
 // Expose $ and related classes globally (like zx)
 globalThis.$ = $
 globalThis.ProcessPromise = ProcessPromise
 globalThis.ProcessOutput = ProcessOutput
+globalThis.retry = retry
 
 // cd function for changing directories (uses node:process)
 globalThis.cd = (path) => {
@@ -35,17 +40,6 @@ globalThis.sleep = (ms) => {
 // echo function (like zx's echo, uses node:process)
 globalThis.echo = (...args) => {
 	process.stdout.write(args.join(' ') + '\n')
-}
-
-// Quiet mode helper
-globalThis.quiet = (fn) => {
-	const prevVerbose = $.verbose
-	$.verbose = false
-	try {
-		return fn()
-	} finally {
-		$.verbose = prevVerbose
-	}
 }
 
 // within helper - run code in a different directory
