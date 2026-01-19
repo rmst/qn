@@ -188,6 +188,27 @@ describe('qn:introspect serialize/deserialize', () => {
         const output = $`${bin} ${dir}/test.js`
         assert.strictEqual(output, "ERROR:correct")
     })
+
+    testQnOnly('serializes imported functions with their closures', ({ bin, dir }) => {
+        writeFileSync(`${dir}/utils.js`, `
+            let secret = 42;
+            export function helper(x) { return x + secret; }
+        `)
+        writeFileSync(`${dir}/test.js`, `
+            import { serialize, deserialize } from 'qn:introspect';
+            import { helper } from './utils.js';
+            let f = (x) => helper(x) + 100;
+            const str = serialize(f);
+            const restored = deserialize(str);
+            console.log(JSON.stringify({
+                original: f(10),
+                restored: restored(10)
+            }));
+        `)
+        const output = JSON.parse($`${bin} ${dir}/test.js`)
+        assert.strictEqual(output.original, 152)
+        assert.strictEqual(output.restored, 152)
+    })
 })
 
 describe('qn:introspect replacer/reviver', () => {

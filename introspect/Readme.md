@@ -65,19 +65,24 @@ deserialize(str, {
 
 ### What gets captured
 
-Only variables from enclosing **function scopes** are captured. Module-level bindings and globals are not:
+Closure variables from enclosing scopes are captured, including module-level bindings:
 
 ```javascript
-import { helper } from './utils.js';  // module binding - NOT captured
-const GLOBAL_CONFIG = { ... };         // module scope - NOT captured
+// utils.js
+let secret = 42;
+export function helper(x) { return x + secret; }
 
-function outer() {
-    let x = 5;                         // function scope - captured
-    return () => x + helper();         // helper must exist at deserialize time
-}
+// main.js
+import { helper } from './utils.js';  // captured (including helper's own closure)
+let multiplier = 2;                    // captured
+
+let f = (x) => helper(x) * multiplier;
+serialize(f);  // captures: helper (with secret=42), multiplier
 ```
 
-**Contract:** Globals and module bindings are expected to exist in the deserialize environment. They're referenced by name in the function source, not serialized.
+Imported functions are serialized recursively with their own closure variables.
+
+**Not captured:** True globals like `console`, `Math`, `fetch` that aren't defined in any module scope. These must exist in the deserialize environment.
 
 ### Types requiring custom replacer/reviver
 
