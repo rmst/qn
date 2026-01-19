@@ -107,12 +107,12 @@ $(BIN_DIR)/obj/quickjs-libc.c: quickjs/quickjs-libc.c quickjs-libc.patch sandbox
 $(BIN_DIR)/obj/quickjs-libc.o: $(BIN_DIR)/obj/quickjs-libc.c | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
-# Build introspect module
-$(BIN_DIR)/obj/introspect.o: introspect/introspect.c introspect/introspect.h | $(BIN_DIR)/obj
+# Build introspect module (depends on quickjs-deps for patched quickjs.h with JS_GetClosureVars)
+$(BIN_DIR)/obj/introspect.o: introspect/introspect.c introspect/introspect.h quickjs-deps | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
 # Build sandbox module (compiles to empty if USE_SANDBOX is not defined)
-$(BIN_DIR)/obj/sandboxed-worker.o: sandboxed-worker/sandboxed-worker.c sandboxed-worker/sandboxed-worker.h | $(BIN_DIR)/obj
+$(BIN_DIR)/obj/sandboxed-worker.o: sandboxed-worker/sandboxed-worker.c sandboxed-worker/sandboxed-worker.h quickjs-deps | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
 # Build SQLite amalgamation
