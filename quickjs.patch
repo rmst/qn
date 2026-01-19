@@ -1,5 +1,5 @@
---- quickjs/quickjs.c	2026-01-16 11:05:44.126418007 +0000
-+++ quickjs/quickjs.c	2026-01-18 16:52:56.111118227 +0000
+--- quickjs/quickjs.c	2026-01-19 10:42:01.014622649 +0000
++++ quickjs/quickjs.c	2026-01-19 10:42:33.330595346 +0000
 @@ -794,6 +794,7 @@
      BOOL is_star; /* import_name = '*' is a valid import name, so need a flag */
      JSAtom import_name;
@@ -8,7 +8,53 @@
  } JSImportEntry;
  
  typedef enum {
-@@ -29454,7 +29455,29 @@
+@@ -15457,6 +15458,45 @@
+     return JS_UNDEFINED;
+ }
+ 
++/* Get closure variables as a JS object { varName: value, ... } */
++JSValue JS_GetClosureVars(JSContext *ctx, JSValueConst func_val)
++{
++    JSObject *p;
++    JSFunctionBytecode *b;
++    JSValue obj;
++    int i;
++
++    if (JS_VALUE_GET_TAG(func_val) != JS_TAG_OBJECT)
++        return JS_UNDEFINED;
++    p = JS_VALUE_GET_OBJ(func_val);
++    if (!js_class_has_bytecode(p->class_id))
++        return JS_UNDEFINED;
++
++    b = p->u.func.function_bytecode;
++    if (!b || b->closure_var_count == 0)
++        return JS_NewObject(ctx);
++
++    obj = JS_NewObject(ctx);
++    if (JS_IsException(obj))
++        return obj;
++
++    for (i = 0; i < b->closure_var_count; i++) {
++        JSClosureVar *cv = &b->closure_var[i];
++        JSVarRef *var_ref = p->u.func.var_refs[i];
++        JSValue val;
++        if (var_ref) {
++            val = JS_DupValue(ctx, *var_ref->pvalue);
++        } else {
++            val = JS_UNDEFINED;
++        }
++        if (JS_SetProperty(ctx, obj, cv->var_name, val) < 0) {
++            JS_FreeValue(ctx, obj);
++            return JS_EXCEPTION;
++        }
++    }
++    return obj;
++}
++
+ static int js_arguments_define_own_property(JSContext *ctx,
+                                             JSValueConst this_obj,
+                                             JSAtom prop, JSValueConst val,
+@@ -29454,7 +29494,29 @@
                  ret = js_resolve_export(ctx, &res_m,
                                          &res_me, m1, mi->import_name);
                  if (ret != JS_RESOLVE_RES_FOUND) {
@@ -39,7 +85,7 @@
                      goto fail;
                  }
                  if (res_me->local_name == JS_ATOM__star_) {
-@@ -30605,6 +30628,11 @@
+@@ -30605,6 +30667,11 @@
      mi->import_name = JS_DupAtom(ctx, import_name);
      mi->var_idx = var_idx;
      mi->is_star = is_star;
@@ -50,4 +96,15 @@
 +    }
      return 0;
  }
+ 
+--- quickjs/quickjs.h	2026-01-19 10:42:01.017581183 +0000
++++ quickjs/quickjs.h	2026-01-19 10:42:45.670376276 +0000
+@@ -760,6 +760,8 @@
+ JS_BOOL JS_IsConstructor(JSContext* ctx, JSValueConst val);
+ JS_BOOL JS_SetConstructorBit(JSContext *ctx, JSValueConst func_obj, JS_BOOL val);
+ 
++JSValue JS_GetClosureVars(JSContext *ctx, JSValueConst func_val);
++
+ JSValue JS_NewArray(JSContext *ctx);
+ int JS_IsArray(JSContext *ctx, JSValueConst val);
  

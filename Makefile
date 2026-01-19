@@ -44,7 +44,8 @@ QJSXC_PROG = $(BIN_DIR)/qjsxc
 QUICKJS_OBJS = $(BIN_DIR)/quickjs/.obj/quickjs.o $(BIN_DIR)/quickjs/.obj/libregexp.o \
                $(BIN_DIR)/quickjs/.obj/libunicode.o $(BIN_DIR)/quickjs/.obj/cutils.o \
                $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/quickjs/.obj/dtoa.o \
-               $(BIN_DIR)/quickjs/.obj/repl.o $(BIN_DIR)/obj/sandboxed-worker.o
+               $(BIN_DIR)/quickjs/.obj/repl.o $(BIN_DIR)/obj/sandboxed-worker.o \
+               $(BIN_DIR)/obj/introspect.o
 
 # Convenience symlinks
 QJSX_LINK = bin/qjsx
@@ -63,7 +64,7 @@ $(BIN_DIR)/obj:
 	mkdir -p $(BIN_DIR)/obj
 
 # Build qjsx executable
-$(QJSX_PROG): $(BIN_DIR)/obj/qjsx.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o quickjs-deps | $(BIN_DIR)
+$(QJSX_PROG): $(BIN_DIR)/obj/qjsx.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o $(BIN_DIR)/obj/introspect.o quickjs-deps | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(BIN_DIR)/obj/qjsx.o $(QUICKJS_OBJS) $(LIBS)
 	chmod +x $@
 
@@ -76,7 +77,7 @@ $(BIN_DIR)/obj/qjsx.o: $(BIN_DIR)/obj/qjsx.c module_resolution/module-resolution
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
 # Build qjsxc executable
-$(QJSXC_PROG): $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o quickjs-deps | $(BIN_DIR)
+$(QJSXC_PROG): $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o $(BIN_DIR)/obj/introspect.o quickjs-deps | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(BIN_DIR)/obj/qjsxc.o $(QUICKJS_OBJS) $(LIBS)
 	chmod +x $@
 	cp $(BIN_DIR)/quickjs/*.h $(BIN_DIR)/
@@ -85,9 +86,9 @@ $(QJSXC_PROG): $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/o
 	cp exit-handler.h $(BIN_DIR)/
 	cp $(BIN_DIR)/quickjs/libquickjs.a $(BIN_DIR)/
 	# Replace unpatched quickjs-libc.o with patched version in libquickjs.a
-	# Also add sandboxed-worker.o which is required by the patched quickjs-libc
+	# Also add sandboxed-worker.o and introspect.o which are required by the patched quickjs-libc
 	ar d $(BIN_DIR)/libquickjs.a quickjs-libc.nolto.o 2>/dev/null || true
-	ar r $(BIN_DIR)/libquickjs.a $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o
+	ar r $(BIN_DIR)/libquickjs.a $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o $(BIN_DIR)/obj/introspect.o
 
 # Generate qjsxc.c from quickjs/qjsc.c by applying the patch
 $(BIN_DIR)/obj/qjsxc.c: quickjs/qjsc.c qjsxc.patch module_resolution/module-resolution.h | $(BIN_DIR)/obj
@@ -97,12 +98,17 @@ $(BIN_DIR)/obj/qjsxc.c: quickjs/qjsc.c qjsxc.patch module_resolution/module-reso
 $(BIN_DIR)/obj/qjsxc.o: $(BIN_DIR)/obj/qjsxc.c module_resolution/module-resolution.h | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -DCONFIG_CC=\"$(CC)\" -DCONFIG_PREFIX=\"/usr/local\" -I. -I$(BIN_DIR)/obj -I$(BIN_DIR)/quickjs -c -o $@ $<
 
-# Patch and build quickjs-libc (adds import.meta.dirname and sandbox support)
-$(BIN_DIR)/obj/quickjs-libc.c: quickjs/quickjs-libc.c quickjs-libc.patch sandboxed-worker/sandboxed-worker.patch | $(BIN_DIR)/obj
+# Patch and build quickjs-libc (adds import.meta.dirname, sandbox support, and introspection)
+$(BIN_DIR)/obj/quickjs-libc.c: quickjs/quickjs-libc.c quickjs-libc.patch sandboxed-worker/sandboxed-worker.patch introspect/introspect.patch | $(BIN_DIR)/obj
 	patch -p0 < quickjs-libc.patch -o $@ quickjs/quickjs-libc.c
 	patch -p0 < sandboxed-worker/sandboxed-worker.patch $@
+	patch -p0 < introspect/introspect.patch $@
 
 $(BIN_DIR)/obj/quickjs-libc.o: $(BIN_DIR)/obj/quickjs-libc.c | $(BIN_DIR)/obj
+	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
+
+# Build introspect module
+$(BIN_DIR)/obj/introspect.o: introspect/introspect.c introspect/introspect.h | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
 # Build sandbox module (compiles to empty if USE_SANDBOX is not defined)

@@ -1,0 +1,28 @@
+--- quickjs-libc.c.orig
++++ quickjs-libc.c
+@@ -74,6 +74,8 @@
+ #include "cutils.h"
+ #include "list.h"
+
++#include "introspect/introspect.h"
++
+ #ifdef USE_SANDBOX
+ #include "sandboxed-worker/sandboxed-worker.h"
+ #endif
+@@ -1704,6 +1706,8 @@
+
+     JS_SetModuleExportList(ctx, m, js_std_funcs,
+                            countof(js_std_funcs));
++    JS_SetModuleExportList(ctx, m, js_introspect_get_funcs(),
++                           js_introspect_get_funcs_count());
+     JS_SetModuleExport(ctx, m, "in", js_new_std_file(ctx, stdin, FALSE, FALSE));
+     JS_SetModuleExport(ctx, m, "out", js_new_std_file(ctx, stdout, FALSE, FALSE));
+     JS_SetModuleExport(ctx, m, "err", js_new_std_file(ctx, stderr, FALSE, FALSE));
+@@ -1718,6 +1722,7 @@
+     if (!m)
+         return NULL;
+     JS_AddModuleExportList(ctx, m, js_std_funcs, countof(js_std_funcs));
++    JS_AddModuleExportList(ctx, m, js_introspect_get_funcs(), js_introspect_get_funcs_count());
+     JS_AddModuleExport(ctx, m, "in");
+     JS_AddModuleExport(ctx, m, "out");
+     JS_AddModuleExport(ctx, m, "err");
