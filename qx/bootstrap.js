@@ -10,7 +10,11 @@
 
 import "node-globals"
 import process from "node:process"
+import { Buffer } from "node:buffer"
 import $, { ProcessPromise, ProcessOutput } from "qx/core"
+
+// Expose Buffer globally
+globalThis.Buffer = Buffer
 
 // Expose $ and related classes globally (like zx)
 globalThis.$ = $

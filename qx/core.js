@@ -1,8 +1,24 @@
 /**
- * qx - Minimal zx-compatible shell scripting for QuickJS
+ * qx - Shell scripting for QuickJS with better ergonomics than zx
  *
- * Provides the $ tagged template function for running shell commands
- * with a Promise-based API inspired by Google's zx.
+ * Key differences from zx:
+ * - Configuration via $.quiet`...` instead of $`...`.quiet()
+ * - No global mutable state for config ($.quiet = true throws)
+ *
+ * @example
+ * // Basic usage
+ * const result = await $`echo "Hello"`
+ *
+ * // Quiet mode - suppress output
+ * const result = await $.quiet`echo "Hello"`
+ *
+ * // Chain configurations
+ * const result = await $.quiet.nothrow`exit 1`
+ *
+ * // Reuse configured shell
+ * const $q = $.quiet
+ * await $q`cmd1`
+ * await $q`cmd2`
  *
  * @see https://github.com/google/zx
  */
@@ -10,16 +26,36 @@
 import process from 'node:process'
 import { writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
+import { Buffer } from 'node:buffer'
+
+/**
+ * @typedef {Object} ShellConfig
+ * @property {string} shell - Shell executable (default: '/bin/sh')
+ * @property {string} prefix - Command prefix (default: 'set -e;')
+ * @property {boolean} quiet - Suppress stdout/stderr output
+ * @property {boolean} verbose - Print commands before execution
+ * @property {boolean} nothrow - Don't throw on non-zero exit codes
+ */
+
+/** @type {ShellConfig} */
+const defaultConfig = {
+	shell: '/bin/sh',
+	prefix: 'set -e;',
+	quiet: false,
+	verbose: false,
+	nothrow: false,
+}
 
 /**
  * ProcessOutput represents the result of a completed command.
+ * Stores data as binary (Buffer) internally, converts to string on demand.
  */
 export class ProcessOutput {
-	/** @type {string} */
-	#stdout
+	/** @type {Buffer} */
+	#stdoutBuf
 
-	/** @type {string} */
-	#stderr
+	/** @type {Buffer} */
+	#stderrBuf
 
 	/** @type {number|null} */
 	#exitCode
@@ -28,26 +64,32 @@ export class ProcessOutput {
 	#signal
 
 	/**
-	 * @param {string} stdout
-	 * @param {string} stderr
+	 * @param {Buffer} stdout
+	 * @param {Buffer} stderr
 	 * @param {number|null} exitCode
 	 * @param {string|null} signal
 	 */
 	constructor(stdout, stderr, exitCode, signal = null) {
-		this.#stdout = stdout
-		this.#stderr = stderr
+		this.#stdoutBuf = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout || '')
+		this.#stderrBuf = Buffer.isBuffer(stderr) ? stderr : Buffer.from(stderr || '')
 		this.#exitCode = exitCode
 		this.#signal = signal
 	}
 
-	/** @returns {string} */
+	/**
+	 * Returns stdout as a string (UTF-8).
+	 * @returns {string}
+	 */
 	get stdout() {
-		return this.#stdout
+		return this.#stdoutBuf.toString('utf8')
 	}
 
-	/** @returns {string} */
+	/**
+	 * Returns stderr as a string (UTF-8).
+	 * @returns {string}
+	 */
 	get stderr() {
-		return this.#stderr
+		return this.#stderrBuf.toString('utf8')
 	}
 
 	/** @returns {number|null} */
@@ -61,19 +103,36 @@ export class ProcessOutput {
 	}
 
 	/**
+	 * Returns stdout as a Buffer (binary data).
+	 * @returns {Buffer}
+	 */
+	buffer() {
+		return this.#stdoutBuf
+	}
+
+	/**
+	 * Returns stderr as a Buffer (binary data).
+	 * @returns {Buffer}
+	 */
+	stderrBuffer() {
+		return this.#stderrBuf
+	}
+
+	/**
 	 * Returns stdout with trailing newline removed.
 	 * @returns {string}
 	 */
 	toString() {
-		return this.#stdout.replace(/\n$/, '')
+		return this.stdout.replace(/\n$/, '')
 	}
 
 	/**
 	 * Returns stdout as text (alias for toString for zx compatibility).
+	 * @param {string} [encoding='utf8']
 	 * @returns {string}
 	 */
-	text() {
-		return this.toString()
+	text(encoding = 'utf8') {
+		return this.#stdoutBuf.toString(encoding).replace(/\n$/, '')
 	}
 
 	/**
@@ -82,7 +141,7 @@ export class ProcessOutput {
 	 * @returns {string[]}
 	 */
 	lines(delimiter = '\n') {
-		return this.#stdout.split(delimiter).filter(line => line !== '')
+		return this.stdout.split(delimiter).filter(line => line !== '')
 	}
 
 	/**
@@ -90,26 +149,19 @@ export class ProcessOutput {
 	 * @returns {any}
 	 */
 	json() {
-		return JSON.parse(this.#stdout)
+		return JSON.parse(this.stdout)
 	}
 }
 
 /**
  * ProcessPromise wraps a command execution with a Promise-based API.
- * Supports method chaining for configuration and output formatting.
  */
 export class ProcessPromise extends Promise {
 	/** @type {ChildProcess|null} */
 	#child = null
 
-	/** @type {boolean} */
-	#nothrow = false
-
-	/** @type {boolean} */
-	#quiet = false
-
-	/** @type {boolean} */
-	#verbose = false
+	/** @type {ShellConfig} */
+	#config
 
 	/** @type {string} */
 	#cmd = ''
@@ -117,47 +169,54 @@ export class ProcessPromise extends Promise {
 	/** @type {string[]} */
 	#args = []
 
-	/** @type {object} */
-	#options = {}
-
 	/** @type {'initial'|'running'|'fulfilled'|'rejected'} */
 	#stage = 'initial'
 
-	/** @type {string} */
-	#stdoutBuffer = ''
+	/** @type {Buffer[]} */
+	#stdoutChunks = []
 
-	/** @type {string} */
-	#stderrBuffer = ''
+	/** @type {Buffer[]} */
+	#stderrChunks = []
 
 	/** @type {ProcessPromise|null} */
 	#pipeSource = null
 
+	/** @type {Array<{stream: Writable, ended: boolean}>} */
+	#pipeTargets = []
+
+	/** @type {Array<function>} */
+	#stdoutListeners = []
+
 	/**
 	 * Create a ProcessPromise. Use the $ function instead of calling directly.
-	 * @param {function} executor
+	 * @param {ShellConfig|function} configOrExecutor - Config object or executor function (for Promise compatibility)
 	 */
-	constructor(executor) {
+	constructor(configOrExecutor = defaultConfig) {
+		// Handle both direct construction (with config) and Promise.then() construction (with executor)
+		const isExecutor = typeof configOrExecutor === 'function'
+
 		let resolveFn, rejectFn
 		super((resolve, reject) => {
 			resolveFn = resolve
 			rejectFn = reject
+			// If called from Promise internals (e.g., .then()), call the executor
+			if (isExecutor) {
+				configOrExecutor(resolve, reject)
+			}
 		})
+
 		this._resolve = resolveFn
 		this._reject = rejectFn
-
-		if (typeof executor === 'function') {
-			executor(resolveFn, rejectFn)
-		}
+		this.#config = isExecutor ? { ...defaultConfig } : { ...configOrExecutor }
 	}
 
 	/**
 	 * Configure the command to run.
 	 * @internal
 	 */
-	_configure(cmd, args, options = {}) {
+	_configure(cmd, args) {
 		this.#cmd = cmd
 		this.#args = args
-		this.#options = options
 		return this
 	}
 
@@ -170,71 +229,74 @@ export class ProcessPromise extends Promise {
 			return this
 		}
 
-		// If no command was configured, skip execution (used by pipe-to-file)
 		if (!this.#cmd) {
 			return this
 		}
 
 		this.#stage = 'running'
 
-		const shellCmd = this.#options.shell ? '/bin/sh' : this.#cmd
-		const shellArgs = this.#options.shell ? ['-c', `${this.#cmd} ${this.#args.join(' ')}`] : this.#args
-
-		if (this.#verbose && !this.#quiet) {
+		if (this.#config.verbose && !this.#config.quiet) {
 			process.stderr.write(`$ ${this.#cmd} ${this.#args.join(' ')}\n`)
 		}
 
-		const child = execFile(shellCmd, shellArgs, {
-			env: this.#options.env,
-			cwd: this.#options.cwd,
-		})
-
+		const child = execFile(this.#cmd, this.#args)
 		this.#child = child
 
-		// Set encoding for string output
-		child.stdout.setEncoding('utf8')
-		child.stderr.setEncoding('utf8')
-
+		// Don't set encoding - keep data as binary Buffers
 		child.stdout.on('data', (chunk) => {
-			this.#stdoutBuffer += chunk
-			if (!this.#quiet) {
-				process.stdout.write(chunk)
+			const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+			this.#stdoutChunks.push(buf)
+			if (!this.#config.quiet) {
+				process.stdout.write(buf)
+			}
+			// Notify pipe targets (binary)
+			for (const target of this.#pipeTargets) {
+				if (!target.ended) {
+					target.stream.write(buf)
+				}
+			}
+			// Notify listeners
+			for (const listener of this.#stdoutListeners) {
+				listener(buf)
 			}
 		})
 
 		child.stderr.on('data', (chunk) => {
-			this.#stderrBuffer += chunk
-			if (!this.#quiet) {
-				process.stderr.write(chunk)
+			const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+			this.#stderrChunks.push(buf)
+			if (!this.#config.quiet) {
+				process.stderr.write(buf)
 			}
 		})
 
 		// If we have a pipe source, connect it
 		if (this.#pipeSource) {
-			this.#pipeSource.then((output) => {
-				child.stdin.end(output.stdout)
-			}).catch((err) => {
-				child.stdin.end()
-			})
+			this.#pipeSource._pipeToStdin(child.stdin)
 		}
 
 		child.on('close', (code, signal) => {
-			const output = new ProcessOutput(
-				this.#stdoutBuffer,
-				this.#stderrBuffer,
-				code,
-				signal
-			)
+			const stdout = Buffer.concat(this.#stdoutChunks)
+			const stderr = Buffer.concat(this.#stderrChunks)
+			const output = new ProcessOutput(stdout, stderr, code, signal)
 
-			if (code !== 0 && !this.#nothrow) {
+			// End all pipe targets
+			for (const target of this.#pipeTargets) {
+				if (!target.ended) {
+					target.ended = true
+					target.stream.end()
+				}
+			}
+
+			if (code !== 0 && !this.#config.nothrow) {
 				this.#stage = 'rejected'
+				const stderrStr = stderr.toString('utf8')
 				const error = new Error(
 					`Command failed with exit code ${code}: ${this.#cmd} ${this.#args.join(' ')}\n` +
-					(this.#stderrBuffer ? `stderr: ${this.#stderrBuffer}` : '')
+					(stderrStr ? `stderr: ${stderrStr}` : '')
 				)
 				error.exitCode = code
-				error.stdout = this.#stdoutBuffer
-				error.stderr = this.#stderrBuffer
+				error.stdout = stdout.toString('utf8')
+				error.stderr = stderrStr
 				this._reject(error)
 			} else {
 				this.#stage = 'fulfilled'
@@ -243,6 +305,27 @@ export class ProcessPromise extends Promise {
 		})
 
 		return this
+	}
+
+	/**
+	 * Pipe buffered and future stdout to a writable stream.
+	 * @internal
+	 */
+	_pipeToStdin(stdin) {
+		// Replay buffered chunks
+		for (const chunk of this.#stdoutChunks) {
+			stdin.write(chunk)
+		}
+
+		// If already done, just end
+		if (this.#stage === 'fulfilled' || this.#stage === 'rejected') {
+			stdin.end()
+			return
+		}
+
+		// Subscribe to future chunks
+		const target = { stream: stdin, ended: false }
+		this.#pipeTargets.push(target)
 	}
 
 	/**
@@ -255,11 +338,9 @@ export class ProcessPromise extends Promise {
 
 	/**
 	 * Get the child process stdin stream.
-	 * Triggers process execution when accessed.
 	 * @returns {Writable}
 	 */
 	get stdin() {
-		this.run()
 		return this.#child?.stdin
 	}
 
@@ -268,7 +349,6 @@ export class ProcessPromise extends Promise {
 	 * @returns {Readable}
 	 */
 	get stdout() {
-		this.run()
 		return this.#child?.stdout
 	}
 
@@ -277,56 +357,67 @@ export class ProcessPromise extends Promise {
 	 * @returns {Readable}
 	 */
 	get stderr() {
-		this.run()
 		return this.#child?.stderr
 	}
 
 	/**
 	 * Suppress exceptions on non-zero exit codes.
+	 * @deprecated Use $.nothrow`cmd` instead
 	 * @param {boolean} [flag=true]
 	 * @returns {this}
 	 */
 	nothrow(flag = true) {
-		this.#nothrow = flag
+		this.#config.nothrow = flag
 		return this
 	}
 
 	/**
 	 * Suppress output display.
+	 * @deprecated Use $.quiet`cmd` instead
 	 * @param {boolean} [flag=true]
 	 * @returns {this}
 	 */
 	quiet(flag = true) {
-		this.#quiet = flag
+		this.#config.quiet = flag
 		return this
 	}
 
 	/**
 	 * Enable verbose output.
+	 * @deprecated Use $.verbose`cmd` instead
 	 * @param {boolean} [flag=true]
 	 * @returns {this}
 	 */
 	verbose(flag = true) {
-		this.#verbose = flag
+		this.#config.verbose = flag
 		return this
 	}
 
 	/**
 	 * Pipe stdout to another ProcessPromise or write to a path.
+	 * Supports late piping - will replay buffered output.
 	 * @param {ProcessPromise|string} dest
 	 * @returns {ProcessPromise}
 	 */
 	pipe(dest) {
 		if (dest instanceof ProcessPromise) {
-			dest.#pipeSource = this
-			this.run()
+			// With eager execution, dest may already be running
+			// In that case, connect the pipe directly to its stdin
+			if (dest.#stage === 'running' || dest.#stage === 'initial') {
+				// If dest hasn't started yet, set pipeSource and start it
+				if (dest.#stage === 'initial') {
+					dest.#pipeSource = this
+					dest.run()
+				} else {
+					// Dest already running - pipe directly to stdin
+					this._pipeToStdin(dest.stdin)
+				}
+			}
 			return dest
 		}
 
 		if (typeof dest === 'string') {
-			// Pipe to file using node:fs
-			const filePipe = new ProcessPromise()
-			this.run()
+			const filePipe = new ProcessPromise(this.#config)
 			this.then((output) => {
 				try {
 					writeFileSync(dest, output.stdout)
@@ -356,13 +447,22 @@ export class ProcessPromise extends Promise {
 	}
 
 	/**
+	 * Get output as a Buffer (binary data).
+	 * @returns {Promise<Buffer>}
+	 */
+	async buffer() {
+		const output = await this
+		return output.buffer()
+	}
+
+	/**
 	 * Get output as text.
+	 * @param {string} [encoding='utf8']
 	 * @returns {Promise<string>}
 	 */
-	async text() {
-		this.run()
+	async text(encoding = 'utf8') {
 		const output = await this
-		return output.text()
+		return output.text(encoding)
 	}
 
 	/**
@@ -371,7 +471,6 @@ export class ProcessPromise extends Promise {
 	 * @returns {Promise<string[]>}
 	 */
 	async lines(delimiter = '\n') {
-		this.run()
 		const output = await this
 		return output.lines(delimiter)
 	}
@@ -381,33 +480,8 @@ export class ProcessPromise extends Promise {
 	 * @returns {Promise<any>}
 	 */
 	async json() {
-		this.run()
 		const output = await this
 		return output.json()
-	}
-
-	/**
-	 * Override then to auto-run the process.
-	 */
-	then(onFulfilled, onRejected) {
-		this.run()
-		return super.then(onFulfilled, onRejected)
-	}
-
-	/**
-	 * Override catch to auto-run the process.
-	 */
-	catch(onRejected) {
-		this.run()
-		return super.catch(onRejected)
-	}
-
-	/**
-	 * Override finally to auto-run the process.
-	 */
-	finally(onFinally) {
-		this.run()
-		return super.finally(onFinally)
 	}
 }
 
@@ -511,76 +585,129 @@ function escapeArg(value) {
 }
 
 /**
- * The $ tagged template function for running shell commands.
- *
- * @example
- * const result = await $`echo "Hello, World!"`
- * console.log(result.stdout) // "Hello, World!\n"
- *
- * @example
- * const files = await $`ls -la`.lines()
- *
- * @example
- * const data = await $`cat data.json`.json()
- *
- * @example
- * await $`echo "hello"`.pipe($`cat`)
- *
- * @param {TemplateStringsArray} pieces
- * @param {...any} args
- * @returns {ProcessPromise}
+ * Create a shell function with the given configuration.
+ * @param {ShellConfig} config
+ * @returns {Shell}
  */
-export function $(pieces, ...args) {
-	// Build the command string from template
-	let cmdString = pieces[0]
-	for (let i = 0; i < args.length; i++) {
-		cmdString += escapeArg(args[i])
-		cmdString += pieces[i + 1]
+function createShell(config) {
+	/**
+	 * Execute a shell command.
+	 * @param {TemplateStringsArray} pieces
+	 * @param {...any} args
+	 * @returns {ProcessPromise}
+	 */
+	function shell(pieces, ...args) {
+		// Build the command string from template
+		let cmdString = pieces[0]
+		for (let i = 0; i < args.length; i++) {
+			cmdString += escapeArg(args[i])
+			cmdString += pieces[i + 1]
+		}
+
+		cmdString = cmdString.trim()
+
+		// Use shell mode for complex commands (pipes, redirects, etc.)
+		const needsShell = /[|><&;]/.test(cmdString) || cmdString.includes('$(') || cmdString.includes('`')
+
+		let cmd, shellArgs
+		if (needsShell) {
+			cmd = config.shell
+			const prefix = config.prefix ? config.prefix + ' ' : ''
+			shellArgs = ['-c', prefix + cmdString]
+		} else {
+			const parsed = parseCommand(cmdString)
+			cmd = parsed.cmd
+			shellArgs = parsed.args
+		}
+
+		const promise = new ProcessPromise(config)
+		promise._configure(cmd, shellArgs)
+
+		// Run eagerly - command starts immediately
+		promise.run()
+
+		return promise
 	}
 
-	cmdString = cmdString.trim()
+	const configOptions = new Set(['quiet', 'verbose', 'nothrow', 'shell', 'prefix'])
 
-	// Use shell mode for complex commands (pipes, redirects, etc.)
-	const needsShell = /[|><&;]/.test(cmdString) || cmdString.includes('$(') || cmdString.includes('`')
-
-	let cmd, shellArgs
-	if (needsShell) {
-		cmd = $.shell
-		const prefix = $.prefix ? $.prefix + ' ' : ''
-		shellArgs = ['-c', prefix + cmdString]
-	} else {
-		const parsed = parseCommand(cmdString)
-		cmd = parsed.cmd
-		shellArgs = parsed.args
-	}
-
-	const promise = new ProcessPromise()
-	promise._configure(cmd, shellArgs, { shell: false })
-
-	return promise
+	return new Proxy(shell, {
+		get(target, prop) {
+			// Config options return a new shell with that option enabled
+			if (prop === 'quiet') {
+				return createShell({ ...config, quiet: true })
+			}
+			if (prop === 'verbose') {
+				return createShell({ ...config, verbose: true })
+			}
+			if (prop === 'nothrow') {
+				return createShell({ ...config, nothrow: true })
+			}
+			// $.with({ shell: '...', prefix: '...' }) returns configured shell
+			if (prop === 'with') {
+				return (overrides) => createShell({ ...config, ...overrides })
+			}
+			// Allow reading shell and prefix
+			if (prop === 'shell') {
+				return config.shell
+			}
+			if (prop === 'prefix') {
+				return config.prefix
+			}
+			return Reflect.get(target, prop)
+		},
+		set(target, prop, value) {
+			// Prevent setting config options directly
+			if (configOptions.has(prop)) {
+				const suggestion = (prop === 'shell' || prop === 'prefix')
+					? `Use $.with({ ${prop}: '...' })\`cmd\` instead.`
+					: `Use $.${prop}\`cmd\` instead.`
+				throw new Error(`Cannot set $.${prop}. ${suggestion}`)
+			}
+			return Reflect.set(target, prop, value)
+		}
+	})
 }
 
 /**
- * Shell to use for commands (POSIX sh by default).
- * @type {string}
+ * The $ tagged template function for running shell commands.
+ *
+ * Commands run immediately when called (eager execution).
+ * Use $.quiet, $.verbose, $.nothrow to get configured shells.
+ *
+ * @example
+ * // Basic usage - command runs immediately
+ * const result = await $`echo "Hello, World!"`
+ *
+ * @example
+ * // Quiet mode - suppress output
+ * const result = await $.quiet`echo "Hello"`
+ *
+ * @example
+ * // Chain configurations
+ * const result = await $.quiet.nothrow`exit 1`
+ *
+ * @example
+ * // Store configured shell for reuse
+ * const $q = $.quiet
+ * await $q`cmd1`
+ * await $q`cmd2`
+ *
+ * @example
+ * // Piping (late piping works too)
+ * await $`echo "hello"`.pipe($`cat`)
+ *
+ * @type {Shell}
  */
-$.shell = '/bin/sh'
+export const $ = createShell({ ...defaultConfig })
 
 /**
- * Prefix prepended to shell commands.
- * Default is 'set -e;' (exit on error).
- * Note: 'set -o pipefail' is not POSIX, use bash if needed.
- * @type {string}
+ * @typedef {function(TemplateStringsArray, ...any): ProcessPromise} Shell
+ * @property {Shell} quiet - Returns a shell that suppresses output
+ * @property {Shell} verbose - Returns a shell that prints commands before execution
+ * @property {Shell} nothrow - Returns a shell that doesn't throw on non-zero exit
+ * @property {string} shell - The shell executable (default: '/bin/sh')
+ * @property {string} prefix - Command prefix (default: 'set -e;')
  */
-$.prefix = 'set -e;'
 
-/**
- * Verbose mode - print commands before execution.
- * @type {boolean}
- */
-$.verbose = false
-
-/**
- * Default export is the $ function
- */
 export default $
