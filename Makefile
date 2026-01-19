@@ -133,9 +133,9 @@ $(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* nod
 	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qn.c $(SQLITE_OBJS) $(BIN_DIR)/libquickjs.a $(LIBS)
 
 # Build qx (zx-compatible shell scripting with $ function)
-$(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js $(QJSXC_PROG) quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./node:./qx $(QJSXC_PROG) -e -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:util -D qx/core -o $(BIN_DIR)/obj/qx.c qx/bootstrap.js
-	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qx.c $(BIN_DIR)/libquickjs.a $(LIBS)
+$(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js $(QJSXC_PROG) $(SQLITE_OBJS) quickjs-deps | $(BIN_DIR)
+	QJSXPATH=./node:./qx $(QJSXC_PROG) -e -M sqlite_native,sqlite -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:sqlite -D node:util -D qn:introspect -D qx -o $(BIN_DIR)/obj/qx.c qx/bootstrap.js
+	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qx.c $(SQLITE_OBJS) $(BIN_DIR)/libquickjs.a $(LIBS)
 
 # Create convenience symlinks in bin/ directory
 convenience-links: $(QJSX_PROG) $(QN_PROG) $(QX_PROG) $(QJSXC_PROG)
