@@ -127,22 +127,22 @@ describe('qx assignment error', () => {
 					$.shell = '/bin/bash'
 					console.log(JSON.stringify({ threw: false }))
 				} catch (e) {
-					console.log(JSON.stringify({ threw: true, hasWithSuggestion: e.message.includes('$.with') }))
+					console.log(JSON.stringify({ threw: true, hasSuggestion: e.message.includes('$({') }))
 				}
 			`, dir)
 			const result = JSON.parse(output)
 			assert.strictEqual(result.threw, true)
-			assert.strictEqual(result.hasWithSuggestion, true)
+			assert.strictEqual(result.hasSuggestion, true)
 		} finally {
 			rmSync(dir, { recursive: true })
 		}
 	})
 
-	test('$.with({ shell, prefix }) configures shell', () => {
+	test('$({ shell, prefix }) configures shell', () => {
 		const dir = mktempdir()
 		try {
 			const output = runQx(`
-				const $custom = $.with({ shell: '/bin/sh', prefix: '' })
+				const $custom = $({ shell: '/bin/sh', prefix: '' })
 				const result = await $custom.quiet\`echo hello\`
 				console.log(JSON.stringify({ stdout: result.stdout.trim(), shell: $custom.shell }))
 			`, dir)
@@ -372,6 +372,93 @@ describe('qx binary data', () => {
 				strLen: 6,
 				match: true
 			})
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+})
+
+describe('qx timeout', () => {
+	test('$({ timeout }) kills long-running process', () => {
+		const dir = mktempdir()
+		try {
+			const output = runQx(`
+				const start = Date.now()
+				try {
+					await $({ timeout: 50 }).quiet.nothrow\`sleep 10\`
+				} catch (e) {}
+				const elapsed = Date.now() - start
+				console.log(JSON.stringify({ killed: elapsed < 200 }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { killed: true })
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('.timeout() kills long-running process', () => {
+		const dir = mktempdir()
+		try {
+			const output = runQx(`
+				const start = Date.now()
+				try {
+					await $.quiet\`sleep 10\`.timeout(50).nothrow()
+				} catch (e) {}
+				const elapsed = Date.now() - start
+				console.log(JSON.stringify({ killed: elapsed < 200 }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { killed: true })
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('.timeout() does not kill fast process', () => {
+		const dir = mktempdir()
+		try {
+			const output = runQx(`
+				const result = await $.quiet\`echo fast\`.timeout(1000)
+				console.log(JSON.stringify({ stdout: result.stdout.trim() }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { stdout: 'fast' })
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+})
+
+describe('qx retry', () => {
+	test('retry() succeeds on first try', () => {
+		const dir = mktempdir()
+		try {
+			const output = runQx(`
+				let attempts = 0
+				const result = await retry(3, async () => {
+					attempts++
+					return await $.quiet\`echo success\`
+				})
+				console.log(JSON.stringify({ attempts, stdout: result.stdout.trim() }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { attempts: 1, stdout: 'success' })
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('retry() retries on failure', () => {
+		const dir = mktempdir()
+		try {
+			const output = runQx(`
+				let attempts = 0
+				try {
+					await retry(3, async () => {
+						attempts++
+						await $.quiet\`sh -c 'exit 1'\`
+					})
+				} catch (e) {}
+				console.log(JSON.stringify({ attempts }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { attempts: 3 })
 		} finally {
 			rmSync(dir, { recursive: true })
 		}

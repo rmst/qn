@@ -187,6 +187,9 @@ export class ProcessPromise extends Promise {
 	/** @type {Array<function>} */
 	#stdoutListeners = []
 
+	/** @type {number|null} */
+	#timeoutId = null
+
 	/**
 	 * Create a ProcessPromise. Use the $ function instead of calling directly.
 	 * @param {ShellConfig|function} configOrExecutor - Config object or executor function (for Promise compatibility)
@@ -275,6 +278,12 @@ export class ProcessPromise extends Promise {
 		}
 
 		child.on('close', (code, signal) => {
+			// Clear timeout if set
+			if (this.#timeoutId) {
+				clearTimeout(this.#timeoutId)
+				this.#timeoutId = null
+			}
+
 			const stdout = Buffer.concat(this.#stdoutChunks)
 			const stderr = Buffer.concat(this.#stderrChunks)
 			const output = new ProcessOutput(stdout, stderr, code, signal)
@@ -447,6 +456,25 @@ export class ProcessPromise extends Promise {
 	}
 
 	/**
+	 * Set a timeout for the process. If the process doesn't complete
+	 * within the specified time, it will be killed.
+	 * @param {number} ms - Timeout in milliseconds
+	 * @param {string} [signal='SIGTERM'] - Signal to send on timeout
+	 * @returns {ProcessPromise} this (for chaining)
+	 */
+	timeout(ms, signal = 'SIGTERM') {
+		if (this.#timeoutId) {
+			clearTimeout(this.#timeoutId)
+		}
+		this.#timeoutId = setTimeout(() => {
+			if (this.#stage === 'running') {
+				this.kill(signal)
+			}
+		}, ms)
+		return this
+	}
+
+	/**
 	 * Get output as a Buffer (binary data).
 	 * @returns {Promise<Buffer>}
 	 */
@@ -591,12 +619,18 @@ function escapeArg(value) {
  */
 function createShell(config) {
 	/**
-	 * Execute a shell command.
-	 * @param {TemplateStringsArray} pieces
+	 * Execute a shell command or return configured shell.
+	 * @param {TemplateStringsArray|Object} piecesOrOptions
 	 * @param {...any} args
-	 * @returns {ProcessPromise}
+	 * @returns {ProcessPromise|Shell}
 	 */
-	function shell(pieces, ...args) {
+	function shell(piecesOrOptions, ...args) {
+		// $({...}) returns a configured shell
+		if (piecesOrOptions && typeof piecesOrOptions === 'object' && !Array.isArray(piecesOrOptions) && !piecesOrOptions.raw) {
+			return createShell({ ...config, ...piecesOrOptions })
+		}
+
+		const pieces = piecesOrOptions
 		// Build the command string from template
 		let cmdString = pieces[0]
 		for (let i = 0; i < args.length; i++) {
@@ -623,6 +657,11 @@ function createShell(config) {
 		const promise = new ProcessPromise(config)
 		promise._configure(cmd, shellArgs)
 
+		// Apply timeout if configured
+		if (config.timeout) {
+			promise.timeout(config.timeout)
+		}
+
 		// Run eagerly - command starts immediately
 		promise.run()
 
@@ -643,10 +682,6 @@ function createShell(config) {
 			if (prop === 'nothrow') {
 				return createShell({ ...config, nothrow: true })
 			}
-			// $.with({ shell: '...', prefix: '...' }) returns configured shell
-			if (prop === 'with') {
-				return (overrides) => createShell({ ...config, ...overrides })
-			}
 			// Allow reading shell and prefix
 			if (prop === 'shell') {
 				return config.shell
@@ -660,7 +695,7 @@ function createShell(config) {
 			// Prevent setting config options directly
 			if (configOptions.has(prop)) {
 				const suggestion = (prop === 'shell' || prop === 'prefix')
-					? `Use $.with({ ${prop}: '...' })\`cmd\` instead.`
+					? `Use $({ ${prop}: '...' })\`cmd\` instead.`
 					: `Use $.${prop}\`cmd\` instead.`
 				throw new Error(`Cannot set $.${prop}. ${suggestion}`)
 			}
@@ -711,3 +746,25 @@ export const $ = createShell({ ...defaultConfig })
  */
 
 export default $
+
+/**
+ * Retry a function multiple times until it succeeds.
+ * @param {number} count - Maximum number of attempts
+ * @param {function(): Promise<T>} fn - Async function to retry
+ * @returns {Promise<T>} Result of the function
+ * @template T
+ *
+ * @example
+ * const result = await retry(3, () => $.quiet`curl https://example.com`)
+ */
+export async function retry(count, fn) {
+	let lastError
+	for (let i = 0; i < count; i++) {
+		try {
+			return await fn()
+		} catch (err) {
+			lastError = err
+		}
+	}
+	throw lastError
+}
