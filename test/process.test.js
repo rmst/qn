@@ -157,4 +157,83 @@ describe('node:process shim', () => {
 		assert.strictEqual(result.status, 7)
 		assert.strictEqual(result.stdout.trim(), 'exit code: 7')
 	})
+
+	test('process.kill sends signal to process', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import process from 'node:process'
+			import { spawn } from 'node:child_process'
+
+			const child = spawn('sleep', ['10'])
+			const pid = child.pid
+
+			// Give it a moment to start
+			await new Promise(r => setTimeout(r, 50))
+
+			// Kill should return true
+			const result = process.kill(pid, 'SIGTERM')
+			console.log(JSON.stringify({ result }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { result: true })
+	})
+
+	test('process.kill throws ESRCH for non-existent process', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import process from 'node:process'
+
+			try {
+				process.kill(999999, 'SIGTERM')
+				console.log(JSON.stringify({ threw: false }))
+			} catch (e) {
+				console.log(JSON.stringify({ threw: true, code: e.code }))
+			}
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { threw: true, code: 'ESRCH' })
+	})
+
+	test('process.kill defaults to SIGTERM', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import process from 'node:process'
+			import { spawn } from 'node:child_process'
+
+			const child = spawn('sleep', ['10'])
+			const pid = child.pid
+
+			await new Promise(r => setTimeout(r, 50))
+
+			// Kill without signal argument
+			const result = process.kill(pid)
+			console.log(JSON.stringify({ result }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { result: true })
+	})
+
+	test('process.kill with signal 0 tests process existence', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import process from 'node:process'
+
+			// Signal 0 on our own pid should succeed
+			const exists = process.kill(process.pid, 0)
+
+			// Signal 0 on non-existent pid should throw ESRCH
+			let threw = false
+			let code = null
+			try {
+				process.kill(999999, 0)
+			} catch (e) {
+				threw = true
+				code = e.code
+			}
+
+			console.log(JSON.stringify({ exists, threw, code }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { exists: true, threw: true, code: 'ESRCH' })
+	})
 })

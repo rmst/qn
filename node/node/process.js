@@ -41,12 +41,15 @@ const eventHandlers = new Map();
 
 // Signal name to number mapping
 const signalMap = {
-  'SIGINT': os.SIGINT,
-  'SIGTERM': os.SIGTERM,
-  'SIGABRT': os.SIGABRT,
-  'SIGFPE': os.SIGFPE,
-  'SIGILL': os.SIGILL,
-  'SIGSEGV': os.SIGSEGV
+  'SIGHUP': 1,
+  'SIGINT': os.SIGINT ?? 2,
+  'SIGQUIT': 3,
+  'SIGILL': os.SIGILL ?? 4,
+  'SIGABRT': os.SIGABRT ?? 6,
+  'SIGFPE': os.SIGFPE ?? 8,
+  'SIGKILL': 9,
+  'SIGSEGV': os.SIGSEGV ?? 11,
+  'SIGTERM': os.SIGTERM ?? 15,
 };
 
 // Process object that mimics Node.js process module
@@ -98,6 +101,24 @@ const process = {
       err.path = directory
       throw err
     }
+  },
+
+  // Send signal to a process
+  kill(pid, signal = 'SIGTERM') {
+    const sig = typeof signal === 'string' ? signalMap[signal] : signal
+    if (sig === undefined) {
+      throw new Error(`Unknown signal: ${signal}`)
+    }
+    const ret = os.kill(pid, sig)
+    if (ret < 0) {
+      const errno = -ret
+      const err = new Error(`kill ${pid}`)
+      err.code = errno === 3 ? 'ESRCH' : errno === 1 ? 'EPERM' : `E${errno}`
+      err.errno = errno
+      err.syscall = 'kill'
+      throw err
+    }
+    return true
   },
 
   // Standard streams
@@ -178,5 +199,5 @@ const process = {
 export default process;
 
 // Also export individual properties for named imports
-export const { argv, exit, exitCode, cwd, chdir, pid, platform, version, versions, stdin, stdout, stderr } = process;
+export const { argv, exit, exitCode, cwd, chdir, kill, pid, platform, version, versions, stdin, stdout, stderr } = process;
 export const env = process.env;  // Export env separately to preserve the Proxy

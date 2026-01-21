@@ -345,6 +345,49 @@ describe('qx shell escaping', () => {
 	})
 })
 
+describe('qx shell variable expansion', () => {
+	test('expands $HOME', () => {
+		const dir = mktempdir()
+		try {
+			const output = runQx(`
+				const result = await $\`echo $HOME\`.quiet()
+				const home = result.stdout.trim()
+				console.log(JSON.stringify({ hasHome: home.length > 0 && home.startsWith('/') }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { hasHome: true })
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('expands $PWD', () => {
+		const dir = mktempdir()
+		try {
+			const output = runQx(`
+				const result = await $\`echo $PWD\`.quiet()
+				const pwd = result.stdout.trim()
+				console.log(JSON.stringify({ hasPwd: pwd.length > 0 && pwd.startsWith('/') }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { hasPwd: true })
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('expands inline shell variable', () => {
+		const dir = mktempdir()
+		try {
+			const output = runQx(`
+				const result = await $\`FOO=bar; echo $FOO\`.quiet()
+				console.log(JSON.stringify({ out: result.stdout.trim() }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { out: 'bar' })
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+})
+
 describe('qx as library in qn', () => {
 	test('import { $ } from qx works', () => {
 		const dir = mktempdir()

@@ -25,7 +25,7 @@
 
 import process from 'node:process'
 import { writeFileSync } from 'node:fs'
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { Buffer } from 'node:buffer'
 
 /**
@@ -44,6 +44,47 @@ const defaultConfig = {
 	quiet: false,
 	verbose: false,
 	nothrow: false,
+}
+
+/**
+ * Get all descendant PIDs of a process using ps.
+ * @param {number} pid - Parent process ID
+ * @returns {number[]} Array of descendant PIDs (not including the parent)
+ */
+function getDescendantPids(pid) {
+	try {
+		// Get all processes with their parent PIDs (POSIX standard)
+		const output = execFileSync('ps', ['-eo', 'pid,ppid'], { encoding: 'utf8' })
+
+		// Parse into parent -> children map
+		const children = new Map()
+		for (const line of output.trim().split('\n').slice(1)) { // skip header
+			const [pidStr, ppidStr] = line.trim().split(/\s+/)
+			const childPid = parseInt(pidStr, 10)
+			const parentPid = parseInt(ppidStr, 10)
+			if (!isNaN(childPid) && !isNaN(parentPid)) {
+				if (!children.has(parentPid)) {
+					children.set(parentPid, [])
+				}
+				children.get(parentPid).push(childPid)
+			}
+		}
+
+		// Recursively collect all descendants
+		const descendants = []
+		const collect = (p) => {
+			const kids = children.get(p) || []
+			for (const kid of kids) {
+				descendants.push(kid)
+				collect(kid)
+			}
+		}
+		collect(pid)
+
+		return descendants
+	} catch {
+		return []
+	}
 }
 
 /**
@@ -444,15 +485,28 @@ export class ProcessPromise extends Promise {
 	}
 
 	/**
-	 * Kill the process.
+	 * Kill the process and all its descendants.
 	 * @param {string} [signal='SIGTERM']
 	 * @returns {boolean}
 	 */
 	kill(signal = 'SIGTERM') {
-		if (this.#child) {
-			return this.#child.kill(signal)
+		if (!this.#child || !this.#child.pid) {
+			return false
 		}
-		return false
+
+		const pid = this.#child.pid
+
+		// Kill all descendants first (bottom-up would be ideal, but this works)
+		for (const descendantPid of getDescendantPids(pid)) {
+			try {
+				process.kill(descendantPid, signal)
+			} catch {
+				// Process may have already exited
+			}
+		}
+
+		// Kill the main process
+		return this.#child.kill(signal)
 	}
 
 	/**
@@ -511,64 +565,6 @@ export class ProcessPromise extends Promise {
 		const output = await this
 		return output.json()
 	}
-}
-
-/**
- * Parse a command string into command and arguments.
- * Handles quoted strings and escape sequences.
- * @param {string} cmdString
- * @returns {{ cmd: string, args: string[] }}
- */
-function parseCommand(cmdString) {
-	const parts = []
-	let current = ''
-	let inSingleQuote = false
-	let inDoubleQuote = false
-	let escape = false
-
-	for (let i = 0; i < cmdString.length; i++) {
-		const char = cmdString[i]
-
-		if (escape) {
-			current += char
-			escape = false
-			continue
-		}
-
-		if (char === '\\' && !inSingleQuote) {
-			escape = true
-			continue
-		}
-
-		if (char === "'" && !inDoubleQuote) {
-			inSingleQuote = !inSingleQuote
-			continue
-		}
-
-		if (char === '"' && !inSingleQuote) {
-			inDoubleQuote = !inDoubleQuote
-			continue
-		}
-
-		if ((char === ' ' || char === '\t' || char === '\n') && !inSingleQuote && !inDoubleQuote) {
-			if (current) {
-				parts.push(current)
-				current = ''
-			}
-			continue
-		}
-
-		current += char
-	}
-
-	if (current) {
-		parts.push(current)
-	}
-
-	const cmd = parts[0] || ''
-	const args = parts.slice(1)
-
-	return { cmd, args }
 }
 
 /**
@@ -640,19 +636,10 @@ function createShell(config) {
 
 		cmdString = cmdString.trim()
 
-		// Use shell mode for complex commands (pipes, redirects, etc.)
-		const needsShell = /[|><&;]/.test(cmdString) || cmdString.includes('$(') || cmdString.includes('`')
-
-		let cmd, shellArgs
-		if (needsShell) {
-			cmd = config.shell
-			const prefix = config.prefix ? config.prefix + ' ' : ''
-			shellArgs = ['-c', prefix + cmdString]
-		} else {
-			const parsed = parseCommand(cmdString)
-			cmd = parsed.cmd
-			shellArgs = parsed.args
-		}
+		// Always use shell to ensure proper variable expansion, globbing, etc.
+		const prefix = config.prefix ? config.prefix + ' ' : ''
+		const cmd = config.shell
+		const shellArgs = ['-c', prefix + cmdString]
 
 		const promise = new ProcessPromise(config)
 		promise._configure(cmd, shellArgs)
