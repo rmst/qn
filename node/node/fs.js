@@ -261,7 +261,15 @@ export function rmSync(path, options = {}) {
 	}
 
 	const result = os.remove(path);
-	if (result !== 0 && !force) {
+	if (result !== 0) {
+		if (force) {
+			// force only suppresses ENOENT - check if file still exists
+			const [, checkErr] = os.stat(path);
+			if (checkErr !== 0) {
+				// File doesn't exist anymore, so removal "succeeded"
+				return;
+			}
+		}
 		throw new Error(`Failed to remove: ${path}`);
 	}
 }

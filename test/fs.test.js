@@ -315,6 +315,54 @@ describe('node:fs shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { threw: false })
 	})
 
+	test('rmSync with force: true should throw on permission error', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
+			import { execSync } from 'node:child_process'
+			import process from 'node:process'
+
+			const parentDir = '${dir}/protected'
+			const filePath = parentDir + '/file.txt'
+
+			// Create directory structure
+			mkdirSync(parentDir)
+			writeFileSync(filePath, 'content')
+
+			// Make parent directory read-only (prevents file deletion)
+			execSync('chmod 555 ' + parentDir)
+
+			// Check if we're running as root (permissions don't apply)
+			const isRoot = process.getuid?.() === 0
+
+			let threw = false
+			try {
+				rmSync(filePath, { force: true })
+			} catch (e) {
+				threw = true
+			}
+
+			// Restore permissions for cleanup
+			execSync('chmod 755 ' + parentDir)
+
+			// Check if file still exists
+			const fileStillExists = existsSync(filePath)
+
+			console.log(JSON.stringify({ threw, fileStillExists, isRoot }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+
+		// Skip assertion if running as root (permissions don't apply)
+		if (result.isRoot) {
+			return
+		}
+
+		// force: true should only suppress ENOENT, not permission errors
+		assert.strictEqual(result.threw, true, 'rmSync with force: true should throw on permission error')
+		assert.strictEqual(result.fileStillExists, true, 'File should still exist when deletion fails due to permission')
+	})
+
 	test('renameSync moves file', ({ bin, dir }) => {
 		writeFileSync(`${dir}/original.txt`, 'content')
 		writeFileSync(`${dir}/test.js`, `

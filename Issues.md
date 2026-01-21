@@ -5,7 +5,6 @@
 - Sockets: https://github.com/bellard/quickjs/pull/405
 
 ## Bugs
-fs.rmSync with force: true should ignore errors if the path doesn't exist, but probably it should still throw errors for permission issues
 
 ## Improvements
 
