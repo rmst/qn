@@ -131,6 +131,25 @@ const process = {
     return os.getpid();
   },
 
+  // User and group IDs (cached since they don't change)
+  getuid() {
+    if (this._uid === undefined) {
+      const f = std.popen('id -u', 'r')
+      this._uid = parseInt(f.getline(), 10)
+      f.close()
+    }
+    return this._uid
+  },
+
+  getgid() {
+    if (this._gid === undefined) {
+      const f = std.popen('id -g', 'r')
+      this._gid = parseInt(f.getline(), 10)
+      f.close()
+    }
+    return this._gid
+  },
+
   // Platform
   platform: os.platform || 'quickjs',
 
@@ -199,5 +218,5 @@ const process = {
 export default process;
 
 // Also export individual properties for named imports
-export const { argv, exit, exitCode, cwd, chdir, kill, pid, platform, version, versions, stdin, stdout, stderr } = process;
+export const { argv, exit, exitCode, cwd, chdir, kill, pid, getuid, getgid, platform, version, versions, stdin, stdout, stderr } = process;
 export const env = process.env;  // Export env separately to preserve the Proxy

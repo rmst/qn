@@ -315,9 +315,9 @@ describe('qx binary data', () => {
 	test('buffer() returns binary data', () => {
 		const dir = mktempdir()
 		try {
-			// Use /usr/bin/printf explicitly since shell built-in may not support \x hex escapes
+			// Use $(which printf) to find printf in PATH (not all systems have /usr/bin/printf)
 			const output = runQx(`
-				const buf = await $.quiet\`/usr/bin/printf '\\\\x00\\\\x01\\\\x02\\\\xff'\`.buffer()
+				const buf = await $.quiet\`$(which printf) '\\\\x00\\\\x01\\\\x02\\\\xff'\`.buffer()
 				console.log(JSON.stringify({
 					isBuffer: buf instanceof Buffer,
 					length: buf.length,
@@ -337,9 +337,9 @@ describe('qx binary data', () => {
 	test('binary data survives piping', () => {
 		const dir = mktempdir()
 		try {
-			// Use /usr/bin/printf explicitly since shell built-in may not support \x hex escapes
+			// Use $(which printf) to find printf in PATH (not all systems have /usr/bin/printf)
 			const output = runQx(`
-				const buf = await $.quiet\`/usr/bin/printf '\\\\x00\\\\x01\\\\x02\\\\xff'\`
+				const buf = await $.quiet\`$(which printf) '\\\\x00\\\\x01\\\\x02\\\\xff'\`
 					.pipe($.quiet\`cat\`)
 					.buffer()
 				console.log(JSON.stringify({
