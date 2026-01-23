@@ -1,3 +1,12 @@
+# introspect.patch - Adds introspection functions to std module
+#
+# Target file: quickjs-libc.c (applied after quickjs-libc.patch and sandboxed-worker.patch)
+# Applied by: Makefile rule for $(BIN_DIR)/obj/quickjs-libc.c
+#
+# This patch adds introspection functions to the std module for
+# closure inspection and function serialization. Used by qn:introspect.
+# The actual implementation is in introspect/introspect.c.
+#
 --- quickjs-libc.c.orig
 +++ quickjs-libc.c
 @@ -74,6 +74,8 @@

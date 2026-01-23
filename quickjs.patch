@@ -1,3 +1,21 @@
+# quickjs.patch - Patches to QuickJS core engine
+#
+# Target files: quickjs/quickjs.c, quickjs/quickjs.h
+# Applied by: make quickjs-deps (copies quickjs/ to bin/<platform>/quickjs/ then patches)
+#
+# Features added:
+#
+#   1. JS_GetClosureVars(ctx, func) - API to inspect closure variables
+#      Used by qn:introspect for function serialization.
+#      Returns JS object { varName: value, ... } for the closure.
+#
+#   2. Import error source locations
+#      Import resolution errors now include the importing file and line number.
+#      Example: "Could not find export 'foo' in module 'bar.js' (imported at main.js:5)"
+#      - Adds line_num field to JSImportEntry struct
+#      - Captures line number during import statement parsing
+#      - Enhanced error messages in js_link_module()
+#
 --- quickjs/quickjs.c	2026-01-19 10:42:01.014622649 +0000
 +++ quickjs/quickjs.c	2026-01-19 10:42:33.330595346 +0000
 @@ -794,6 +794,7 @@
