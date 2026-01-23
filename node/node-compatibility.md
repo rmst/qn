@@ -105,6 +105,9 @@ import { readFileSync, writeFileSync, existsSync, ... } from 'node:fs';
 | `openSync` | ✅ | Returns file descriptor; supports `'r'` and `'w'` flags |
 | `closeSync` | ✅ | Closes file descriptor |
 | `mkdtempSync` | ✅ | Creates temp directory with random suffix |
+| `chmodSync` | ✅ | Changes file mode |
+| `cpSync` | ✅ | Supports `recursive` and `force`; preserves modes |
+| `copyFileSync` | ✅ | Simple file copy |
 | `linkSync` | ❌ | Throws |
 
 ### `node:process`

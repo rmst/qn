@@ -2,6 +2,7 @@ import * as std from 'std';
 import * as os from 'os';
 import { Buffer } from 'node:buffer';
 import picomatch from './glob/index.js';
+import { chmod as native_chmod } from 'qn_native';
 
 
 export const writeFileSync = (path, data, options) => {
@@ -206,6 +207,81 @@ export function renameSync(oldPath, newPath) {
 	const result = os.rename(oldPath, newPath);
 	if (result !== 0) {
 		throw new Error(`Failed to rename ${oldPath} to ${newPath}`);
+	}
+}
+
+export function chmodSync(path, mode) {
+	const result = native_chmod(path, mode);
+	if (result !== 0) {
+		throw new Error(`Failed to chmod ${path}: error ${-result}`);
+	}
+}
+
+export function copyFileSync(src, dest, mode) {
+	if (mode !== undefined) {
+		throw new Error('copyFileSync mode argument is not supported');
+	}
+	const data = readFileSync(src);
+	writeFileSync(dest, data);
+}
+
+export function cpSync(src, dest, options = {}) {
+	const { recursive = false, force = false } = options;
+
+	const [srcStat, srcErr] = os.lstat(src);
+	if (srcErr !== 0) {
+		throw new Error(`Failed to stat source: ${src}`);
+	}
+
+	const srcIsDir = (srcStat.mode & os.S_IFMT) === os.S_IFDIR;
+	const srcIsSymlink = (srcStat.mode & os.S_IFMT) === os.S_IFLNK;
+
+	if (srcIsDir && !recursive) {
+		throw new Error(`Source is a directory, use recursive option: ${src}`);
+	}
+
+	if (srcIsSymlink) {
+		const [target, err] = os.readlink(src);
+		if (err !== 0) {
+			throw new Error(`Failed to read symlink: ${src}`);
+		}
+		const [, destErr] = os.lstat(dest);
+		if (destErr === 0) {
+			if (force) {
+				os.remove(dest);
+			} else {
+				throw new Error(`Destination already exists: ${dest}`);
+			}
+		}
+		const result = os.symlink(target, dest);
+		if (result !== 0) {
+			throw new Error(`Failed to create symlink: ${dest}`);
+		}
+		return;
+	}
+
+	if (srcIsDir) {
+		const [, destErr] = os.stat(dest);
+		if (destErr !== 0) {
+			const mkResult = os.mkdir(dest, srcStat.mode & 0o777);
+			if (mkResult !== 0) {
+				throw new Error(`Failed to create directory: ${dest}`);
+			}
+		}
+
+		const [entries, readErr] = os.readdir(src);
+		if (readErr !== 0) {
+			throw new Error(`Failed to read directory: ${src}`);
+		}
+
+		for (const entry of entries) {
+			if (entry === '.' || entry === '..') continue;
+			cpSync(`${src}/${entry}`, `${dest}/${entry}`, options);
+		}
+	} else {
+		const data = readFileSync(src);
+		writeFileSync(dest, data);
+		native_chmod(dest, srcStat.mode & 0o777);
 	}
 }
 

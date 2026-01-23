@@ -131,8 +131,12 @@ $(BIN_DIR)/obj/sqlite3.o: sqlite/sqlite3.c | $(BIN_DIR)/obj
 $(BIN_DIR)/obj/qjs-sqlite.o: sqlite/qjs-sqlite.c sqlite/sqlite3.h | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Isqlite -c -o $@ $<
 
-# SQLite objects for linking
-SQLITE_OBJS = $(BIN_DIR)/obj/sqlite3.o $(BIN_DIR)/obj/qjs-sqlite.o
+# Build qn-native (extra OS functions like chmod)
+$(BIN_DIR)/obj/qn-native.o: native/qn-native.c quickjs-deps | $(BIN_DIR)/obj
+	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
+
+# Native C extensions for linking
+NATIVE_OBJS = $(BIN_DIR)/obj/sqlite3.o $(BIN_DIR)/obj/qjs-sqlite.o $(BIN_DIR)/obj/qn-native.o
 
 # Generate version info module for qn/qx --version
 $(BIN_DIR)/obj/qn/version-info.js: | $(BIN_DIR)/obj
@@ -143,16 +147,15 @@ $(BIN_DIR)/obj/qn/version-info.js: | $(BIN_DIR)/obj
 		echo "export const commit = '$(GIT_COMMIT)', buildTime = null;" > $@; \
 	fi
 
-# Build qn (standalone executable with embedded node modules, qx, and sqlite)
-# Uses -e to generate C, then compiles and links with sqlite
-$(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js $(QJSXC_PROG) $(SQLITE_OBJS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qn.c node/bootstrap.js
-	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qn.c $(SQLITE_OBJS) $(BIN_DIR)/libquickjs.a $(LIBS)
+# Build qn (standalone executable with embedded node modules, qx, sqlite, and native extensions)
+$(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js $(QJSXC_PROG) $(NATIVE_OBJS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
+	QJSXPATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -M qn_native,qn_native -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qn.c node/bootstrap.js
+	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qn.c $(NATIVE_OBJS) $(BIN_DIR)/libquickjs.a $(LIBS)
 
 # Build qx (zx-compatible shell scripting with $ function)
-$(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js $(QJSXC_PROG) $(SQLITE_OBJS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qx.c qx/bootstrap.js
-	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qx.c $(SQLITE_OBJS) $(BIN_DIR)/libquickjs.a $(LIBS)
+$(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js $(QJSXC_PROG) $(NATIVE_OBJS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
+	QJSXPATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -M qn_native,qn_native -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qx.c qx/bootstrap.js
+	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qx.c $(NATIVE_OBJS) $(BIN_DIR)/libquickjs.a $(LIBS)
 
 # Create convenience symlinks in bin/ directory
 convenience-links: $(QJSX_PROG) $(QN_PROG) $(QX_PROG) $(QJSXC_PROG)

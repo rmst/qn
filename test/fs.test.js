@@ -659,4 +659,81 @@ describe('node:fs shim', () => {
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { files: [], length: 0 })
 	})
+
+	testQnOnly('chmodSync changes file mode', ({ bin, dir }) => {
+		writeFileSync(`${dir}/target.txt`, 'content')
+		writeFileSync(`${dir}/test.js`, `
+			import { chmodSync, statSync } from 'node:fs'
+			const before = statSync('${dir}/target.txt').mode & 0o777
+			chmodSync('${dir}/target.txt', 0o755)
+			const after = statSync('${dir}/target.txt').mode & 0o777
+			console.log(JSON.stringify({ before: before.toString(8), after: after.toString(8) }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.after, '755')
+	})
+
+	testQnOnly('cpSync copies a single file', ({ bin, dir }) => {
+		writeFileSync(`${dir}/source.txt`, 'file content')
+		writeFileSync(`${dir}/test.js`, `
+			import { cpSync, readFileSync } from 'node:fs'
+			cpSync('${dir}/source.txt', '${dir}/dest.txt')
+			console.log(JSON.stringify({ content: readFileSync('${dir}/dest.txt', 'utf8') }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: 'file content' })
+	})
+
+	testQnOnly('cpSync copies directory recursively', ({ bin, dir }) => {
+		mkdirSync(`${dir}/srcdir`)
+		mkdirSync(`${dir}/srcdir/subdir`)
+		writeFileSync(`${dir}/srcdir/file1.txt`, 'content1')
+		writeFileSync(`${dir}/srcdir/subdir/file2.txt`, 'content2')
+		writeFileSync(`${dir}/test.js`, `
+			import { cpSync, readdirSync, readFileSync } from 'node:fs'
+			cpSync('${dir}/srcdir', '${dir}/destdir', { recursive: true })
+			const files = readdirSync('${dir}/destdir').sort()
+			const subfiles = readdirSync('${dir}/destdir/subdir').sort()
+			const content1 = readFileSync('${dir}/destdir/file1.txt', 'utf8')
+			const content2 = readFileSync('${dir}/destdir/subdir/file2.txt', 'utf8')
+			console.log(JSON.stringify({ files, subfiles, content1, content2 }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			files: ['file1.txt', 'subdir'],
+			subfiles: ['file2.txt'],
+			content1: 'content1',
+			content2: 'content2'
+		})
+	})
+
+	testQnOnly('cpSync preserves file mode', ({ bin, dir }) => {
+		writeFileSync(`${dir}/exec.sh`, '#!/bin/sh')
+		writeFileSync(`${dir}/test.js`, `
+			import { cpSync, chmodSync, statSync } from 'node:fs'
+			chmodSync('${dir}/exec.sh', 0o755)
+			cpSync('${dir}/exec.sh', '${dir}/exec-copy.sh')
+			const mode = statSync('${dir}/exec-copy.sh').mode & 0o777
+			console.log(JSON.stringify({ mode: mode.toString(8) }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { mode: '755' })
+	})
+
+	testQnOnly('copyFileSync copies a file', ({ bin, dir }) => {
+		writeFileSync(`${dir}/original.txt`, 'original content')
+		writeFileSync(`${dir}/test.js`, `
+			import { copyFileSync, readFileSync } from 'node:fs'
+			copyFileSync('${dir}/original.txt', '${dir}/copy.txt')
+			console.log(JSON.stringify({ content: readFileSync('${dir}/copy.txt', 'utf8') }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: 'original content' })
+	})
 })
