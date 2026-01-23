@@ -472,4 +472,191 @@ describe('node:fs shim', () => {
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { fdIsNumber: true, fdPositive: true })
 	})
+
+	testQnOnly('globSync matches files in current directory', ({ bin, dir }) => {
+		writeFileSync(`${dir}/a.js`, 'a')
+		writeFileSync(`${dir}/b.js`, 'b')
+		writeFileSync(`${dir}/c.txt`, 'c')
+		writeFileSync(`${dir}/test.js`, `
+			import { globSync } from 'node:fs'
+			const files = globSync('*.js', { cwd: '${dir}' })
+			console.log(JSON.stringify({ files: files.sort() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { files: ['a.js', 'b.js', 'test.js'] })
+	})
+
+	testQnOnly('globSync matches files recursively with **', ({ bin, dir }) => {
+		mkdirSync(`${dir}/sub`, { recursive: true })
+		writeFileSync(`${dir}/root.js`, 'root')
+		writeFileSync(`${dir}/sub/nested.js`, 'nested')
+		writeFileSync(`${dir}/sub/other.txt`, 'other')
+		writeFileSync(`${dir}/test.js`, `
+			import { globSync } from 'node:fs'
+			const files = globSync('**/*.js', { cwd: '${dir}' })
+			console.log(JSON.stringify({ files: files.sort() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.ok(result.files.includes('root.js'))
+		assert.ok(result.files.includes('sub/nested.js'))
+		assert.ok(!result.files.includes('sub/other.txt'))
+	})
+
+	testQnOnly('globSync with specific subdirectory pattern', ({ bin, dir }) => {
+		mkdirSync(`${dir}/src`, { recursive: true })
+		mkdirSync(`${dir}/lib`, { recursive: true })
+		writeFileSync(`${dir}/src/main.js`, 'main')
+		writeFileSync(`${dir}/src/util.js`, 'util')
+		writeFileSync(`${dir}/lib/helper.js`, 'helper')
+		writeFileSync(`${dir}/test.js`, `
+			import { globSync } from 'node:fs'
+			const files = globSync('src/*.js', { cwd: '${dir}' })
+			console.log(JSON.stringify({ files: files.sort() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { files: ['src/main.js', 'src/util.js'] })
+	})
+
+	testQnOnly('globSync with exclude function', ({ bin, dir }) => {
+		mkdirSync(`${dir}/node_modules/pkg`, { recursive: true })
+		writeFileSync(`${dir}/app.js`, 'app')
+		writeFileSync(`${dir}/node_modules/pkg/index.js`, 'pkg')
+		writeFileSync(`${dir}/test.js`, `
+			import { globSync } from 'node:fs'
+			const files = globSync('**/*.js', {
+				cwd: '${dir}',
+				exclude: (dirent) => dirent.name === 'node_modules'
+			})
+			console.log(JSON.stringify({ files: files.sort() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.ok(result.files.includes('app.js'))
+		assert.ok(!result.files.some(f => f.includes('node_modules')))
+	})
+
+	testQnOnly('globSync with negation pattern', ({ bin, dir }) => {
+		writeFileSync(`${dir}/a.js`, 'a')
+		writeFileSync(`${dir}/b.test.js`, 'b')
+		writeFileSync(`${dir}/c.js`, 'c')
+		writeFileSync(`${dir}/test.js`, `
+			import { globSync } from 'node:fs'
+			const files = globSync(['*.js', '!*.test.js'], { cwd: '${dir}' })
+			console.log(JSON.stringify({ files: files.sort() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.ok(result.files.includes('a.js'))
+		assert.ok(result.files.includes('c.js'))
+		assert.ok(!result.files.includes('b.test.js'))
+	})
+
+	testQnOnly('globSync with withFileTypes option', ({ bin, dir }) => {
+		writeFileSync(`${dir}/file.js`, 'content')
+		mkdirSync(`${dir}/subdir`)
+		writeFileSync(`${dir}/test.js`, `
+			import { globSync } from 'node:fs'
+			const entries = globSync('*', { cwd: '${dir}', withFileTypes: true })
+			const fileEntry = entries.find(e => e.name === 'file.js')
+			const dirEntry = entries.find(e => e.name === 'subdir')
+			console.log(JSON.stringify({
+				fileIsFile: fileEntry?.isFile(),
+				fileIsDir: fileEntry?.isDirectory(),
+				dirIsFile: dirEntry?.isFile(),
+				dirIsDir: dirEntry?.isDirectory()
+			}))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			fileIsFile: true,
+			fileIsDir: false,
+			dirIsFile: false,
+			dirIsDir: true
+		})
+	})
+
+	testQnOnly('globSync with brace expansion pattern', ({ bin, dir }) => {
+		writeFileSync(`${dir}/app.js`, 'js')
+		writeFileSync(`${dir}/app.ts`, 'ts')
+		writeFileSync(`${dir}/app.css`, 'css')
+		writeFileSync(`${dir}/test.js`, `
+			import { globSync } from 'node:fs'
+			const files = globSync('*.{js,ts}', { cwd: '${dir}' })
+			console.log(JSON.stringify({ files: files.sort() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.ok(result.files.includes('app.js'))
+		assert.ok(result.files.includes('app.ts'))
+		assert.ok(!result.files.includes('app.css'))
+	})
+
+	testQnOnly('glob async iterator', ({ bin, dir }) => {
+		writeFileSync(`${dir}/a.js`, 'a')
+		writeFileSync(`${dir}/b.js`, 'b')
+		writeFileSync(`${dir}/test.js`, `
+			import { glob } from 'node:fs'
+			const files = []
+			for await (const file of glob('*.js', { cwd: '${dir}' })) {
+				files.push(file)
+			}
+			console.log(JSON.stringify({ files: files.sort() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { files: ['a.js', 'b.js', 'test.js'] })
+	})
+
+	testQnOnly('globSync with question mark wildcard', ({ bin, dir }) => {
+		writeFileSync(`${dir}/a1.js`, 'a1')
+		writeFileSync(`${dir}/a2.js`, 'a2')
+		writeFileSync(`${dir}/ab.js`, 'ab')
+		writeFileSync(`${dir}/test.js`, `
+			import { globSync } from 'node:fs'
+			const files = globSync('a?.js', { cwd: '${dir}' })
+			console.log(JSON.stringify({ files: files.sort() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.ok(result.files.includes('a1.js'))
+		assert.ok(result.files.includes('a2.js'))
+		assert.ok(result.files.includes('ab.js'))
+	})
+
+	testQnOnly('globSync with character class', ({ bin, dir }) => {
+		writeFileSync(`${dir}/file1.txt`, '1')
+		writeFileSync(`${dir}/file2.txt`, '2')
+		writeFileSync(`${dir}/filea.txt`, 'a')
+		writeFileSync(`${dir}/test.js`, `
+			import { globSync } from 'node:fs'
+			const files = globSync('file[0-9].txt', { cwd: '${dir}' })
+			console.log(JSON.stringify({ files: files.sort() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.ok(result.files.includes('file1.txt'))
+		assert.ok(result.files.includes('file2.txt'))
+		assert.ok(!result.files.includes('filea.txt'))
+	})
+
+	testQnOnly('globSync empty result for non-matching pattern', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { globSync } from 'node:fs'
+			const files = globSync('*.nonexistent', { cwd: '${dir}' })
+			console.log(JSON.stringify({ files, length: files.length }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { files: [], length: 0 })
+	})
 })

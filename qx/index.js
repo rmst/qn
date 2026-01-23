@@ -6,5 +6,5 @@
  * const result = await $`echo "Hello"`
  */
 
-export { $, ProcessPromise, ProcessOutput } from './core.js'
+export { $, ProcessPromise, ProcessOutput, glob, retry } from './core.js'
 export { default } from './core.js'
