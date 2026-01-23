@@ -307,11 +307,51 @@ assert.fail = function fail(message) {
 	})
 }
 
+/**
+ * Assert that a string matches a regular expression.
+ */
+assert.match = function match(string, regexp, message) {
+	if (typeof string !== 'string') {
+		throw new TypeError('The "string" argument must be of type string')
+	}
+	if (!(regexp instanceof RegExp)) {
+		throw new TypeError('The "regexp" argument must be an instance of RegExp')
+	}
+	if (!regexp.test(string)) {
+		throw new AssertionError({
+			message: message || `The input did not match the regular expression ${regexp}. Input: ${formatValue(string)}`,
+			actual: string,
+			expected: regexp,
+			operator: 'match'
+		})
+	}
+}
+
+/**
+ * Assert that a string does not match a regular expression.
+ */
+assert.doesNotMatch = function doesNotMatch(string, regexp, message) {
+	if (typeof string !== 'string') {
+		throw new TypeError('The "string" argument must be of type string')
+	}
+	if (!(regexp instanceof RegExp)) {
+		throw new TypeError('The "regexp" argument must be an instance of RegExp')
+	}
+	if (regexp.test(string)) {
+		throw new AssertionError({
+			message: message || `The input was expected to not match the regular expression ${regexp}. Input: ${formatValue(string)}`,
+			actual: string,
+			expected: regexp,
+			operator: 'doesNotMatch'
+		})
+	}
+}
+
 // Also export AssertionError
 assert.AssertionError = AssertionError
 
 export default assert
 export { assert }
 
-const { ok, strictEqual, deepStrictEqual, fail } = assert
-export { ok, strictEqual, deepStrictEqual, fail }
+const { ok, strictEqual, deepStrictEqual, fail, match, doesNotMatch } = assert
+export { ok, strictEqual, deepStrictEqual, fail, match, doesNotMatch }

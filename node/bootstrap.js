@@ -14,6 +14,7 @@
 import * as std from "std"
 import "node-globals"
 import { resolve } from "node:path"
+import { globSync } from "node:fs"
 import { commit, buildTime } from "qn:version-info"
 
 /**
@@ -40,11 +41,17 @@ if (scriptArgs[1] === '--version' || scriptArgs[1] === '-V') {
 if (scriptArgs.length < 2) {
 	await import("repl")
 } else if (scriptArgs[1] === '--test') {
-	// Run test files (shell expands globs)
+	// Run test files with glob expansion (like Node.js)
 	await import('node:test')
+
+	// Expand all patterns through glob
+	const testFiles = []
 	for (let i = 2; i < scriptArgs.length; i++) {
-		const testPath = resolveScriptPath(scriptArgs[i])
-		await import(testPath)
+		testFiles.push(...globSync(scriptArgs[i]))
+	}
+
+	for (const testPath of testFiles) {
+		await import(resolveScriptPath(testPath))
 	}
 } else {
 	const scriptPath = resolveScriptPath(scriptArgs[1])

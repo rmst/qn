@@ -94,7 +94,7 @@ This document compares qx (for QuickJS) with [Google's zx](https://google.github
 | `retry(count, fn)` | ✅ | ✅ | |
 | `spinner()` | ✅ | ❌ | Not implemented |
 | `fetch()` | ✅ | ✅ | Via `node:fetch` shim |
-| `glob()` | ✅ | ❌ | Not implemented |
+| `glob()` | ✅ | ✅ | |
 | `which()` | ✅ | ❌ | Not implemented |
 | `tmpdir()` | ✅ | ❌ | Use `node:fs` and `node:os` |
 | `tmpfile()` | ✅ | ❌ | Use `node:fs` and `node:os` |
@@ -156,5 +156,5 @@ qx implements the core zx functionality needed for shell scripting:
 **Not implemented in qx:**
 - Sync execution (`$.sync`)
 - Advanced process control (abort, stdio)
-- Rich utilities (glob, which, question, spinner)
+- Rich utilities (which, question, spinner)
 - Bundled packages (chalk, yaml, etc.)

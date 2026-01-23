@@ -24,7 +24,7 @@
  */
 
 import process from 'node:process'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, globSync } from 'node:fs'
 import { execFile, execFileSync } from 'node:child_process'
 import { Buffer } from 'node:buffer'
 
@@ -754,4 +754,34 @@ export async function retry(count, fn) {
 		}
 	}
 	throw lastError
+}
+
+/**
+ * Find files matching glob patterns.
+ * Compatible with zx's glob() function.
+ *
+ * @param {string|string[]} patterns - Glob pattern(s) to match
+ * @param {Object} [options] - Options
+ * @param {string} [options.cwd] - Current working directory
+ * @param {boolean} [options.dot] - Include dotfiles
+ * @param {string[]} [options.ignore] - Patterns to ignore
+ * @returns {Promise<string[]>} Array of matching file paths
+ *
+ * @example
+ * const files = await glob('*.js')
+ * const allJs = await glob(['src/**\/*.js', 'lib/**\/*.js'])
+ * const filtered = await glob('**\/*.ts', { ignore: ['node_modules/**'] })
+ */
+export async function glob(patterns, options = {}) {
+	const { cwd, dot, ignore } = options
+
+	// Convert ignore patterns to negative patterns
+	let allPatterns = Array.isArray(patterns) ? [...patterns] : [patterns]
+	if (ignore && ignore.length > 0) {
+		for (const ignorePattern of ignore) {
+			allPatterns.push('!' + ignorePattern)
+		}
+	}
+
+	return globSync(allPatterns, { cwd, dot })
 }

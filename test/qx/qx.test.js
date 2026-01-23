@@ -464,3 +464,134 @@ describe('qx with node shims', () => {
 		}
 	})
 })
+
+describe('qx glob function', () => {
+	test('glob matches files with simple pattern', () => {
+		const dir = mktempdir()
+		try {
+			writeFileSync(`${dir}/a.js`, 'a')
+			writeFileSync(`${dir}/b.js`, 'b')
+			writeFileSync(`${dir}/c.txt`, 'c')
+			const output = runQx(`
+				import { glob } from 'qx'
+				const files = await glob('*.js')
+				console.log(JSON.stringify({ files: files.sort() }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { files: ['a.js', 'b.js', 'test.js'] })
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('glob matches recursively with **', () => {
+		const dir = mktempdir()
+		try {
+			mkdirSync(`${dir}/sub`)
+			writeFileSync(`${dir}/root.js`, 'root')
+			writeFileSync(`${dir}/sub/nested.js`, 'nested')
+			writeFileSync(`${dir}/sub/other.txt`, 'txt')
+			const output = runQx(`
+				import { glob } from 'qx'
+				const files = await glob('**/*.js')
+				console.log(JSON.stringify({ files: files.sort() }))
+			`, dir)
+			const result = JSON.parse(output)
+			assert.ok(result.files.includes('root.js'))
+			assert.ok(result.files.includes('sub/nested.js'))
+			assert.ok(!result.files.includes('sub/other.txt'))
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('glob with cwd option', () => {
+		const dir = mktempdir()
+		try {
+			mkdirSync(`${dir}/subdir`)
+			writeFileSync(`${dir}/subdir/a.js`, 'a')
+			writeFileSync(`${dir}/subdir/b.txt`, 'b')
+			const output = runQx(`
+				import { glob } from 'qx'
+				const files = await glob('*.js', { cwd: '${dir}/subdir' })
+				console.log(JSON.stringify({ files: files.sort() }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { files: ['a.js'] })
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('glob with ignore option', () => {
+		const dir = mktempdir()
+		try {
+			mkdirSync(`${dir}/node_modules`)
+			writeFileSync(`${dir}/app.js`, 'app')
+			writeFileSync(`${dir}/node_modules/pkg.js`, 'pkg')
+			const output = runQx(`
+				import { glob } from 'qx'
+				const files = await glob('**/*.js', { ignore: ['node_modules/**'] })
+				console.log(JSON.stringify({ files: files.sort() }))
+			`, dir)
+			const result = JSON.parse(output)
+			assert.ok(result.files.includes('app.js'))
+			assert.ok(!result.files.some(f => f.includes('node_modules')))
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('glob with multiple patterns', () => {
+		const dir = mktempdir()
+		try {
+			writeFileSync(`${dir}/a.js`, 'a')
+			writeFileSync(`${dir}/b.ts`, 'b')
+			writeFileSync(`${dir}/c.txt`, 'c')
+			const output = runQx(`
+				import { glob } from 'qx'
+				const files = await glob(['*.js', '*.ts'])
+				console.log(JSON.stringify({ files: files.sort() }))
+			`, dir)
+			const result = JSON.parse(output)
+			assert.ok(result.files.includes('a.js'))
+			assert.ok(result.files.includes('b.ts'))
+			assert.ok(!result.files.includes('c.txt'))
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('glob with brace expansion', () => {
+		const dir = mktempdir()
+		try {
+			writeFileSync(`${dir}/style.css`, 'css')
+			writeFileSync(`${dir}/style.scss`, 'scss')
+			writeFileSync(`${dir}/style.less`, 'less')
+			const output = runQx(`
+				import { glob } from 'qx'
+				const files = await glob('*.{css,scss}')
+				console.log(JSON.stringify({ files: files.sort() }))
+			`, dir)
+			const result = JSON.parse(output)
+			assert.ok(result.files.includes('style.css'))
+			assert.ok(result.files.includes('style.scss'))
+			assert.ok(!result.files.includes('style.less'))
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('glob returns empty array for no matches', () => {
+		const dir = mktempdir()
+		try {
+			writeFileSync(`${dir}/a.js`, 'a')
+			const output = runQx(`
+				import { glob } from 'qx'
+				const files = await glob('*.nonexistent')
+				console.log(JSON.stringify({ files, length: files.length }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { files: [], length: 0 })
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+})
