@@ -13,7 +13,20 @@
 
 import * as std from "std"
 import "node-globals"
+import { resolve } from "node:path"
 import { commit, buildTime } from "qn:version-info"
+
+/**
+ * Resolve a script path to an absolute path.
+ * - Relative paths (./ or ../) are resolved against cwd
+ * - Absolute paths are returned as-is
+ * - Bare paths are returned as-is for QJSXPATH resolution
+ */
+function resolveScriptPath(path) {
+	if (!path || path.startsWith('/')) return path
+	if (path.startsWith('./') || path.startsWith('../')) return resolve(path)
+	return path
+}
 
 // Handle --version flag
 if (scriptArgs[1] === '--version' || scriptArgs[1] === '-V') {
@@ -30,10 +43,11 @@ if (scriptArgs.length < 2) {
 	// Run test files (shell expands globs)
 	await import('node:test')
 	for (let i = 2; i < scriptArgs.length; i++) {
-		await import(scriptArgs[i])
+		const testPath = resolveScriptPath(scriptArgs[i])
+		await import(testPath)
 	}
 } else {
-	const scriptPath = scriptArgs[1]
+	const scriptPath = resolveScriptPath(scriptArgs[1])
 
 	// Keep scriptArgs as-is to match Node.js argv behavior:
 	// argv[0] = interpreter, argv[1] = script, argv[2+] = args

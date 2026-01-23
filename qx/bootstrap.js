@@ -10,6 +10,7 @@
 
 import * as std from "std"
 import "node-globals"
+import { resolve } from "node:path"
 import process from "node:process"
 import { Buffer } from "node:buffer"
 import $, { ProcessPromise, ProcessOutput, retry } from "qx/core"
@@ -65,11 +66,23 @@ globalThis.within = async (fn) => {
 // Argv parsing (like zx's argv, uses node:process)
 globalThis.argv = process.argv.slice(2)
 
+/**
+ * Resolve a script path to an absolute path.
+ * - Relative paths (./ or ../) are resolved against cwd
+ * - Absolute paths are returned as-is
+ * - Bare paths are returned as-is for QJSXPATH resolution
+ */
+function resolveScriptPath(path) {
+	if (!path || path.startsWith('/')) return path
+	if (path.startsWith('./') || path.startsWith('../')) return resolve(path)
+	return path
+}
+
 // If no script provided, start the REPL
 if (process.argv.length < 2) {
 	await import("repl")
 } else {
-	const scriptPath = process.argv[1]
+	const scriptPath = resolveScriptPath(process.argv[1])
 
 	// Load and execute the user's script
 	try {
