@@ -660,7 +660,7 @@ describe('node:fs shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { files: [], length: 0 })
 	})
 
-	testQnOnly('chmodSync changes file mode', ({ bin, dir }) => {
+	test('chmodSync changes file mode', ({ bin, dir }) => {
 		writeFileSync(`${dir}/target.txt`, 'content')
 		writeFileSync(`${dir}/test.js`, `
 			import { chmodSync, statSync } from 'node:fs'
@@ -675,7 +675,7 @@ describe('node:fs shim', () => {
 		assert.strictEqual(result.after, '755')
 	})
 
-	testQnOnly('cpSync copies a single file', ({ bin, dir }) => {
+	test('cpSync copies a single file', ({ bin, dir }) => {
 		writeFileSync(`${dir}/source.txt`, 'file content')
 		writeFileSync(`${dir}/test.js`, `
 			import { cpSync, readFileSync } from 'node:fs'
@@ -687,7 +687,7 @@ describe('node:fs shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { content: 'file content' })
 	})
 
-	testQnOnly('cpSync copies directory recursively', ({ bin, dir }) => {
+	test('cpSync copies directory recursively', ({ bin, dir }) => {
 		mkdirSync(`${dir}/srcdir`)
 		mkdirSync(`${dir}/srcdir/subdir`)
 		writeFileSync(`${dir}/srcdir/file1.txt`, 'content1')
@@ -711,7 +711,7 @@ describe('node:fs shim', () => {
 		})
 	})
 
-	testQnOnly('cpSync preserves file mode', ({ bin, dir }) => {
+	test('cpSync preserves file mode', ({ bin, dir }) => {
 		writeFileSync(`${dir}/exec.sh`, '#!/bin/sh')
 		writeFileSync(`${dir}/test.js`, `
 			import { cpSync, chmodSync, statSync } from 'node:fs'
@@ -725,7 +725,7 @@ describe('node:fs shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { mode: '755' })
 	})
 
-	testQnOnly('copyFileSync copies a file', ({ bin, dir }) => {
+	test('copyFileSync copies a file', ({ bin, dir }) => {
 		writeFileSync(`${dir}/original.txt`, 'original content')
 		writeFileSync(`${dir}/test.js`, `
 			import { copyFileSync, readFileSync } from 'node:fs'

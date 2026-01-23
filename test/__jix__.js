@@ -31,4 +31,12 @@ export const run = {
 		node --test --experimental-test-isolation=none test/*.test.js test/**/*.test.js
 		# qn --test test/*.test.js test/**/*.test.js
 	`,
+
+	nonode: jix.script`
+		cd ${import.meta.dirname}/..
+		make build
+		export NO_NODEJS_TESTS=1
+		# node --test --experimental-test-isolation=none test/*.test.js test/**/*.test.js
+		qn --test './test/*.test.js' './test/**/*.test.js'
+	`,
 }

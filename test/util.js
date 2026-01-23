@@ -83,7 +83,8 @@ export const execAsync = (cmd, args, opts = {}) => {
  * @param {(ctx: { bin: string, dir: string }) => void} fn - Test function receiving { bin, dir }
  */
 export const test = (name, fn) => {
-	for (const bin of ['node', QN()]) {
+	const bins = process.env.NO_NODEJS_TESTS ? [QN()] : ['node', QN()]
+	for (const bin of bins) {
 		const label = bin === 'node' ? 'node' : 'qn'
 		const testFn = async () => {
 			const dir = mktempdir()
