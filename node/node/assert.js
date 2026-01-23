@@ -347,11 +347,191 @@ assert.doesNotMatch = function doesNotMatch(string, regexp, message) {
 	}
 }
 
+/**
+ * Assert that two values are not strictly equal (!==).
+ */
+assert.notStrictEqual = function notStrictEqual(actual, expected, message) {
+	if (isStrictEqual(actual, expected)) {
+		const defaultMsg = `Expected values to be not strictly equal:\n\n${formatValue(actual)}`
+		throw new AssertionError({
+			message: message || defaultMsg,
+			actual,
+			expected,
+			operator: 'notStrictEqual'
+		})
+	}
+}
+
+/**
+ * Assert that two values are not deeply strictly equal.
+ */
+assert.notDeepStrictEqual = function notDeepStrictEqual(actual, expected, message) {
+	if (isDeepStrictEqual(actual, expected)) {
+		const defaultMsg = `Expected values to be not deeply strictly equal:\n\n${formatValue(actual)}`
+		throw new AssertionError({
+			message: message || defaultMsg,
+			actual,
+			expected,
+			operator: 'notDeepStrictEqual'
+		})
+	}
+}
+
+/**
+ * Assert that a function throws an error.
+ * @param {Function} fn - Function expected to throw
+ * @param {RegExp|Function|Object|Error} [error] - Expected error (RegExp, constructor, validation object, or Error)
+ * @param {string} [message] - Optional assertion message
+ */
+assert.throws = function throws(fn, error, message) {
+	if (typeof fn !== 'function') {
+		throw new TypeError('The "fn" argument must be of type function')
+	}
+
+	// Handle optional error parameter
+	if (typeof error === 'string') {
+		message = error
+		error = undefined
+	}
+
+	let threw = false
+	let actual
+
+	try {
+		fn()
+	} catch (e) {
+		threw = true
+		actual = e
+	}
+
+	if (!threw) {
+		throw new AssertionError({
+			message: message || 'Missing expected exception',
+			actual: undefined,
+			expected: error,
+			operator: 'throws'
+		})
+	}
+
+	// If no error validator provided, just check that something was thrown
+	if (error === undefined) {
+		return
+	}
+
+	// RegExp: test against error message
+	if (error instanceof RegExp) {
+		if (!error.test(actual?.message)) {
+			throw new AssertionError({
+				message: message || `The error message "${actual?.message}" does not match ${error}`,
+				actual,
+				expected: error,
+				operator: 'throws'
+			})
+		}
+		return
+	}
+
+	// Function: check instanceof (Error constructor)
+	if (typeof error === 'function') {
+		if (!(actual instanceof error)) {
+			throw new AssertionError({
+				message: message || `The error is not an instance of ${error.name || 'expected constructor'}`,
+				actual,
+				expected: error,
+				operator: 'throws'
+			})
+		}
+		return
+	}
+
+	// Object: validate properties
+	if (typeof error === 'object' && error !== null) {
+		for (const key of Object.keys(error)) {
+			const expectedVal = error[key]
+			const actualVal = actual?.[key]
+
+			if (expectedVal instanceof RegExp) {
+				if (!expectedVal.test(actualVal)) {
+					throw new AssertionError({
+						message: message || `The error.${key} "${actualVal}" does not match ${expectedVal}`,
+						actual,
+						expected: error,
+						operator: 'throws'
+					})
+				}
+			} else if (!isDeepStrictEqual(actualVal, expectedVal)) {
+				throw new AssertionError({
+					message: message || `The error.${key} property does not match: expected ${formatValue(expectedVal)}, got ${formatValue(actualVal)}`,
+					actual,
+					expected: error,
+					operator: 'throws'
+				})
+			}
+		}
+		return
+	}
+}
+
+/**
+ * Assert that a function does not throw an error.
+ * @param {Function} fn - Function expected not to throw
+ * @param {RegExp|Function} [error] - Error type that should not be thrown
+ * @param {string} [message] - Optional assertion message
+ */
+assert.doesNotThrow = function doesNotThrow(fn, error, message) {
+	if (typeof fn !== 'function') {
+		throw new TypeError('The "fn" argument must be of type function')
+	}
+
+	// Handle optional error parameter
+	if (typeof error === 'string') {
+		message = error
+		error = undefined
+	}
+
+	try {
+		fn()
+	} catch (actual) {
+		// If no error validator, any throw is a failure
+		if (error === undefined) {
+			throw new AssertionError({
+				message: message || `Got unwanted exception: ${actual?.message || actual}`,
+				actual,
+				expected: undefined,
+				operator: 'doesNotThrow'
+			})
+		}
+
+		// RegExp: check if error message matches
+		if (error instanceof RegExp && error.test(actual?.message)) {
+			throw new AssertionError({
+				message: message || `Got unwanted exception: ${actual?.message}`,
+				actual,
+				expected: error,
+				operator: 'doesNotThrow'
+			})
+		}
+
+		// Function: check instanceof
+		if (typeof error === 'function' && actual instanceof error) {
+			throw new AssertionError({
+				message: message || `Got unwanted exception: ${actual?.message || actual}`,
+				actual,
+				expected: error,
+				operator: 'doesNotThrow'
+			})
+		}
+
+		// Error didn't match the filter, re-throw it
+		throw actual
+	}
+}
+
 // Also export AssertionError
 assert.AssertionError = AssertionError
 
 export default assert
 export { assert }
 
-const { ok, strictEqual, deepStrictEqual, fail, match, doesNotMatch } = assert
-export { ok, strictEqual, deepStrictEqual, fail, match, doesNotMatch }
+const { ok, strictEqual, deepStrictEqual, notStrictEqual, notDeepStrictEqual, fail, match, doesNotMatch, throws, doesNotThrow } = assert
+export { ok, strictEqual, deepStrictEqual, notStrictEqual, notDeepStrictEqual, fail, match, doesNotMatch, throws, doesNotThrow }
