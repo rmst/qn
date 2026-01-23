@@ -100,7 +100,11 @@ export const mkdirSync = (path, { mode = 0o777, recursive = false } = {}) => {
 
     const result = os.mkdir(currentPath, mode);
     if (result !== 0) {
-      throw new Error(`Failed to create directory: ${currentPath}`);
+      // Re-check: another process may have created it concurrently (EEXIST race)
+      const [recheckStat, recheckErr] = os.stat(currentPath);
+      if (recheckErr !== 0 || (recheckStat.mode & os.S_IFMT) !== os.S_IFDIR) {
+        throw new Error(`Failed to create directory: ${currentPath}`);
+      }
     }
   }
 }
