@@ -141,7 +141,7 @@ import { spawn, exec, execFile, execSync, execFileSync } from 'node:child_proces
 | `execSync` | ✅ | Supports `cwd`, `env`, `input` (string/Buffer), `shell` |
 | `execFileSync` | ✅ | Supports `cwd`, `env`, `input` (string/Buffer), `timeout`, `killSignal`, `stdio` (including numeric fds) |
 | `ChildProcess` | ✅ | EventEmitter with streaming stdio |
-| `spawnSync` | ❌ | |
+| `spawnSync` | ✅ | Supports `cwd`, `env`, `input`, `stdio`, `timeout`, `shell` |
 | `fork` | ❌ | |
 
 **Unsupported options** (throw `NodeCompatibilityError`): `uid`, `gid`, `detached`

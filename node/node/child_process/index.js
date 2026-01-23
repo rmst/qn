@@ -1,5 +1,6 @@
 export { ChildProcess } from './ChildProcess.js'
 export { spawn } from './spawn.js'
+export { spawnSync } from './spawnSync.js'
 export { exec } from './exec.js'
 export { execFile } from './execFile.js'
 export { execSync } from './execSync.js'

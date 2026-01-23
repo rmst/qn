@@ -1,7 +1,7 @@
 import * as os from 'os'
 import { Buffer } from 'node:buffer'
-import { ChildProcess } from './ChildProcess.js'
-import { spawnWithPipes, NodeCompatibilityError } from './utils.js'
+import { spawn } from './spawn.js'
+import { NodeCompatibilityError } from './utils.js'
 import { promisify } from 'node:util'
 
 /**
@@ -64,14 +64,12 @@ export function execFile(file, args, options, callback) {
 		throw new TypeError('args must be an array')
 	}
 
-	// Spawn the process with pipes
-	const { pid, stdinFd, stdoutFd, stderrFd } = spawnWithPipes(file, args, options)
-
-	// Create ChildProcess instance with streams
-	const child = new ChildProcess(pid, {
-		stdoutFd,
-		stderrFd,
-		stdinFd,
+	// Spawn the process using spawn (which now uses shared utilities)
+	const child = spawn(file, args, {
+		cwd: options.cwd,
+		env: options.env,
+		stdio: 'pipe',  // execFile always uses pipes
+		signal: options.signal,
 	})
 
 	// Set up timeout if specified
@@ -100,17 +98,6 @@ export function execFile(file, args, options, callback) {
 	// Write input if provided and close stdin
 	if (options.input !== undefined) {
 		child.stdin.end(options.input)
-	}
-
-	// Handle AbortSignal
-	if (options.signal) {
-		if (options.signal.aborted) {
-			child.kill(killSignal)
-		} else {
-			options.signal.addEventListener('abort', () => {
-				child.kill(killSignal)
-			}, { once: true })
-		}
 	}
 
 	// If callback provided, collect stream data and call on close

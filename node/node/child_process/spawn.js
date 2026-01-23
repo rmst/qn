@@ -1,7 +1,7 @@
 import * as std from 'std'
 import * as os from 'os'
 import { ChildProcess } from './ChildProcess.js'
-import { checkUnsupportedOptions } from './utils.js'
+import { parseStdio, setupStdioPipes, checkUnsupportedOptions } from './utils.js'
 
 const UNSUPPORTED_OPTIONS = [
 	'detached',
@@ -67,70 +67,26 @@ export function spawn(command, args, options) {
 		execCommand = shell
 	}
 
-	// Parse stdio option
+	// Setup pipes using shared utility
 	const stdio = parseStdio(options.stdio)
+	const { parentFds, execOptions, closeChildSide } = setupStdioPipes(stdio)
 
-	// Create pipes based on stdio config
-	let stdinRead = null, stdinWrite = null
-	let stdoutRead = null, stdoutWrite = null
-	let stderrRead = null, stderrWrite = null
-
-	if (stdio[0] === 'pipe') {
-		[stdinRead, stdinWrite] = os.pipe()
-	}
-	if (stdio[1] === 'pipe') {
-		[stdoutRead, stdoutWrite] = os.pipe()
-	}
-	if (stdio[2] === 'pipe') {
-		[stderrRead, stderrWrite] = os.pipe()
-	}
-
-	// Build exec options
-	const execOptions = { env, cwd, block: false }
-
-	if (stdio[0] === 'pipe') {
-		execOptions.stdin = stdinRead
-	} else if (stdio[0] === 'ignore') {
-		execOptions.stdin = os.open('/dev/null', os.O_RDONLY)
-	}
-	// 'inherit' means don't set - use parent's
-
-	if (stdio[1] === 'pipe') {
-		execOptions.stdout = stdoutWrite
-	} else if (stdio[1] === 'ignore') {
-		execOptions.stdout = os.open('/dev/null', os.O_WRONLY)
-	}
-
-	if (stdio[2] === 'pipe') {
-		execOptions.stderr = stderrWrite
-	} else if (stdio[2] === 'ignore') {
-		execOptions.stderr = os.open('/dev/null', os.O_WRONLY)
-	}
+	// Add env and cwd to exec options
+	execOptions.block = false
+	execOptions.env = env
+	execOptions.cwd = cwd
 
 	// Spawn the process
 	const pid = os.exec([execCommand, ...execArgs], execOptions)
 
 	// Close child-side of pipes in parent
-	if (stdio[0] === 'pipe') os.close(stdinRead)
-	if (stdio[1] === 'pipe') os.close(stdoutWrite)
-	if (stdio[2] === 'pipe') os.close(stderrWrite)
-
-	// Close /dev/null fds we opened for 'ignore'
-	if (stdio[0] === 'ignore' && execOptions.stdin !== undefined) {
-		os.close(execOptions.stdin)
-	}
-	if (stdio[1] === 'ignore' && execOptions.stdout !== undefined) {
-		os.close(execOptions.stdout)
-	}
-	if (stdio[2] === 'ignore' && execOptions.stderr !== undefined) {
-		os.close(execOptions.stderr)
-	}
+	closeChildSide()
 
 	// Create ChildProcess instance
 	const childOpts = {}
-	if (stdio[0] === 'pipe') childOpts.stdinFd = stdinWrite
-	if (stdio[1] === 'pipe') childOpts.stdoutFd = stdoutRead
-	if (stdio[2] === 'pipe') childOpts.stderrFd = stderrRead
+	if (parentFds.stdin !== null) childOpts.stdinFd = parentFds.stdin
+	if (parentFds.stdout !== null) childOpts.stdoutFd = parentFds.stdout
+	if (parentFds.stderr !== null) childOpts.stderrFd = parentFds.stderr
 
 	const child = new ChildProcess(pid, childOpts)
 
@@ -146,29 +102,4 @@ export function spawn(command, args, options) {
 	}
 
 	return child
-}
-
-/**
- * Parse stdio option into array of 3 values.
- * @param {string|string[]|undefined} stdio
- * @returns {string[]} Array of ['pipe'|'inherit'|'ignore', ...]
- */
-function parseStdio(stdio) {
-	if (stdio === undefined || stdio === 'pipe') {
-		return ['pipe', 'pipe', 'pipe']
-	}
-	if (stdio === 'inherit') {
-		return ['inherit', 'inherit', 'inherit']
-	}
-	if (stdio === 'ignore') {
-		return ['ignore', 'ignore', 'ignore']
-	}
-	if (Array.isArray(stdio)) {
-		return [
-			stdio[0] || 'pipe',
-			stdio[1] || 'pipe',
-			stdio[2] || 'pipe',
-		]
-	}
-	throw new TypeError(`Invalid stdio option: ${stdio}`)
 }

@@ -3,6 +3,136 @@ import * as os from 'os'
 import { Buffer } from 'node:buffer'
 
 /**
+ * Parse stdio option into array of 3 values.
+ * @param {string|string[]|undefined} stdio
+ * @returns {(string|number)[]} Array of ['pipe'|'inherit'|'ignore'|number, ...]
+ */
+export function parseStdio(stdio) {
+	if (stdio === undefined || stdio === 'pipe') {
+		return ['pipe', 'pipe', 'pipe']
+	}
+	if (stdio === 'inherit') {
+		return ['inherit', 'inherit', 'inherit']
+	}
+	if (stdio === 'ignore') {
+		return ['ignore', 'ignore', 'ignore']
+	}
+	if (Array.isArray(stdio)) {
+		return [
+			stdio[0] ?? 'pipe',
+			stdio[1] ?? 'pipe',
+			stdio[2] ?? 'pipe',
+		]
+	}
+	throw new TypeError(`Invalid stdio option: ${stdio}`)
+}
+
+/**
+ * Signal name to number mapping.
+ * @param {string|number} signal
+ * @returns {number}
+ */
+export function getSignalNumber(signal) {
+	if (typeof signal === 'number') return signal
+	const signals = {
+		SIGHUP: 1,
+		SIGINT: 2,
+		SIGQUIT: 3,
+		SIGKILL: 9,
+		SIGTERM: 15,
+	}
+	return signals[signal] || 15
+}
+
+/**
+ * Signal number to name mapping.
+ * @param {number} num
+ * @returns {string}
+ */
+export function signalName(num) {
+	const names = {
+		1: 'SIGHUP',
+		2: 'SIGINT',
+		3: 'SIGQUIT',
+		9: 'SIGKILL',
+		15: 'SIGTERM',
+	}
+	return names[num] || `SIG${num}`
+}
+
+/**
+ * Create pipes and file descriptors based on stdio configuration.
+ * Returns the fds for parent side and the options to pass to os.exec.
+ * @param {(string|number)[]} stdio - Parsed stdio array
+ * @returns {{ parentFds: { stdin: number|null, stdout: number|null, stderr: number|null }, execOptions: object, cleanup: () => void }}
+ */
+export function setupStdioPipes(stdio) {
+	let stdinRead = null, stdinWrite = null
+	let stdoutRead = null, stdoutWrite = null
+	let stderrRead = null, stderrWrite = null
+	const fdsToCloseOnCleanup = []
+
+	if (stdio[0] === 'pipe') {
+		[stdinRead, stdinWrite] = os.pipe()
+	}
+	if (stdio[1] === 'pipe') {
+		[stdoutRead, stdoutWrite] = os.pipe()
+	}
+	if (stdio[2] === 'pipe') {
+		[stderrRead, stderrWrite] = os.pipe()
+	}
+
+	const execOptions = {}
+
+	if (stdio[0] === 'pipe') {
+		execOptions.stdin = stdinRead
+	} else if (stdio[0] === 'ignore') {
+		execOptions.stdin = os.open('/dev/null', os.O_RDONLY)
+		fdsToCloseOnCleanup.push(execOptions.stdin)
+	} else if (typeof stdio[0] === 'number') {
+		execOptions.stdin = stdio[0]
+	}
+
+	if (stdio[1] === 'pipe') {
+		execOptions.stdout = stdoutWrite
+	} else if (stdio[1] === 'ignore') {
+		execOptions.stdout = os.open('/dev/null', os.O_WRONLY)
+		fdsToCloseOnCleanup.push(execOptions.stdout)
+	} else if (typeof stdio[1] === 'number') {
+		execOptions.stdout = stdio[1]
+	}
+
+	if (stdio[2] === 'pipe') {
+		execOptions.stderr = stderrWrite
+	} else if (stdio[2] === 'ignore') {
+		execOptions.stderr = os.open('/dev/null', os.O_WRONLY)
+		fdsToCloseOnCleanup.push(execOptions.stderr)
+	} else if (typeof stdio[2] === 'number') {
+		execOptions.stderr = stdio[2]
+	}
+
+	// Function to close child-side fds in parent after fork
+	const closeChildSide = () => {
+		if (stdio[0] === 'pipe') os.close(stdinRead)
+		if (stdio[1] === 'pipe') os.close(stdoutWrite)
+		if (stdio[2] === 'pipe') os.close(stderrWrite)
+		for (const fd of fdsToCloseOnCleanup) {
+			os.close(fd)
+		}
+	}
+
+	return {
+		parentFds: {
+			stdin: stdio[0] === 'pipe' ? stdinWrite : null,
+			stdout: stdio[1] === 'pipe' ? stdoutRead : null,
+			stderr: stdio[2] === 'pipe' ? stderrRead : null,
+		},
+		execOptions,
+		closeChildSide,
+	}
+}
+
+/**
  * Error for unsupported Node.js compatibility features.
  */
 export class NodeCompatibilityError extends Error {
@@ -144,41 +274,3 @@ export function prefixLines(prefix, str) {
  * @returns {string}
  */
 export const indent = str => prefixLines("  ", str)
-
-/**
- * Spawn a process with pipes for stdin, stdout, and stderr.
- * This is the shared low-level helper used by both execFile and execFileSync.
- *
- * @param {string} file - The command or executable file to run.
- * @param {string[]} args - The list of arguments to pass to the command.
- * @param {Object} options - Options for the process.
- * @param {Object} [options.env] - Environment variables for the command.
- * @param {string} [options.cwd] - Working directory for the command.
- * @returns {{ pid: number, stdinFd: number, stdoutFd: number, stderrFd: number }}
- */
-export function spawnWithPipes(file, args, options = {}) {
-	const env = options.env || std.getenviron()
-	const cwd = options.cwd || undefined
-
-	// Create pipes for stdin, stdout, and stderr
-	const [stdinRead, stdinWrite] = os.pipe()
-	const [stdoutRead, stdoutWrite] = os.pipe()
-	const [stderrRead, stderrWrite] = os.pipe()
-
-	// Spawn the process (non-blocking)
-	const pid = os.exec([file, ...args], {
-		block: false,
-		env,
-		cwd,
-		stdin: stdinRead,
-		stdout: stdoutWrite,
-		stderr: stderrWrite,
-	})
-
-	// Close child-side of pipes in parent
-	os.close(stdinRead)
-	os.close(stdoutWrite)
-	os.close(stderrWrite)
-
-	return { pid, stdinFd: stdinWrite, stdoutFd: stdoutRead, stderrFd: stderrRead }
-}
