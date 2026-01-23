@@ -172,6 +172,9 @@ quickjs-deps: | $(BIN_DIR)
 	fi
 	$(MAKE) -C $(BIN_DIR)/quickjs .obj/quickjs.o .obj/libregexp.o .obj/libunicode.o .obj/cutils.o .obj/dtoa.o .obj/repl.o libquickjs.a
 
+# Objects using -I$(BIN_DIR)/quickjs need quickjs-deps to exist first
+$(BIN_DIR)/obj/qjsx.o $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/qjs-sqlite.o: quickjs-deps
+
 # Clean build artifacts
 clean:
 	rm -rf $(BIN_DIR)
