@@ -1,3 +1,21 @@
+# quickjs-libc.patch - Patches to QuickJS standard library
+#
+# Target file: quickjs/quickjs-libc.c
+# Applied by: Makefile rule for $(BIN_DIR)/obj/quickjs-libc.c
+# Note: sandboxed-worker.patch and introspect.patch are applied on top of this
+#
+# Features added:
+#
+#   1. import.meta.dirname and import.meta.filename
+#      Node.js-compatible module metadata for locating files relative to modules.
+#
+#   2. std._encodeUtf8() and std._decodeUtf8()
+#      Internal UTF-8 encoding helpers used by node:buffer shim.
+#
+#   3. Sandbox integration hooks (when USE_SANDBOX is defined)
+#      - js_std_get_port_list() accessor for worker message ports
+#      - js_sandbox_init() and js_sandbox_add_export() hooks
+#
 --- quickjs/quickjs-libc.c	2026-01-16 11:05:44.122933386 +0000
 +++ bin/linux/obj/quickjs-libc.c	2026-01-18 01:43:18.340582455 +0000
 @@ -80,6 +80,10 @@

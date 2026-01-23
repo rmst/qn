@@ -1,3 +1,27 @@
+# qjsxc.patch - Patches to QuickJS compiler for QJSXPATH module resolution
+#
+# Target file: quickjs/qjsc.c
+# Output: bin/<platform>/obj/qjsxc.c -> compiled to qjsxc binary
+# Applied by: Makefile rule for $(BIN_DIR)/obj/qjsxc.c
+#
+# Features added:
+#
+#   1. QJSXPATH module resolution at compile time
+#      - Resolves bare imports via QJSXPATH directories
+#      - Supports .js extension and /index.js fallbacks
+#      - Tracks embedded module names for runtime probing
+#
+#   2. Generated executable enhancements
+#      The compiled output includes:
+#      - qjsx_loader() function for runtime module loading
+#      - Embedded module names array for probing
+#      - Exit handler support (process.exitCode, process.on('exit'))
+#
+#   3. Module normalizer integration
+#      Uses qjsx_module_normalizer for consistent handling of:
+#      - Colon-to-slash translation (node:fs -> node/fs)
+#      - -D flag module embedding
+#
 --- quickjs/qjsc.c	2026-01-16 11:05:44.122659101 +0000
 +++ /tmp/qjsxc.c	2026-01-18 01:08:23.358604001 +0000
 @@ -1,5 +1,8 @@

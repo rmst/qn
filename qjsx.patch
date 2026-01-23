@@ -1,3 +1,25 @@
+# qjsx.patch - Patches to QuickJS CLI for QJSXPATH module resolution
+#
+# Target file: quickjs/qjs.c
+# Output: bin/<platform>/obj/qjsx.c -> compiled to qjsx binary
+# Applied by: Makefile rule for $(BIN_DIR)/obj/qjsx.c
+#
+# Features added:
+#
+#   1. QJSXPATH module resolution
+#      Custom module loader that supports:
+#      - QJSXPATH environment variable for bare import resolution
+#      - .js extension and /index.js fallbacks (bundler mode)
+#      - Strict ESM resolution (node mode via QJSX_MODULE_RESOLUTION=node)
+#
+#   2. Exit handler support
+#      Calls qjsx_call_exit_handler() for process.on('exit') callbacks
+#      and returns proper exit code from process.exitCode.
+#
+#   3. Branding changes
+#      - Program name changed from "qjs" to "qjsx"
+#      - Help text updated to document QJSXPATH usage
+#
 --- quickjs/qjs.c	2025-10-08 10:58:22.940197863 +0000
 +++ bin/linux/obj/qjsx.c	2026-01-17 22:06:16.144952052 +0000
 @@ -42,10 +42,40 @@

@@ -1,3 +1,13 @@
+# sandboxed-worker.patch - Adds os.SandboxedWorker to QuickJS
+#
+# Target file: quickjs-libc.c (applied after quickjs-libc.patch)
+# Applied by: Makefile rule for $(BIN_DIR)/obj/quickjs-libc.c
+# Requires: USE_SANDBOX compiler flag
+#
+# This patch adds hooks for the SandboxedWorker feature which allows
+# running JavaScript in a restricted environment with limited capabilities.
+# The actual implementation is in sandboxed-worker/sandboxed-worker.c.
+#
 --- quickjs-libc.c.orig
 +++ quickjs-libc.c
 @@ -74,6 +74,10 @@

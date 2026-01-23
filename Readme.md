@@ -14,7 +14,9 @@ Qn is [QuickJS](https://bellard.org/quickjs) with a few additional features:
 
 5. `qn:introspect` module for closure introspection and function serialization (see [introspect/](introspect/Readme.md))
 
-6. Import errors include source location (e.g. `Could not find export 'foo' in module 'bar.js' (imported at main.js:5)`)
+6. Import errors include source location:
+   - Export not found: `Could not find export 'foo' in module 'bar.js' (imported at main.js:5)`
+   - Module not found: `could not load module filename 'foo.js' (imported from 'main.js')`
 
 All original QuickJS features are preserved.
 
