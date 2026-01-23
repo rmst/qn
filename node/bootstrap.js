@@ -12,10 +12,22 @@
  */
 
 import * as std from "std"
+import * as os from "os"
 import "node-globals"
 import { resolve } from "node:path"
 import { globSync } from "node:fs"
 import { commit, buildTime } from "qn:version-info"
+
+/** Check if a pattern contains glob special characters */
+function isGlobPattern(pattern) {
+	return /[*?[\]{}!]/.test(pattern)
+}
+
+/** Check if a file exists */
+function fileExists(path) {
+	const [stat, err] = os.stat(path)
+	return err === 0 && (stat.mode & os.S_IFMT) === os.S_IFREG
+}
 
 /**
  * Resolve a script path to an absolute path.
@@ -44,14 +56,40 @@ if (scriptArgs.length < 2) {
 	// Run test files with glob expansion (like Node.js)
 	await import('node:test')
 
-	// Expand all patterns through glob
-	const testFiles = []
+	// Separate explicit files from glob patterns (including negative patterns)
+	const explicitFiles = []
+	const patterns = []
 	for (let i = 2; i < scriptArgs.length; i++) {
-		testFiles.push(...globSync(scriptArgs[i]))
+		const arg = scriptArgs[i]
+		// Negative patterns and glob patterns go to glob, explicit files are added directly
+		if (arg.startsWith('!') || isGlobPattern(arg) || !fileExists(arg)) {
+			patterns.push(arg)
+		} else {
+			explicitFiles.push(arg)
+		}
+	}
+
+	// Expand all patterns together (so negative patterns can exclude from positive ones)
+	const globFiles = patterns.length > 0 ? globSync(patterns) : []
+
+	// Combine and deduplicate using resolved paths
+	const seen = new Set()
+	const testFiles = []
+	for (const file of [...explicitFiles, ...globFiles]) {
+		const resolved = resolve(file)
+		if (!seen.has(resolved)) {
+			seen.add(resolved)
+			testFiles.push(resolved)
+		}
+	}
+
+	if (testFiles.length === 0) {
+		std.err.puts('Warning: no test files found\n')
+		std.exit(1)
 	}
 
 	for (const testPath of testFiles) {
-		await import(resolveScriptPath(testPath))
+		await import(testPath)
 	}
 } else {
 	const scriptPath = resolveScriptPath(scriptArgs[1])

@@ -53,8 +53,10 @@ export const $ = (strings, ...values) => {
  */
 export const execAsync = (cmd, args, opts = {}) => {
 	return new Promise((resolve, reject) => {
-		const { FORCE_COLOR, NODE_OPTIONS, ...env } = process.env
+		// Remove vars that interfere with nested test runners or output
+		const { FORCE_COLOR, NODE_OPTIONS, NODE_TEST_CONTEXT, ...env } = process.env
 		const child = spawn(cmd, args, {
+			stdio: ['ignore', 'pipe', 'pipe'],
 			env: { ...env, NO_COLOR: '1', ...opts.env },
 			cwd: opts.cwd,
 		})
