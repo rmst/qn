@@ -104,6 +104,7 @@ import { readFileSync, writeFileSync, existsSync, ... } from 'node:fs';
 | `rmSync` | ✅ | Supports `recursive` and `force` |
 | `openSync` | ✅ | Returns file descriptor; supports `'r'` and `'w'` flags |
 | `closeSync` | ✅ | Closes file descriptor |
+| `mkdtempSync` | ✅ | Creates temp directory with random suffix |
 | `linkSync` | ❌ | Throws |
 
 ### `node:process`
@@ -320,13 +321,76 @@ SQLite database support using the embedded SQLite 3.51.2 amalgamation.
 
 **Transactions:** Use `exec('BEGIN')`, `exec('COMMIT')`, `exec('ROLLBACK')`.
 
+### `node:assert`
+
+```js
+import assert, { strictEqual, deepStrictEqual, ok, fail, AssertionError } from 'node:assert';
+```
+
+Testing assertion library with colored diff output.
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `assert` / `ok` | ✅ | Truthy assertion |
+| `strictEqual` | ✅ | Strict equality with `Object.is` |
+| `deepStrictEqual` | ✅ | Deep equality with colored diff output |
+| `fail` | ✅ | Always throws |
+| `AssertionError` | ✅ | Error class with `actual`, `expected`, `operator` |
+| `notStrictEqual` | ❌ | |
+| `notDeepStrictEqual` | ❌ | |
+| `throws` | ❌ | |
+| `rejects` | ❌ | |
+| `match` | ❌ | |
+
+### `node:test`
+
+```js
+import { describe, test, it } from 'node:test';
+```
+
+Test runner with spec-style output.
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `describe` | ✅ | Test suite grouping |
+| `test` / `it` | ✅ | Test case |
+| `test.skip` | ✅ | Skip a test |
+| `test.todo` | ✅ | Mark test as todo |
+| `test.only` | ✅ | Run only this test |
+| `t.test()` | ✅ | Subtests via TestContext |
+| `before` / `after` | ❌ | |
+| `beforeEach` / `afterEach` | ❌ | |
+| `mock` | ❌ | |
+
+### `node:os`
+
+```js
+import { tmpdir, platform, homedir, hostname, userInfo, EOL } from 'node:os';
+```
+
+Operating system utilities.
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `tmpdir` | ✅ | Uses TMPDIR/TMP/TEMP or `/tmp` |
+| `platform` | ✅ | linux, darwin, win32, etc. |
+| `homedir` | ✅ | Uses HOME or `/root` |
+| `hostname` | ✅ | Via `/proc/sys/kernel/hostname` or shell |
+| `userInfo` | ✅ | uid, gid, username, homedir, shell |
+| `EOL` | ✅ | Line ending for platform |
+| `type` | ❌ | |
+| `release` | ❌ | |
+| `arch` | ❌ | |
+| `cpus` | ❌ | |
+| `freemem` / `totalmem` | ❌ | |
+| `networkInterfaces` | ❌ | |
+
 ---
 
 ## Unavailable `node:*` Imports
 
 The following Node.js built-in modules are **not available**:
 
-- `node:assert`
 - `node:async_hooks`
 - `node:cluster`
 - `node:dgram`
@@ -338,14 +402,12 @@ The following Node.js built-in modules are **not available**:
 - `node:https`
 - `node:inspector`
 - `node:net`
-- `node:os`
 - `node:perf_hooks`
 - `node:punycode`
 - `node:querystring`
 - `node:readline`
 - `node:repl`
 - `node:string_decoder`
-- `node:test`
 - `node:timers`
 - `node:tls`
 - `node:tty`

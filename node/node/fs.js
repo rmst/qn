@@ -224,7 +224,8 @@ export function rmSync(path, options = {}) {
 	const recursive = options.recursive || false;
 	const force = options.force || false;
 
-	const [stat, statErr] = os.stat(path);
+	// Use lstat to handle symlinks without following them
+	const [stat, statErr] = os.lstat(path);
 
 	if (statErr !== 0) {
 		if (force) {
@@ -264,7 +265,7 @@ export function rmSync(path, options = {}) {
 	if (result !== 0) {
 		if (force) {
 			// force only suppresses ENOENT - check if file still exists
-			const [, checkErr] = os.stat(path);
+			const [, checkErr] = os.lstat(path);
 			if (checkErr !== 0) {
 				// File doesn't exist anymore, so removal "succeeded"
 				return;
@@ -272,4 +273,18 @@ export function rmSync(path, options = {}) {
 		}
 		throw new Error(`Failed to remove: ${path}`);
 	}
+}
+
+export function mkdtempSync(prefix) {
+	const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+	let suffix = '';
+	for (let i = 0; i < 6; i++) {
+		suffix += chars[Math.floor(Math.random() * chars.length)];
+	}
+	const path = prefix + suffix;
+	const result = os.mkdir(path, 0o700);
+	if (result !== 0) {
+		throw new Error(`Failed to create temp directory: ${path}`);
+	}
+	return path;
 }

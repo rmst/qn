@@ -21,6 +21,7 @@ export const run = {
 		${containerRun} bash -c '
 			make build
 			node --test --experimental-test-isolation=none test/*.test.js test/**/*.test.js
+			# qn --test test/*.test.js test/**/*.test.js
 		'
 	`,
 
@@ -28,5 +29,6 @@ export const run = {
 		cd ${import.meta.dirname}/..
 		make build
 		node --test --experimental-test-isolation=none test/*.test.js test/**/*.test.js
+		# qn --test test/*.test.js test/**/*.test.js
 	`,
 }

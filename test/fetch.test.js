@@ -1,94 +1,105 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync } from 'node:fs'
-import { createServer } from 'node:http'
+import { spawn } from 'node:child_process'
 import { test, testQnOnly, $, execAsync } from './util.js'
 
 // TODO: Add HTTPS tests (requires creating self-signed certs or using curl --insecure)
 
+// HTTP server code to run in a Node subprocess
+const SERVER_CODE = `
+const http = require('http');
+const server = http.createServer((req, res) => {
+	res.setHeader('Connection', 'close');
+	const url = new URL(req.url, 'http://localhost');
+	let body = '';
+	req.on('data', chunk => body += chunk);
+	req.on('end', () => {
+		if (url.pathname === '/get') {
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({
+				args: Object.fromEntries(url.searchParams),
+				headers: req.headers,
+				url: req.url
+			}));
+		} else if (url.pathname === '/post' && req.method === 'POST') {
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			let json = null;
+			try { json = JSON.parse(body); } catch {}
+			res.end(JSON.stringify({ data: body, json, headers: req.headers }));
+		} else if (url.pathname === '/put' && req.method === 'PUT') {
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ data: body, headers: req.headers }));
+		} else if (url.pathname === '/delete' && req.method === 'DELETE') {
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ deleted: true }));
+		} else if (url.pathname === '/headers') {
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ headers: req.headers }));
+		} else if (url.pathname === '/status/404') {
+			res.writeHead(404, { 'Content-Type': 'text/plain' });
+			res.end('Not Found');
+		} else if (url.pathname === '/status/500') {
+			res.writeHead(500, { 'Content-Type': 'text/plain' });
+			res.end('Internal Server Error');
+		} else if (url.pathname === '/redirect') {
+			res.writeHead(302, { 'Location': '/get' });
+			res.end();
+		} else if (url.pathname === '/redirect-chain') {
+			res.writeHead(302, { 'Location': '/redirect' });
+			res.end();
+		} else if (url.pathname === '/text') {
+			res.writeHead(200, { 'Content-Type': 'text/plain' });
+			res.end('Hello, World!');
+		} else if (url.pathname === '/echo-method') {
+			res.writeHead(200, { 'Content-Type': 'text/plain' });
+			res.end(req.method);
+		} else if (url.pathname === '/delay') {
+			setTimeout(() => {
+				res.writeHead(200, { 'Content-Type': 'text/plain' });
+				res.end('delayed');
+			}, 2000);
+		} else {
+			res.writeHead(404);
+			res.end('Not Found');
+		}
+	});
+});
+server.listen(0, '127.0.0.1', () => {
+	console.log(server.address().port);
+});
+`
+
 /**
- * Start a test HTTP server
- * @returns {Promise<{server: import('http').Server, port: number, close: () => Promise<void>}>}
+ * Start a test HTTP server as a Node subprocess
+ * @returns {Promise<{port: number, close: () => void}>}
  */
 function startServer() {
-	return new Promise((resolve) => {
-		const server = createServer((req, res) => {
-			// Disable keep-alive to ensure clean shutdown
-			res.setHeader('Connection', 'close')
-			const url = new URL(req.url, `http://localhost`)
-			let body = ''
-			req.on('data', chunk => body += chunk)
-			req.on('end', () => {
-				// Route handling
-				if (url.pathname === '/get') {
-					res.writeHead(200, { 'Content-Type': 'application/json' })
-					res.end(JSON.stringify({
-						args: Object.fromEntries(url.searchParams),
-						headers: req.headers,
-						url: req.url
-					}))
-				} else if (url.pathname === '/post' && req.method === 'POST') {
-					res.writeHead(200, { 'Content-Type': 'application/json' })
-					let json = null
-					try { json = JSON.parse(body) } catch {}
-					res.end(JSON.stringify({
-						data: body,
-						json,
-						headers: req.headers
-					}))
-				} else if (url.pathname === '/put' && req.method === 'PUT') {
-					res.writeHead(200, { 'Content-Type': 'application/json' })
-					res.end(JSON.stringify({ data: body, headers: req.headers }))
-				} else if (url.pathname === '/delete' && req.method === 'DELETE') {
-					res.writeHead(200, { 'Content-Type': 'application/json' })
-					res.end(JSON.stringify({ deleted: true }))
-				} else if (url.pathname === '/headers') {
-					res.writeHead(200, { 'Content-Type': 'application/json' })
-					res.end(JSON.stringify({ headers: req.headers }))
-				} else if (url.pathname === '/status/404') {
-					res.writeHead(404, { 'Content-Type': 'text/plain' })
-					res.end('Not Found')
-				} else if (url.pathname === '/status/500') {
-					res.writeHead(500, { 'Content-Type': 'text/plain' })
-					res.end('Internal Server Error')
-				} else if (url.pathname === '/redirect') {
-					res.writeHead(302, { 'Location': '/get' })
-					res.end()
-				} else if (url.pathname === '/redirect-chain') {
-					res.writeHead(302, { 'Location': '/redirect' })
-					res.end()
-				} else if (url.pathname === '/text') {
-					res.writeHead(200, { 'Content-Type': 'text/plain' })
-					res.end('Hello, World!')
-				} else if (url.pathname === '/echo-method') {
-					res.writeHead(200, { 'Content-Type': 'text/plain' })
-					res.end(req.method)
-				} else if (url.pathname === '/delay') {
-					// Delay response by 2 seconds
-					setTimeout(() => {
-						res.writeHead(200, { 'Content-Type': 'text/plain' })
-						res.end('delayed')
-					}, 2000)
-				} else {
-					res.writeHead(404)
-					res.end('Not Found')
-				}
-			})
+	return new Promise((resolve, reject) => {
+		const child = spawn('node', ['-e', SERVER_CODE], {
+			stdio: ['ignore', 'pipe', 'inherit']
 		})
 
-		server.listen(0, '127.0.0.1', () => {
-			const port = server.address().port
-			// Small delay to ensure server is fully ready
-			setTimeout(() => {
-				resolve({
-					server,
-					port,
-					close: () => {
-						server.closeAllConnections()
-						return new Promise(r => server.close(r))
-					}
-				})
-			}, 50)
+		let output = ''
+		child.stdout.on('data', (data) => {
+			output += data.toString()
+			const port = parseInt(output.trim(), 10)
+			if (!isNaN(port)) {
+				// Give server a moment to be fully ready
+				setTimeout(() => {
+					resolve({
+						port,
+						close: () => child.kill()
+					})
+				}, 50)
+			}
+		})
+
+		child.on('error', reject)
+		child.on('exit', (code) => {
+			if (code !== null && code !== 0) {
+				reject(new Error(`Server process exited with code ${code}`))
+			}
 		})
 	})
 }
@@ -111,7 +122,7 @@ describe('fetch()', () => {
 			assert.strictEqual(result.status, 200)
 			assert.strictEqual(result.type, 'object')
 		} finally {
-			await close()
+			close()
 		}
 	})
 
@@ -126,7 +137,7 @@ describe('fetch()', () => {
 			const output = await execAsync(bin, [`${dir}/test.js`])
 			assert.strictEqual(output, 'bar')
 		} finally {
-			await close()
+			close()
 		}
 	})
 
@@ -141,7 +152,7 @@ describe('fetch()', () => {
 			const output = await execAsync(bin, [`${dir}/test.js`])
 			assert.strictEqual(output, 'Hello, World!')
 		} finally {
-			await close()
+			close()
 		}
 	})
 
@@ -160,7 +171,7 @@ describe('fetch()', () => {
 			const output = await execAsync(bin, [`${dir}/test.js`])
 			assert.deepStrictEqual(JSON.parse(output), { hello: 'world' })
 		} finally {
-			await close()
+			close()
 		}
 	})
 
@@ -177,7 +188,7 @@ describe('fetch()', () => {
 			const output = await execAsync(bin, [`${dir}/test.js`])
 			assert.strictEqual(output, 'test-value')
 		} finally {
-			await close()
+			close()
 		}
 	})
 
@@ -195,7 +206,7 @@ describe('fetch()', () => {
 			const output = await execAsync(bin, [`${dir}/test.js`])
 			assert.strictEqual(output, 'test data')
 		} finally {
-			await close()
+			close()
 		}
 	})
 
@@ -211,7 +222,7 @@ describe('fetch()', () => {
 			const output = await execAsync(bin, [`${dir}/test.js`])
 			assert.strictEqual(output, '200')
 		} finally {
-			await close()
+			close()
 		}
 	})
 
@@ -227,7 +238,7 @@ describe('fetch()', () => {
 			assert.strictEqual(result.ok, false)
 			assert.strictEqual(result.status, 404)
 		} finally {
-			await close()
+			close()
 		}
 	})
 
@@ -241,7 +252,7 @@ describe('fetch()', () => {
 			const output = await execAsync(bin, [`${dir}/test.js`])
 			assert.strictEqual(output, '200')
 		} finally {
-			await close()
+			close()
 		}
 	})
 
@@ -257,7 +268,7 @@ describe('fetch()', () => {
 			assert.strictEqual(result.status, 200)
 			assert.strictEqual(result.redirected, true)
 		} finally {
-			await close()
+			close()
 		}
 	})
 
@@ -276,7 +287,7 @@ describe('fetch()', () => {
 			assert.strictEqual(result.status, 302)
 			assert.strictEqual(result.hasLocation, true)
 		} finally {
-			await close()
+			close()
 		}
 	})
 
@@ -304,7 +315,7 @@ describe('fetch()', () => {
 			const output = await execAsync(bin, [`${dir}/test.js`])
 			assert.strictEqual(output, 'true')
 		} finally {
-			await close()
+			close()
 		}
 	})
 
@@ -324,7 +335,7 @@ describe('fetch()', () => {
 			const output = await execAsync(bin, [`${dir}/test.js`])
 			assert.strictEqual(output, 'AbortError')
 		} finally {
-			await close()
+			close()
 		}
 	})
 })

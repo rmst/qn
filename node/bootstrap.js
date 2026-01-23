@@ -17,6 +17,12 @@ import "node-globals"
 // If no script provided, start the REPL
 if (scriptArgs.length < 2) {
 	await import("repl")
+} else if (scriptArgs[1] === '--test') {
+	// Run test files (shell expands globs)
+	await import('node:test')
+	for (let i = 2; i < scriptArgs.length; i++) {
+		await import(scriptArgs[i])
+	}
 } else {
 	const scriptPath = scriptArgs[1]
 
