@@ -83,14 +83,6 @@ export function execFileSync(file, args = [], options = {}) {
 
 		errorMsg += `Exit Code: ${result.status}\n`
 
-		if (options.env) {
-			const envVars = Object.entries(options.env)
-				.map(([key, value]) => `${key}=${value}`)
-				.join('\n')
-
-			errorMsg += `Env:\n${indent(envVars)}\n\n`
-		}
-
 		if (options.cwd) {
 			errorMsg += `Cwd: ${options.cwd}\n`
 		}
