@@ -3,8 +3,6 @@ import { checkUnsupportedOptions, checkEncodingOption } from './utils.js'
 import { promisify } from 'node:util'
 
 const UNSUPPORTED_OPTIONS = [
-	'timeout',
-	'killSignal',
 	'uid',
 	'gid',
 	'signal',
@@ -18,6 +16,8 @@ const UNSUPPORTED_OPTIONS = [
  * @param {string} [options.cwd] - Working directory for the command.
  * @param {Object} [options.env] - Environment variables for the command.
  * @param {string} [options.shell='/bin/sh'] - Shell to use.
+ * @param {number} [options.timeout=0] - Timeout in milliseconds (0 means no timeout).
+ * @param {string} [options.killSignal='SIGTERM'] - Signal to send when timeout expires.
  * @param {Function} [callback] - Called with (error, stdout, stderr) when process completes.
  * @returns {ChildProcess}
  *
@@ -56,6 +56,8 @@ export function exec(command, options, callback) {
 		env: options.env,
 		input: options.input,
 		encoding: options.encoding,
+		timeout: options.timeout,
+		killSignal: options.killSignal,
 	}
 
 	return execFile(shell, ['-c', command], execFileOptions, callback)

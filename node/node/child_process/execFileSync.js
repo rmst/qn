@@ -177,6 +177,10 @@ export function execFileSync(file, args = [], options = {}) {
 			os.kill(pid, typeof killSignal === 'string' ? getSignalNumber(killSignal) : killSignal)
 			// Wait for the process to actually terminate
 			os.waitpid(pid, 0)
+			// Close pipes immediately to prevent blocking reads (child may have spawned
+			// subprocesses that inherited the pipe fds and are still running)
+			if (stdio[1] === 'pipe') os.close(stdoutRead)
+			if (stdio[2] === 'pipe') os.close(stderrRead)
 			break
 		}
 
@@ -184,18 +188,24 @@ export function execFileSync(file, args = [], options = {}) {
 		os.sleep(1)
 	}
 
-	// Read stdout and stderr from pipes (if piped)
+	// Read stdout and stderr from pipes (if piped and not timed out)
+	// On timeout, pipes were already closed to prevent blocking reads
 	let output, errorOutput
-	if (stdio[1] === 'pipe') {
-		output = useUtf8 ? readFromFd(stdoutRead) : readBytesFromFd(stdoutRead)
-	} else {
+	if (timedOut) {
 		output = useUtf8 ? '' : Buffer.alloc(0)
-	}
-
-	if (stdio[2] === 'pipe') {
-		errorOutput = useUtf8 ? readFromFd(stderrRead) : readBytesFromFd(stderrRead)
-	} else {
 		errorOutput = useUtf8 ? '' : Buffer.alloc(0)
+	} else {
+		if (stdio[1] === 'pipe') {
+			output = useUtf8 ? readFromFd(stdoutRead) : readBytesFromFd(stdoutRead)
+		} else {
+			output = useUtf8 ? '' : Buffer.alloc(0)
+		}
+
+		if (stdio[2] === 'pipe') {
+			errorOutput = useUtf8 ? readFromFd(stderrRead) : readBytesFromFd(stderrRead)
+		} else {
+			errorOutput = useUtf8 ? '' : Buffer.alloc(0)
+		}
 	}
 
 	// Helper to get string version of output for error messages
@@ -205,7 +215,6 @@ export function execFileSync(file, args = [], options = {}) {
 	// Handle timeout
 	if (timedOut) {
 		const error = new Error(`Command timed out: ${file}`)
-		error.killed = true
 		error.signal = killSignal
 		error.stdout = output
 		error.stderr = errorOutput

@@ -84,6 +84,9 @@ export function execFile(file, args, options, callback) {
 		timeoutId = os.setTimeout(() => {
 			timedOut = true
 			child.kill(killSignal)
+			// Destroy streams to prevent blocking if descendants hold pipes open
+			if (child.stdout) child.stdout.destroy()
+			if (child.stderr) child.stderr.destroy()
 		}, timeout)
 
 		child.on('close', () => {

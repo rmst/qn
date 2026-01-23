@@ -531,6 +531,34 @@ describe('node:child_process shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { output: 'piped via shell' })
 	})
 
+	test('execSync with timeout that expires', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execSync } from 'node:child_process'
+			try {
+				execSync('sleep 10', { timeout: 100 })
+				console.log(JSON.stringify({ timedOut: false }))
+			} catch (e) {
+				console.log(JSON.stringify({ timedOut: true, signal: e.signal }))
+			}
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.timedOut, true)
+		assert.strictEqual(result.signal, 'SIGTERM')
+	})
+
+	test('execSync with timeout that does not expire', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execSync } from 'node:child_process'
+			const output = execSync('echo fast', { timeout: 5000, encoding: 'utf8' })
+			console.log(JSON.stringify({ output: output.trim() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { output: 'fast' })
+	})
+
 	// exec tests (async)
 	test('exec runs command through shell', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
