@@ -78,7 +78,8 @@ export class ChildProcess extends EventEmitter {
 		this.pid = pid
 
 		// Create streams for stdio
-		if (fds.stdinFd !== null) {
+		// Note: use != null to catch both null and undefined
+		if (fds.stdinFd != null) {
 			this.stdin = new Writable(fds.stdinFd)
 			this.stdin.on('close', () => {
 				this.#stdinClosed = true
@@ -87,7 +88,7 @@ export class ChildProcess extends EventEmitter {
 			this.#stdinClosed = true
 		}
 
-		if (fds.stdoutFd !== null) {
+		if (fds.stdoutFd != null) {
 			this.stdout = new Readable(fds.stdoutFd)
 			this.stdout.on('close', () => {
 				this.#stdoutClosed = true
@@ -97,7 +98,7 @@ export class ChildProcess extends EventEmitter {
 			this.#stdoutClosed = true
 		}
 
-		if (fds.stderrFd !== null) {
+		if (fds.stderrFd != null) {
 			this.stderr = new Readable(fds.stderrFd)
 			this.stderr.on('close', () => {
 				this.#stderrClosed = true
