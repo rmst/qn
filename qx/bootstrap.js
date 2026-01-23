@@ -8,10 +8,20 @@
  * All modules are embedded at compile time using qjsxc's -D flag.
  */
 
+import * as std from "std"
 import "node-globals"
 import process from "node:process"
 import { Buffer } from "node:buffer"
 import $, { ProcessPromise, ProcessOutput, retry } from "qx/core"
+import { commit, buildTime } from "qn:version-info"
+
+// Handle --version flag
+if (scriptArgs[1] === '--version' || scriptArgs[1] === '-V') {
+	let version = `qx ${commit}`
+	if (buildTime) version += ` (dirty, built ${buildTime})`
+	std.out.puts(version + '\n')
+	std.exit(0)
+}
 
 // Expose Buffer globally
 globalThis.Buffer = Buffer

@@ -6,6 +6,14 @@
 
 VERSION = 2024-01-13
 
+# Git version info for --version flag
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_DIRTY := $(shell test -n "$$(git status --porcelain 2>/dev/null)" && echo 1 || echo 0)
+BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# Install prefix (override with: make install PREFIX=~/.local)
+PREFIX ?= /usr/local
+
 # Compiler settings
 CC = gcc
 CFLAGS = -Wall -Wno-array-bounds -fwrapv \
@@ -126,15 +134,24 @@ $(BIN_DIR)/obj/qjs-sqlite.o: sqlite/qjs-sqlite.c sqlite/sqlite3.h | $(BIN_DIR)/o
 # SQLite objects for linking
 SQLITE_OBJS = $(BIN_DIR)/obj/sqlite3.o $(BIN_DIR)/obj/qjs-sqlite.o
 
+# Generate version info module for qn/qx --version
+$(BIN_DIR)/obj/qn/version-info.js: | $(BIN_DIR)/obj
+	@mkdir -p $(BIN_DIR)/obj/qn
+	@if [ "$(GIT_DIRTY)" = "1" ]; then \
+		echo "export const commit = '$(GIT_COMMIT)', buildTime = '$(BUILD_TIME)';" > $@; \
+	else \
+		echo "export const commit = '$(GIT_COMMIT)', buildTime = null;" > $@; \
+	fi
+
 # Build qn (standalone executable with embedded node modules, qx, and sqlite)
 # Uses -e to generate C, then compiles and links with sqlite
-$(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js $(QJSXC_PROG) $(SQLITE_OBJS) quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./node:./qx $(QJSXC_PROG) -e -M sqlite_native,sqlite -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qx -o $(BIN_DIR)/obj/qn.c node/bootstrap.js
+$(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js $(QJSXC_PROG) $(SQLITE_OBJS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
+	QJSXPATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qn.c node/bootstrap.js
 	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qn.c $(SQLITE_OBJS) $(BIN_DIR)/libquickjs.a $(LIBS)
 
 # Build qx (zx-compatible shell scripting with $ function)
-$(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js $(QJSXC_PROG) $(SQLITE_OBJS) quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./node:./qx $(QJSXC_PROG) -e -M sqlite_native,sqlite -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qx -o $(BIN_DIR)/obj/qx.c qx/bootstrap.js
+$(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js $(QJSXC_PROG) $(SQLITE_OBJS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
+	QJSXPATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qx.c qx/bootstrap.js
 	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qx.c $(SQLITE_OBJS) $(BIN_DIR)/libquickjs.a $(LIBS)
 
 # Create convenience symlinks in bin/ directory

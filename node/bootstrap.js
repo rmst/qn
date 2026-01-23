@@ -13,6 +13,15 @@
 
 import * as std from "std"
 import "node-globals"
+import { commit, buildTime } from "qn:version-info"
+
+// Handle --version flag
+if (scriptArgs[1] === '--version' || scriptArgs[1] === '-V') {
+	let version = `qn ${commit}`
+	if (buildTime) version += ` (dirty, built ${buildTime})`
+	std.out.puts(version + '\n')
+	std.exit(0)
+}
 
 // If no script provided, start the REPL
 if (scriptArgs.length < 2) {
