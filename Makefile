@@ -162,14 +162,18 @@ convenience-links: $(QJSX_PROG) $(QN_PROG) $(QX_PROG) $(QJSXC_PROG)
 	@ln -sf $(PLATFORM)/qx $(QX_LINK)
 	@ln -sf $(PLATFORM)/qjsxc $(QJSXC_LINK)
 
-# Build QuickJS by copying it to our bin dir and building it there
-quickjs-deps: | $(BIN_DIR)
-	@if [ ! -d "$(BIN_DIR)/quickjs" ]; then \
-		echo "Copying QuickJS to $(BIN_DIR)/quickjs..."; \
-		cp -r quickjs $(BIN_DIR)/quickjs; \
-		echo "Applying quickjs.patch..."; \
-		patch -p0 -d $(BIN_DIR) < quickjs.patch; \
-	fi
+# Build QuickJS by copying it to our bin dir, patching, and building
+# Uses a sentinel file to track when patch was applied, so changes to
+# quickjs.patch trigger a re-copy and re-patch
+$(BIN_DIR)/quickjs/.patched: quickjs.patch $(wildcard quickjs/*.c quickjs/*.h) | $(BIN_DIR)
+	@echo "Copying QuickJS to $(BIN_DIR)/quickjs..."
+	@rm -rf $(BIN_DIR)/quickjs
+	@cp -r quickjs $(BIN_DIR)/quickjs
+	@echo "Applying quickjs.patch..."
+	@patch -p0 -d $(BIN_DIR) < quickjs.patch
+	@touch $@
+
+quickjs-deps: $(BIN_DIR)/quickjs/.patched
 	$(MAKE) -C $(BIN_DIR)/quickjs .obj/quickjs.o .obj/libregexp.o .obj/libunicode.o .obj/cutils.o .obj/dtoa.o .obj/repl.o libquickjs.a
 
 # Objects using -I$(BIN_DIR)/quickjs need quickjs-deps to exist first
