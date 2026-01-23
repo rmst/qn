@@ -166,6 +166,10 @@ globalThis.AbortSignal = AbortSignal
 import process from "node:process"
 globalThis.process = process
 
+// Buffer (Node.js global)
+import { Buffer } from "node:buffer"
+globalThis.Buffer = Buffer
+
 // Add missing console methods for Node.js compatibility
 console.error = (...args) => { std.err.puts(args.join(' ') + '\n'); std.err.flush() }
 console.warn = console.error
