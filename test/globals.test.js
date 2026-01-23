@@ -1,7 +1,7 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync } from 'node:fs'
-import { test, $ } from './util.js'
+import { test, testQnOnly, $ } from './util.js'
 
 describe('globals', () => {
 	test('performance.now() returns a number', ({ bin, dir }) => {
@@ -73,5 +73,73 @@ describe('globals', () => {
 
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { empty: true })
+	})
+
+	testQnOnly('console.time and timeEnd output timing', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			console.time('test')
+			let x = 0
+			for (let i = 0; i < 10000; i++) x += i
+			console.timeEnd('test')
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.match(output, /^test: \d+\.\d+ms$/)
+	})
+
+	testQnOnly('console.time with default label', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			console.time()
+			console.timeEnd()
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.match(output, /^default: \d+\.\d+ms$/)
+	})
+
+	testQnOnly('console.timeLog outputs intermediate timing', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			console.time('myTimer')
+			console.timeLog('myTimer')
+			console.timeEnd('myTimer')
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const lines = output.split('\n')
+		assert.strictEqual(lines.length, 2)
+		assert.match(lines[0], /^myTimer: \d+\.\d+ms$/)
+		assert.match(lines[1], /^myTimer: \d+\.\d+ms$/)
+	})
+
+	testQnOnly('console.timeEnd warns for non-existent label', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			console.timeEnd('nonexistent')
+		`)
+
+		const output = $({ stdio: ['pipe', 'pipe', 'pipe'] })`${bin} ${dir}/test.js 2>&1`
+		assert.match(output, /Warning.*nonexistent/)
+	})
+
+	testQnOnly('console.time warns for duplicate label', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			console.time('dup')
+			console.time('dup')
+			console.timeEnd('dup')
+		`)
+
+		const output = $({ stdio: ['pipe', 'pipe', 'pipe'] })`${bin} ${dir}/test.js 2>&1`
+		assert.match(output, /Warning.*dup.*already exists/)
+	})
+
+	testQnOnly('console.timeLog with extra data', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			console.time('data')
+			console.timeLog('data', 'extra', 'info')
+			console.timeEnd('data')
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const lines = output.split('\n')
+		assert.match(lines[0], /^data: \d+\.\d+ms extra info$/)
 	})
 })

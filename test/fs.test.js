@@ -736,4 +736,100 @@ describe('node:fs shim', () => {
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { content: 'original content' })
 	})
+
+	test('appendFileSync appends to existing file', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { writeFileSync, appendFileSync, readFileSync } from 'node:fs'
+			writeFileSync('${dir}/append.txt', 'hello')
+			appendFileSync('${dir}/append.txt', ' world')
+			console.log(JSON.stringify({ content: readFileSync('${dir}/append.txt', 'utf8') }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: 'hello world' })
+	})
+
+	test('appendFileSync creates file if not exists', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { appendFileSync, readFileSync } from 'node:fs'
+			appendFileSync('${dir}/new.txt', 'created')
+			console.log(JSON.stringify({ content: readFileSync('${dir}/new.txt', 'utf8') }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: 'created' })
+	})
+
+	test('appendFileSync multiple appends', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { appendFileSync, readFileSync } from 'node:fs'
+			appendFileSync('${dir}/multi.txt', 'line1\\n')
+			appendFileSync('${dir}/multi.txt', 'line2\\n')
+			appendFileSync('${dir}/multi.txt', 'line3')
+			console.log(JSON.stringify({ content: readFileSync('${dir}/multi.txt', 'utf8') }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: 'line1\nline2\nline3' })
+	})
+
+	test('readdirSync with withFileTypes returns Dirent objects', ({ bin, dir }) => {
+		mkdirSync(`${dir}/subdir`)
+		writeFileSync(`${dir}/file.txt`, 'content')
+		writeFileSync(`${dir}/test.js`, `
+			import { readdirSync } from 'node:fs'
+			const entries = readdirSync('${dir}', { withFileTypes: true })
+			const file = entries.find(e => e.name === 'file.txt')
+			const subdir = entries.find(e => e.name === 'subdir')
+			console.log(JSON.stringify({
+				fileIsFile: file.isFile(),
+				fileIsDir: file.isDirectory(),
+				subdirIsFile: subdir.isFile(),
+				subdirIsDir: subdir.isDirectory(),
+				hasParentPath: typeof file.parentPath === 'string'
+			}))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			fileIsFile: true,
+			fileIsDir: false,
+			subdirIsFile: false,
+			subdirIsDir: true,
+			hasParentPath: true
+		})
+	})
+
+	test('readdirSync withFileTypes detects symlinks', ({ bin, dir }) => {
+		writeFileSync(`${dir}/target.txt`, 'target')
+		writeFileSync(`${dir}/test.js`, `
+			import { readdirSync, symlinkSync } from 'node:fs'
+			symlinkSync('${dir}/target.txt', '${dir}/link.txt')
+			const entries = readdirSync('${dir}', { withFileTypes: true })
+			const link = entries.find(e => e.name === 'link.txt')
+			console.log(JSON.stringify({
+				isSymlink: link.isSymbolicLink(),
+				isFile: link.isFile()
+			}))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			isSymlink: true,
+			isFile: false
+		})
+	})
+
+	test('readdirSync without withFileTypes returns strings', ({ bin, dir }) => {
+		writeFileSync(`${dir}/file.txt`, 'content')
+		writeFileSync(`${dir}/test.js`, `
+			import { readdirSync } from 'node:fs'
+			const entries = readdirSync('${dir}')
+			const types = entries.map(e => typeof e)
+			console.log(JSON.stringify({ allStrings: types.every(t => t === 'string') }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { allStrings: true })
+	})
 })

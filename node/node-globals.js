@@ -171,3 +171,39 @@ console.error = (...args) => { std.err.puts(args.join(' ') + '\n'); std.err.flus
 console.warn = console.error
 console.info = console.log
 console.debug = console.log
+
+// console.time / timeEnd / timeLog for performance measurement
+const consoleTimers = new Map()
+
+console.time = (label = 'default') => {
+	if (consoleTimers.has(label)) {
+		console.warn(`Warning: Label '${label}' already exists for console.time()`)
+		return
+	}
+	consoleTimers.set(label, performance.now())
+}
+
+console.timeEnd = (label = 'default') => {
+	const start = consoleTimers.get(label)
+	if (start === undefined) {
+		console.warn(`Warning: No such label '${label}' for console.timeEnd()`)
+		return
+	}
+	const duration = performance.now() - start
+	consoleTimers.delete(label)
+	console.log(`${label}: ${duration.toFixed(3)}ms`)
+}
+
+console.timeLog = (label = 'default', ...data) => {
+	const start = consoleTimers.get(label)
+	if (start === undefined) {
+		console.warn(`Warning: No such label '${label}' for console.timeLog()`)
+		return
+	}
+	const duration = performance.now() - start
+	if (data.length > 0) {
+		console.log(`${label}: ${duration.toFixed(3)}ms`, ...data)
+	} else {
+		console.log(`${label}: ${duration.toFixed(3)}ms`)
+	}
+}

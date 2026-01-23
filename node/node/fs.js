@@ -5,6 +5,47 @@ import picomatch from './glob/index.js';
 import { chmod as native_chmod } from 'qn_native';
 
 
+/**
+ * Dirent class for directory entries (used by readdirSync with withFileTypes)
+ */
+export class Dirent {
+	constructor(name, parentPath, mode) {
+		this.name = name;
+		this.parentPath = parentPath;
+		this.path = parentPath; // Alias for compatibility
+		this._mode = mode;
+	}
+
+	isDirectory() {
+		return (this._mode & os.S_IFMT) === os.S_IFDIR;
+	}
+
+	isFile() {
+		return (this._mode & os.S_IFMT) === os.S_IFREG;
+	}
+
+	isSymbolicLink() {
+		return (this._mode & os.S_IFMT) === os.S_IFLNK;
+	}
+
+	isBlockDevice() {
+		return (this._mode & os.S_IFMT) === os.S_IFBLK;
+	}
+
+	isCharacterDevice() {
+		return (this._mode & os.S_IFMT) === os.S_IFCHR;
+	}
+
+	isFIFO() {
+		return (this._mode & os.S_IFMT) === os.S_IFIFO;
+	}
+
+	isSocket() {
+		return (this._mode & os.S_IFMT) === os.S_IFSOCK;
+	}
+}
+
+
 export const writeFileSync = (path, data, options) => {
   options = typeof options === 'string' ? { encoding: options } : (options || {});
 
@@ -17,6 +58,36 @@ export const writeFileSync = (path, data, options) => {
   const isBinary = data instanceof ArrayBuffer || ArrayBuffer.isView(data);
 
   const file = std.open(path, flag + (isBinary ? 'b' : ''));
+  if (!file) {
+    throw new Error(`Failed to open file: ${path}`);
+  }
+  try {
+    if (isBinary) {
+      const buffer = data instanceof ArrayBuffer ? data : data.buffer;
+      const offset = ArrayBuffer.isView(data) ? data.byteOffset : 0;
+      const length = ArrayBuffer.isView(data) ? data.byteLength : data.byteLength;
+      file.write(buffer, offset, length);
+    } else if (typeof data === 'string') {
+      file.puts(data);
+    } else {
+      throw new TypeError('Data must be a string, ArrayBuffer, or TypedArray.');
+    }
+  } finally {
+    file.close();
+  }
+}
+
+
+export const appendFileSync = (path, data, options) => {
+  options = typeof options === 'string' ? { encoding: options } : (options || {});
+
+  if (options.encoding != null && options.encoding !== 'utf8' && options.encoding !== 'utf-8') {
+    throw new Error(`Unsupported encoding: ${options.encoding}. Only utf8 is supported.`);
+  }
+
+  const isBinary = data instanceof ArrayBuffer || ArrayBuffer.isView(data);
+
+  const file = std.open(path, 'a' + (isBinary ? 'b' : ''));
   if (!file) {
     throw new Error(`Failed to open file: ${path}`);
   }
@@ -68,12 +139,28 @@ export const readFileSync = (path, options) => {
   }
 }
 
-export const readdirSync = (path) => {
+export const readdirSync = (path, options = {}) => {
+  const withFileTypes = options?.withFileTypes || false;
+
   const [files, error] = os.readdir(path);
   if (error !== 0) {
     throw new Error(`Failed to read directory: ${path}`);
   }
-  return files.filter(name => name !== '.' && name !== '..')
+
+  const filtered = files.filter(name => name !== '.' && name !== '..');
+
+  if (!withFileTypes) {
+    return filtered;
+  }
+
+  return filtered.map(name => {
+    const fullPath = path.endsWith('/') ? `${path}${name}` : `${path}/${name}`;
+    const [statResult, statErr] = os.lstat(fullPath);
+    if (statErr !== 0) {
+      throw new Error(`Failed to stat: ${fullPath}`);
+    }
+    return new Dirent(name, path, statResult.mode);
+  });
 }
 
 export const mkdirSync = (path, { mode = 0o777, recursive = false } = {}) => {
