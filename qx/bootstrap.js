@@ -66,6 +66,22 @@ globalThis.within = async (fn) => {
 // Argv parsing (like zx's argv, uses node:process)
 globalThis.argv = process.argv.slice(2)
 
+// Handle -e flag (evaluate string as script)
+if (scriptArgs[1] === '-e' || scriptArgs[1] === '--eval') {
+	if (scriptArgs.length < 3) {
+		std.err.puts('Error: -e requires an argument\n')
+		std.exit(1)
+	}
+	try {
+		std.evalScript(scriptArgs[2])
+	} catch (e) {
+		std.err.puts("Error: " + e.message + "\n")
+		if (e.stack) std.err.puts(e.stack + "\n")
+		std.exit(1)
+	}
+	std.exit(0)
+}
+
 /**
  * Resolve a script path to an absolute path.
  * - Relative paths (./ or ../) are resolved against cwd
