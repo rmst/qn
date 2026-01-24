@@ -18,7 +18,7 @@ const binDir = () => {
 	return jix.build`
 		cp -r "${repo}" ./repo
 		cd repo
-		make build
+		make build GIT_DIRTY=1
 		mkdir -p "$out"
 		cp ./bin/${platform}/qjsx "$out/"
 		cp ./bin/${platform}/qn "$out/"
