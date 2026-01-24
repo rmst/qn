@@ -567,6 +567,11 @@ export class ProcessPromise extends Promise {
 	}
 }
 
+// Always quote interpolated strings for consistent behavior.
+// This prevents subtle bugs where `$`'${file}'`` works for simple filenames
+// but breaks when the filename contains spaces (since escapeArg would add its own quotes).
+const ALWAYS_QUOTE = true
+
 /**
  * Escape a value for safe shell interpolation (POSIX sh compatible).
  *
@@ -599,8 +604,8 @@ function escapeArg(value) {
 		return "''"
 	}
 
-	// If safe characters only, no quoting needed
-	if (/^[a-zA-Z0-9_./:@=-]+$/.test(str)) {
+	// If safe characters only, no quoting needed (if ALWAYS_QUOTE is disabled)
+	if (!ALWAYS_QUOTE && /^[a-zA-Z0-9_./:@=-]+$/.test(str)) {
 		return str
 	}
 

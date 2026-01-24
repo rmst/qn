@@ -97,7 +97,7 @@ describe('qx $ function', () => {
 		try {
 			const output = runQx(`
 				const name = "qx"
-				const result = await $\`echo "Hello \${name}"\`.quiet()
+				const result = await $\`echo Hello \${name}\`.quiet()
 				console.log(JSON.stringify({ stdout: result.stdout.trim() }))
 			`, dir)
 			assert.deepStrictEqual(JSON.parse(output), { stdout: 'Hello qx' })
