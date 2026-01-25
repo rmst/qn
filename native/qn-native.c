@@ -13,10 +13,75 @@
 
 #if !defined(_WIN32)
 #include <sys/wait.h>
+#include <stdlib.h>
 extern char **environ;
 #endif
 
 #define countof(x) (sizeof(x) / sizeof((x)[0]))
+
+/* execvpe is a GNU extension, not available on macOS/BSD.
+ * This implementation is adapted from QuickJS quickjs-libc.c */
+#ifndef __linux__
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+#ifndef TRUE
+#define TRUE 1
+#define FALSE 0
+#define BOOL int
+#endif
+static int my_execvpe(const char *filename, char *const argv[], char *const envp[])
+{
+    char *path, *p, *p_next, *p1;
+    char buf[PATH_MAX];
+    size_t filename_len, path_len;
+    BOOL eacces_error;
+
+    filename_len = strlen(filename);
+    if (filename_len == 0) {
+        errno = ENOENT;
+        return -1;
+    }
+    if (strchr(filename, '/'))
+        return execve(filename, argv, envp);
+
+    path = getenv("PATH");
+    if (!path)
+        path = (char *)"/bin:/usr/bin";
+    eacces_error = FALSE;
+    p = path;
+    for(p = path; p != NULL; p = p_next) {
+        p1 = strchr(p, ':');
+        if (!p1) {
+            p_next = NULL;
+            path_len = strlen(p);
+        } else {
+            p_next = p1 + 1;
+            path_len = p1 - p;
+        }
+        if ((path_len + 1 + filename_len + 1) > PATH_MAX)
+            continue;
+        memcpy(buf, p, path_len);
+        buf[path_len] = '/';
+        memcpy(buf + path_len + 1, filename, filename_len + 1);
+        execve(buf, argv, envp);
+        switch(errno) {
+        case EACCES:
+            eacces_error = TRUE;
+            break;
+        case ENOENT:
+        case ENOTDIR:
+            break;
+        default:
+            return -1;
+        }
+    }
+    if (eacces_error)
+        errno = EACCES;
+    return -1;
+}
+#define execvpe my_execvpe
+#endif
 
 static int js_get_errno(int ret) {
     if (ret == -1)
