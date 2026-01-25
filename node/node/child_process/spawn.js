@@ -1,10 +1,10 @@
 import * as std from 'std'
 import * as os from 'os'
+import * as qn_native from 'qn_native'
 import { ChildProcess } from './ChildProcess.js'
 import { parseStdio, setupStdioPipes, checkUnsupportedOptions } from './utils.js'
 
 const UNSUPPORTED_OPTIONS = [
-	'detached',
 	'uid',
 	'gid',
 	'timeout',
@@ -76,14 +76,28 @@ export function spawn(command, args, options) {
 	execOptions.env = env
 	execOptions.cwd = cwd
 
-	// Spawn the process
-	const pid = os.exec([execCommand, ...execArgs], execOptions)
+	let pid
+	const detached = options.detached || false
+
+	if (detached) {
+		// Use spawn_setsid for detached processes (creates new session/process group)
+		const setsidOptions = { cwd }
+		if (execOptions.stdin !== undefined) setsidOptions.stdin = execOptions.stdin
+		if (execOptions.stdout !== undefined) setsidOptions.stdout = execOptions.stdout
+		if (execOptions.stderr !== undefined) setsidOptions.stderr = execOptions.stderr
+		if (env) setsidOptions.env = env
+
+		pid = qn_native.spawn_setsid([execCommand, ...execArgs], setsidOptions)
+	} else {
+		// Normal spawn
+		pid = os.exec([execCommand, ...execArgs], execOptions)
+	}
 
 	// Close child-side of pipes in parent
 	closeChildSide()
 
 	// Create ChildProcess instance
-	const childOpts = {}
+	const childOpts = { detached }
 	if (parentFds.stdin !== null) childOpts.stdinFd = parentFds.stdin
 	if (parentFds.stdout !== null) childOpts.stdoutFd = parentFds.stdout
 	if (parentFds.stderr !== null) childOpts.stderrFd = parentFds.stderr

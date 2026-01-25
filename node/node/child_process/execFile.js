@@ -70,6 +70,7 @@ export function execFile(file, args, options, callback) {
 		env: options.env,
 		stdio: 'pipe',  // execFile always uses pipes
 		signal: options.signal,
+		detached: options.detached,
 	})
 
 	// Set up timeout if specified

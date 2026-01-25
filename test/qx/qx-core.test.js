@@ -463,6 +463,31 @@ describe('qx timeout', () => {
 			rmSync(dir, { recursive: true })
 		}
 	})
+
+	test('descendant processes are killed on exit', () => {
+		const dir = mktempdir()
+		try {
+			const pidFile = `${dir}/child.pid`
+			// Start a background process, write its PID, then exit without awaiting
+			runQx(`
+				const p = $.quiet\`sh -c "echo \\$\\$ > ${pidFile}; sleep 60"\`
+				await new Promise(r => setTimeout(r, 100))  // Let it start and write PID
+			`, dir)
+
+			// Read the PID and check if it's still running
+			const pid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10)
+			let isRunning = false
+			try {
+				process.kill(pid, 0)  // Signal 0 checks existence
+				isRunning = true
+			} catch {
+				isRunning = false
+			}
+			assert.strictEqual(isRunning, false, 'Child process should have been killed on exit')
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
 })
 
 describe('qx retry', () => {

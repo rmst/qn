@@ -69,13 +69,17 @@ export class ChildProcess extends EventEmitter {
 	/** @type {boolean} */
 	#closed = false
 
+	/** @type {boolean} */
+	#detached = false
+
 	/**
 	 * @param {number} pid
-	 * @param {{ stdoutFd: number|null, stderrFd: number|null, stdinFd: number|null }} fds
+	 * @param {{ stdoutFd: number|null, stderrFd: number|null, stdinFd: number|null, detached?: boolean }} fds
 	 */
 	constructor(pid, fds) {
 		super()
 		this.pid = pid
+		this.#detached = fds.detached || false
 
 		// Create streams for stdio
 		// Note: use != null to catch both null and undefined
@@ -158,7 +162,8 @@ export class ChildProcess extends EventEmitter {
 	}
 
 	/**
-	 * Kill the child process
+	 * Kill the child process.
+	 * For detached processes, kills the entire process group.
 	 * @param {string|number} [signal='SIGTERM']
 	 * @returns {boolean}
 	 */
@@ -171,7 +176,13 @@ export class ChildProcess extends EventEmitter {
 		}
 
 		try {
-			os.kill(this.pid, sig)
+			if (this.#detached) {
+				// For detached processes, kill the entire process group
+				// The child is the session/group leader, so its PGID == its PID
+				os.kill(-this.pid, sig)
+			} else {
+				os.kill(this.pid, sig)
+			}
 			this.killed = true
 			return true
 		} catch (e) {

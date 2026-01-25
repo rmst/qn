@@ -898,4 +898,42 @@ describe('node:child_process shim', () => {
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { output: 'content from file' })
 	})
+
+	testQnOnly('spawn with detached creates new session and kills process group', ({ bin, dir }) => {
+		const marker = `${dir}/marker.txt`
+		writeFileSync(`${dir}/test.js`, `
+			import { spawn } from 'node:child_process'
+			import { readFileSync, writeFileSync } from 'node:fs'
+			import * as qn_native from 'qn_native'
+
+			const marker = '${marker}'
+			writeFileSync(marker, 'initial')
+
+			// Spawn a detached child that spawns a grandchild
+			const script = '(while true; do echo alive >> ' + marker + '; sleep 0.1; done) & wait'
+			const child = spawn('sh', ['-c', script], { detached: true })
+
+			// Child should be session leader (PGID == PID)
+			const isSessionLeader = qn_native.getpgid(child.pid) === child.pid
+
+			// Wait for grandchild to start writing
+			await new Promise(r => setTimeout(r, 300))
+			const linesBefore = readFileSync(marker, 'utf8').trim().split('\\n').length
+
+			// Kill the process group
+			child.kill('SIGTERM')
+
+			// Wait to confirm grandchild stopped
+			await new Promise(r => setTimeout(r, 300))
+			const linesAfter = readFileSync(marker, 'utf8').trim().split('\\n').length
+
+			// If grandchild was killed with the group, no new lines were added
+			const grandchildKilled = linesAfter === linesBefore
+
+			console.log(JSON.stringify({ isSessionLeader, grandchildKilled }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { isSessionLeader: true, grandchildKilled: true })
+	})
 })

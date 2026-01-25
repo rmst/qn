@@ -23,10 +23,20 @@
  * @see https://github.com/google/zx
  */
 
+import * as os from 'os'
 import process from 'node:process'
 import { writeFileSync, globSync } from 'node:fs'
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { Buffer } from 'node:buffer'
+
+// Signal constants (some missing from QuickJS os module)
+const signals = {
+	SIGHUP: 1,
+	SIGINT: os.SIGINT ?? 2,
+	SIGQUIT: os.SIGQUIT ?? 3,
+	SIGKILL: 9,
+	SIGTERM: os.SIGTERM ?? 15,
+}
 
 /**
  * @typedef {Object} ShellConfig
@@ -46,46 +56,21 @@ const defaultConfig = {
 	nothrow: false,
 }
 
-/**
- * Get all descendant PIDs of a process using ps.
- * @param {number} pid - Parent process ID
- * @returns {number[]} Array of descendant PIDs (not including the parent)
- */
-function getDescendantPids(pid) {
-	try {
-		// Get all processes with their parent PIDs (POSIX standard)
-		const output = execFileSync('ps', ['-eo', 'pid,ppid'], { encoding: 'utf8' })
+/** @type {Set<number>} Track active process group leaders for cleanup */
+const activeProcessGroups = new Set()
 
-		// Parse into parent -> children map
-		const children = new Map()
-		for (const line of output.trim().split('\n').slice(1)) { // skip header
-			const [pidStr, ppidStr] = line.trim().split(/\s+/)
-			const childPid = parseInt(pidStr, 10)
-			const parentPid = parseInt(ppidStr, 10)
-			if (!isNaN(childPid) && !isNaN(parentPid)) {
-				if (!children.has(parentPid)) {
-					children.set(parentPid, [])
-				}
-				children.get(parentPid).push(childPid)
-			}
+// Clean up process groups on exit
+process.on('exit', () => {
+	if (activeProcessGroups.size > 0) {
+		console.error(`qx: killing ${activeProcessGroups.size} orphaned process group(s)`)
+		for (const pgid of activeProcessGroups) {
+			try { os.kill(-pgid, signals.SIGTERM) } catch {}
 		}
-
-		// Recursively collect all descendants
-		const descendants = []
-		const collect = (p) => {
-			const kids = children.get(p) || []
-			for (const kid of kids) {
-				descendants.push(kid)
-				collect(kid)
-			}
+		for (const pgid of activeProcessGroups) {
+			try { os.kill(-pgid, signals.SIGKILL) } catch {}
 		}
-		collect(pid)
-
-		return descendants
-	} catch {
-		return []
 	}
-}
+})
 
 /**
  * ProcessOutput represents the result of a completed command.
@@ -283,8 +268,13 @@ export class ProcessPromise extends Promise {
 			process.stderr.write(`$ ${this.#cmd} ${this.#args.join(' ')}\n`)
 		}
 
-		const child = execFile(this.#cmd, this.#args)
+		// Use detached: true to create a new process group for reliable killing
+		const child = execFile(this.#cmd, this.#args, { detached: true })
 		this.#child = child
+
+		// Track this process group for cleanup on exit
+		// The child PID is also the PGID since it's a session leader
+		activeProcessGroups.add(child.pid)
 
 		// Don't set encoding - keep data as binary Buffers
 		child.stdout.on('data', (chunk) => {
@@ -319,6 +309,9 @@ export class ProcessPromise extends Promise {
 		}
 
 		child.on('close', (code, signal) => {
+			// Remove from active process groups
+			activeProcessGroups.delete(child.pid)
+
 			// Clear timeout if set
 			if (this.#timeoutId) {
 				clearTimeout(this.#timeoutId)
@@ -485,7 +478,8 @@ export class ProcessPromise extends Promise {
 	}
 
 	/**
-	 * Kill the process and all its descendants.
+	 * Kill the process and its entire process group.
+	 * Uses process group kill which reliably kills all descendants.
 	 * @param {string|{sigkillTimeout?: number}} [signalOrOptions='SIGTERM']
 	 * @param {{sigkillTimeout?: number}} [options={}]
 	 * @returns {boolean}
@@ -504,41 +498,33 @@ export class ProcessPromise extends Promise {
 		}
 		const { sigkillTimeout = null } = opts
 
-		const pid = this.#child.pid
-		const descendants = getDescendantPids(pid)
+		const pgid = this.#child.pid // PGID == PID for session leader
+		const sig = typeof signal === 'string' ? (signals[signal] || signals[`SIG${signal}`] || 15) : signal
 
-		// Kill all descendants first
-		for (const descendantPid of descendants) {
-			try {
-				process.kill(descendantPid, signal)
-			} catch {
-				// Process may have already exited
-			}
+		// Kill the entire process group with a single call
+		try {
+			os.kill(-pgid, sig)
+		} catch {
+			return false
 		}
 
-		// Kill the main process
-		const result = this.#child.kill(signal)
-
 		// Poll and escalate to SIGKILL if processes don't exit in time
-		if (sigkillTimeout != null && signal !== 'SIGKILL') {
-			const allPids = [...descendants, pid]
+		if (sigkillTimeout != null && sig !== signals.SIGKILL) {
 			const sleep = ms => new Promise(r => setTimeout(r, ms))
-			const isAlive = p => { try { process.kill(p, 0); return true } catch { return false } }
+			const groupAlive = () => { try { os.kill(-pgid, 0); return true } catch { return false } }
 
 			;(async () => {
 				const startTime = Date.now()
 				while (Date.now() - startTime < sigkillTimeout) {
-					if (!allPids.some(isAlive)) return
+					if (!groupAlive()) return
 					await sleep(50)
 				}
-				// Timeout expired, SIGKILL survivors
-				for (const p of allPids) {
-					try { process.kill(p, 'SIGKILL') } catch {}
-				}
+				// Timeout expired, SIGKILL the entire group
+				try { os.kill(-pgid, signals.SIGKILL) } catch {}
 			})()
 		}
 
-		return result
+		return true
 	}
 
 	/**
