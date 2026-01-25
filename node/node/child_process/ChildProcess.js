@@ -114,6 +114,20 @@ export class ChildProcess extends EventEmitter {
 
 		// Emit 'spawn' on next tick
 		os.setTimeout(() => this.emit('spawn'), 0)
+
+		// If all streams are already "closed" (i.e., inherited/ignored, no fds to monitor),
+		// we need to poll for process exit since there are no stream close events to trigger it
+		if (this.#stdoutClosed && this.#stderrClosed && this.#stdinClosed) {
+			this.#pollForExit()
+		}
+	}
+
+	#pollForExit() {
+		if (this.#exited) return
+		this.#checkExit()
+		if (!this.#exited) {
+			os.setTimeout(() => this.#pollForExit(), 10)
+		}
 	}
 
 	#checkExit() {
