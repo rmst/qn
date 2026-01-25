@@ -486,18 +486,29 @@ export class ProcessPromise extends Promise {
 
 	/**
 	 * Kill the process and all its descendants.
-	 * @param {string} [signal='SIGTERM']
+	 * @param {string|{sigkillTimeout?: number}} [signalOrOptions='SIGTERM']
+	 * @param {{sigkillTimeout?: number}} [options={}]
 	 * @returns {boolean}
 	 */
-	kill(signal = 'SIGTERM') {
+	kill(signalOrOptions = 'SIGTERM', options = {}) {
 		if (!this.#child || !this.#child.pid) {
 			return false
 		}
 
-		const pid = this.#child.pid
+		let signal = 'SIGTERM'
+		let opts = options
+		if (typeof signalOrOptions === 'object') {
+			opts = signalOrOptions
+		} else {
+			signal = signalOrOptions
+		}
+		const { sigkillTimeout = null } = opts
 
-		// Kill all descendants first (bottom-up would be ideal, but this works)
-		for (const descendantPid of getDescendantPids(pid)) {
+		const pid = this.#child.pid
+		const descendants = getDescendantPids(pid)
+
+		// Kill all descendants first
+		for (const descendantPid of descendants) {
 			try {
 				process.kill(descendantPid, signal)
 			} catch {
@@ -506,7 +517,28 @@ export class ProcessPromise extends Promise {
 		}
 
 		// Kill the main process
-		return this.#child.kill(signal)
+		const result = this.#child.kill(signal)
+
+		// Poll and escalate to SIGKILL if processes don't exit in time
+		if (sigkillTimeout != null && signal !== 'SIGKILL') {
+			const allPids = [...descendants, pid]
+			const sleep = ms => new Promise(r => setTimeout(r, ms))
+			const isAlive = p => { try { process.kill(p, 0); return true } catch { return false } }
+
+			;(async () => {
+				const startTime = Date.now()
+				while (Date.now() - startTime < sigkillTimeout) {
+					if (!allPids.some(isAlive)) return
+					await sleep(50)
+				}
+				// Timeout expired, SIGKILL survivors
+				for (const p of allPids) {
+					try { process.kill(p, 'SIGKILL') } catch {}
+				}
+			})()
+		}
+
+		return result
 	}
 
 	/**

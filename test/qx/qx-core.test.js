@@ -427,6 +427,42 @@ describe('qx timeout', () => {
 			rmSync(dir, { recursive: true })
 		}
 	})
+
+	test('.kill() with signal string (backward compatible)', () => {
+		const dir = mktempdir()
+		try {
+			const output = runQx(`
+				const p = $.quiet.nothrow\`sleep 10\`
+				await new Promise(r => setTimeout(r, 50))
+				const killed = p.kill('SIGTERM')
+				await p
+				console.log(JSON.stringify({ killed }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { killed: true })
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('.kill({ sigkillTimeout }) escalates to SIGKILL', () => {
+		const dir = mktempdir()
+		try {
+			// Process that ignores SIGTERM but dies from SIGKILL
+			const output = runQx(`
+				const start = Date.now()
+				const p = $.quiet.nothrow\`sh -c "trap '' TERM; sleep 10"\`
+				await new Promise(r => setTimeout(r, 50))
+				p.kill({ sigkillTimeout: 100 })
+				await p
+				const elapsed = Date.now() - start
+				// Should complete quickly (SIGKILL after 100ms), not wait for sleep 10
+				console.log(JSON.stringify({ killedQuickly: elapsed < 500 }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { killedQuickly: true })
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
 })
 
 describe('qx retry', () => {
