@@ -913,6 +913,9 @@ describe('node:child_process shim', () => {
 			const script = '(while true; do echo alive >> ' + marker + '; sleep 0.1; done) & wait'
 			const child = spawn('sh', ['-c', script], { detached: true })
 
+			// Wait for child to call setsid() before checking PGID
+			await new Promise(r => setTimeout(r, 50))
+
 			// Child should be session leader (PGID == PID)
 			const isSessionLeader = qn_native.getpgid(child.pid) === child.pid
 
