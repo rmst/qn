@@ -3,7 +3,7 @@ export const run = {
 	// default: () => jix.script`
 	// `,
 
-	bench: jix.script`
+	bench: () => jix.script`
 		cd ${import.meta.dirname}
 		make build
 		QJSXPATH=./qx:./node ./bin/qx bench/startup.js
