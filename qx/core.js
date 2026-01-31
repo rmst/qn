@@ -501,10 +501,18 @@ export class ProcessPromise extends Promise {
 		const pgid = this.#child.pid // PGID == PID for session leader
 		const sig = typeof signal === 'string' ? (signals[signal] || signals[`SIG${signal}`] || 15) : signal
 
+		const child = this.#child
+
 		// Kill the entire process group with a single call
 		try {
 			os.kill(-pgid, sig)
 		} catch {
+			// Process group already dead — force-close streams in case orphaned
+			// descendant processes (in different process groups) keep pipes open
+			if (sigkillTimeout != null) {
+				if (child.stdout) child.stdout.destroy()
+				if (child.stderr) child.stderr.destroy()
+			}
 			return false
 		}
 
@@ -516,11 +524,17 @@ export class ProcessPromise extends Promise {
 			;(async () => {
 				const startTime = Date.now()
 				while (Date.now() - startTime < sigkillTimeout) {
-					if (!groupAlive()) return
+					if (!groupAlive()) break
 					await sleep(50)
 				}
-				// Timeout expired, SIGKILL the entire group
-				try { os.kill(-pgid, signals.SIGKILL) } catch {}
+				if (groupAlive()) {
+					try { os.kill(-pgid, signals.SIGKILL) } catch {}
+				}
+				// Force-close streams in case orphaned descendant processes
+				// (in different process groups) keep pipes open indefinitely
+				await sleep(200)
+				if (child.stdout && !child.stdout.destroyed) child.stdout.destroy()
+				if (child.stderr && !child.stderr.destroyed) child.stderr.destroy()
 			})()
 		}
 
