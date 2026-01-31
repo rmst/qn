@@ -318,6 +318,11 @@ export class ProcessPromise extends Promise {
 				this.#timeoutId = null
 			}
 
+			// Close stdin to avoid fd leak
+			if (child.stdin && !child.stdin.destroyed) {
+				child.stdin.destroy()
+			}
+
 			const stdout = Buffer.concat(this.#stdoutChunks)
 			const stderr = Buffer.concat(this.#stderrChunks)
 			const output = new ProcessOutput(stdout, stderr, code, signal)
