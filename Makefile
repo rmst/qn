@@ -139,13 +139,16 @@ $(BIN_DIR)/obj/qn-native.o: native/qn-native.c quickjs-deps | $(BIN_DIR)/obj
 NATIVE_OBJS = $(BIN_DIR)/obj/sqlite3.o $(BIN_DIR)/obj/qjs-sqlite.o $(BIN_DIR)/obj/qn-native.o
 
 # Generate version info module for qn/qx --version
-$(BIN_DIR)/obj/qn/version-info.js: | $(BIN_DIR)/obj
+# Uses FORCE + cmp to always check but only update when content changes,
+# avoiding unnecessary rebuilds of qn/qx.
+$(BIN_DIR)/obj/qn/version-info.js: FORCE | $(BIN_DIR)/obj
 	@mkdir -p $(BIN_DIR)/obj/qn
 	@if [ "$(GIT_DIRTY)" = "1" ]; then \
-		echo "export const commit = '$(GIT_COMMIT)', buildTime = '$(BUILD_TIME)';" > $@; \
+		echo "export const commit = '$(GIT_COMMIT)', buildTime = '$(BUILD_TIME)';" > $@.tmp; \
 	else \
-		echo "export const commit = '$(GIT_COMMIT)', buildTime = null;" > $@; \
+		echo "export const commit = '$(GIT_COMMIT)', buildTime = null;" > $@.tmp; \
 	fi
+	@cmp -s $@ $@.tmp && rm $@.tmp || mv $@.tmp $@
 
 # Build qn (standalone executable with embedded node modules, qx, sqlite, and native extensions)
 $(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js $(QJSXC_PROG) $(NATIVE_OBJS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
@@ -226,4 +229,5 @@ help:
 	@echo "  QJSXPATH=./my_modules ./bin/qjsxc -o app.c app.js"
 	@echo "  ./bin/qx script.js    # zx-compatible shell scripting"
 
-.PHONY: all build clean clean-all install help quickjs-deps convenience-links test
+.PHONY: all build clean clean-all install help quickjs-deps convenience-links test FORCE
+FORCE:
