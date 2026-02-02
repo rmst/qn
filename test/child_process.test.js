@@ -353,6 +353,25 @@ describe('node:child_process shim', () => {
 		assert.strictEqual(result.lastLine, 'line 5000: some text to fill buffer')
 	})
 
+	test('execFileSync handles large output without blocking', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFileSync } from 'node:child_process'
+			const output = execFileSync('awk', ['BEGIN { for(i=1;i<=5000;i++) print "line " i ": some text to fill buffer" }'], { encoding: 'utf8' })
+			const lines = output.trim().split('\\n')
+			console.log(JSON.stringify({
+				lineCount: lines.length,
+				firstLine: lines[0],
+				lastLine: lines[lines.length - 1]
+			}))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.lineCount, 5000)
+		assert.strictEqual(result.firstLine, 'line 1: some text to fill buffer')
+		assert.strictEqual(result.lastLine, 'line 5000: some text to fill buffer')
+	})
+
 	// Streaming tests
 	test('streaming: write to stdin and read from stdout', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `

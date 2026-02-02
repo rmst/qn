@@ -1,19 +1,50 @@
 import * as std from 'std'
 import * as os from 'os'
 import { Buffer } from 'node:buffer'
+import { setNonBlock } from 'qn_native'
 import {
 	parseStdio,
 	setupStdioPipes,
 	getSignalNumber,
 	signalName,
-	readFromFd,
-	readBytesFromFd,
 	checkUnsupportedOptions,
 	NodeCompatibilityError,
 	writeInputToFd,
 } from './utils.js'
 
 const UNSUPPORTED_OPTIONS = ['uid', 'gid']
+
+function drainFd(fd, chunks) {
+	const buf = new Uint8Array(65536)
+	while (true) {
+		const n = os.read(fd, buf.buffer, 0, buf.length)
+		if (n > 0) {
+			chunks.push(buf.slice(0, n))
+		} else {
+			break
+		}
+	}
+}
+
+function assembleOutput(chunks, useUtf8) {
+	if (chunks.length === 0) return useUtf8 ? '' : Buffer.alloc(0)
+
+	let totalLen = 0
+	for (const chunk of chunks) totalLen += chunk.length
+	if (totalLen === 0) return useUtf8 ? '' : Buffer.alloc(0)
+
+	const result = Buffer.alloc(totalLen)
+	let offset = 0
+	for (const chunk of chunks) {
+		result.set(chunk, offset)
+		offset += chunk.length
+	}
+
+	if (useUtf8) {
+		return std._decodeUtf8(result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength))
+	}
+	return result
+}
 
 /**
  * Synchronously spawn a child process and return result object.
@@ -91,6 +122,13 @@ export function spawnSync(command, args, options) {
 		}
 	}
 
+	// Set stdout/stderr to non-blocking for draining during poll loop
+	if (parentFds.stdout !== null) setNonBlock(parentFds.stdout)
+	if (parentFds.stderr !== null) setNonBlock(parentFds.stderr)
+
+	const stdoutChunks = []
+	const stderrChunks = []
+
 	// Poll for process exit with timeout support
 	const timeout = options.timeout || 0
 	const killSignal = options.killSignal || 'SIGTERM'
@@ -100,6 +138,9 @@ export function spawnSync(command, args, options) {
 	let signal = null
 
 	while (true) {
+		if (parentFds.stdout !== null) drainFd(parentFds.stdout, stdoutChunks)
+		if (parentFds.stderr !== null) drainFd(parentFds.stderr, stderrChunks)
+
 		const [ret, waitStatus] = os.waitpid(pid, os.WNOHANG)
 
 		if (ret === pid) {
@@ -115,33 +156,24 @@ export function spawnSync(command, args, options) {
 			timedOut = true
 			os.kill(pid, getSignalNumber(killSignal))
 			os.waitpid(pid, 0)
-			// Close pipes to prevent blocking reads
-			if (parentFds.stdout !== null) os.close(parentFds.stdout)
-			if (parentFds.stderr !== null) os.close(parentFds.stderr)
 			break
 		}
 
 		os.sleep(1)
 	}
 
-	// Read stdout and stderr
-	let stdout, stderr
-	if (timedOut) {
-		stdout = useUtf8 ? '' : Buffer.alloc(0)
-		stderr = useUtf8 ? '' : Buffer.alloc(0)
-	} else {
-		if (parentFds.stdout !== null) {
-			stdout = useUtf8 ? readFromFd(parentFds.stdout) : readBytesFromFd(parentFds.stdout)
-		} else {
-			stdout = useUtf8 ? '' : Buffer.alloc(0)
-		}
-
-		if (parentFds.stderr !== null) {
-			stderr = useUtf8 ? readFromFd(parentFds.stderr) : readBytesFromFd(parentFds.stderr)
-		} else {
-			stderr = useUtf8 ? '' : Buffer.alloc(0)
-		}
+	// Final drain and close
+	if (parentFds.stdout !== null) {
+		drainFd(parentFds.stdout, stdoutChunks)
+		os.close(parentFds.stdout)
 	}
+	if (parentFds.stderr !== null) {
+		drainFd(parentFds.stderr, stderrChunks)
+		os.close(parentFds.stderr)
+	}
+
+	const stdout = assembleOutput(stdoutChunks, useUtf8)
+	const stderr = assembleOutput(stderrChunks, useUtf8)
 
 	const result = {
 		pid,

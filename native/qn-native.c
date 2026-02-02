@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <signal.h>
+#include <fcntl.h>
 #include "quickjs.h"
 
 #if !defined(_WIN32)
@@ -334,6 +335,21 @@ static JSValue js_qn_getpgid(JSContext *ctx, JSValueConst this_val,
         return JS_ThrowTypeError(ctx, "getpgid error: %s", strerror(errno));
     return JS_NewInt32(ctx, ret);
 }
+
+/* setNonBlock(fd) -> 0 on success, -errno on failure */
+static JSValue js_qn_setNonBlock(JSContext *ctx, JSValueConst this_val,
+                                  int argc, JSValueConst *argv)
+{
+    int fd, flags;
+    if (JS_ToInt32(ctx, &fd, argv[0]))
+        return JS_EXCEPTION;
+    flags = fcntl(fd, F_GETFL);
+    if (flags < 0)
+        return JS_NewInt32(ctx, -errno);
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
+        return JS_NewInt32(ctx, -errno);
+    return JS_NewInt32(ctx, 0);
+}
 #endif
 
 static const JSCFunctionListEntry js_qn_native_funcs[] = {
@@ -341,6 +357,7 @@ static const JSCFunctionListEntry js_qn_native_funcs[] = {
 #if !defined(_WIN32)
     JS_CFUNC_DEF("spawn_setsid", 2, js_qn_spawn_setsid),
     JS_CFUNC_DEF("getpgid", 1, js_qn_getpgid),
+    JS_CFUNC_DEF("setNonBlock", 1, js_qn_setNonBlock),
 #endif
 };
 
