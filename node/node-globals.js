@@ -43,6 +43,11 @@ globalThis.clearInterval = () => {
 	throw new NodeCompatibilityError('clearInterval is not supported')
 }
 
+// queueMicrotask (Web standard, also in Node.js)
+// QuickJS doesn't have a separate microtask queue, but setTimeout(fn, 0)
+// integrates with the event loop and fires before the next I/O poll.
+globalThis.queueMicrotask = (fn) => os.setTimeout(fn, 0)
+
 // Performance API
 globalThis.performance = {
 	now: os.now
