@@ -22,7 +22,7 @@ const binDir = () => {
 	let platform = jix.target().host.os === "macos" ? "darwin" : "linux"
 
 	return jix.build`
-		cp -r "${repo}" ./repo
+		cp -R "${repo}" ./repo
 		cd repo
 		make build GIT_DIRTY=1
 		mkdir -p "$out"
