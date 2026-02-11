@@ -9,9 +9,7 @@ import {
 	getaddrinfo as _getaddrinfo, send as _send, recv as _recv,
 	AF_INET, SOCK_STREAM, EAGAIN, EINPROGRESS,
 } from 'qn_socket'
-import {
-	tlsLoadCACerts, tlsConnect, tlsRead, tlsWriteAll, tlsFlush, tlsClose,
-} from 'qn_tls'
+import * as tls from 'node:tls'
 import { existsSync } from 'node:fs'
 import { Headers } from './Headers.js'
 import { Request } from './Request.js'
@@ -35,11 +33,11 @@ function ensureCACerts() {
 
 	const sslCertFile = globalThis.process?.env?.SSL_CERT_FILE
 	if (sslCertFile) {
-		tlsLoadCACerts(sslCertFile)
+		tls.loadCACerts(sslCertFile)
 	} else {
 		for (const p of SYSTEM_CA_PATHS) {
 			if (existsSync(p)) {
-				tlsLoadCACerts(p)
+				tls.loadCACerts(p)
 				break
 			}
 		}
@@ -47,7 +45,7 @@ function ensureCACerts() {
 
 	const extraCerts = globalThis.process?.env?.NODE_EXTRA_CA_CERTS
 	if (extraCerts) {
-		tlsLoadCACerts(extraCerts)
+		tls.loadCACerts(extraCerts)
 	}
 }
 
@@ -58,7 +56,7 @@ function isRedirectStatus(status) {
 }
 
 /**
- * Connect a TCP socket to host:port, blocking via event loop.
+ * Connect a TCP socket to host:port via event loop.
  */
 function tcpConnect(host, port) {
 	const addrs = _getaddrinfo(host, port, { family: AF_INET })
@@ -72,7 +70,6 @@ function tcpConnect(host, port) {
 	const ret = _connect(fd, addrs[0].address, port)
 
 	if (ret === -EINPROGRESS) {
-		// Wait for connect to complete via event loop
 		return new Promise((resolve, reject) => {
 			os.setWriteHandler(fd, () => {
 				os.setWriteHandler(fd, null)
@@ -91,8 +88,7 @@ function tcpConnect(host, port) {
 }
 
 /**
- * Blocking read all available data from a plain socket fd.
- * Reads until the read handler fires, then reads everything available.
+ * Read all available data from a plain socket fd via event loop.
  */
 function readAllSocket(fd) {
 	return new Promise((resolve, reject) => {
@@ -113,15 +109,14 @@ function readAllSocket(fd) {
 }
 
 /**
- * Read exactly `count` bytes from a TLS connection (blocking).
+ * Read exactly `count` bytes from a TLS connection.
  */
-function tlsReadExact(tls, count) {
+async function tlsReadExact(conn, fd, count) {
 	const chunks = []
 	let remaining = count
 	const buf = new ArrayBuffer(65536)
 	while (remaining > 0) {
-		const toRead = Math.min(remaining, 65536)
-		const n = tlsRead(tls, buf, 0, toRead)
+		const n = await tls.read(conn, fd, buf, 0, Math.min(remaining, 65536))
 		if (n <= 0) break
 		chunks.push(new Uint8Array(buf.slice(0, n)))
 		remaining -= n
@@ -130,13 +125,13 @@ function tlsReadExact(tls, count) {
 }
 
 /**
- * Read all data from a TLS connection until EOF (blocking).
+ * Read all data from a TLS connection until EOF.
  */
-function tlsReadUntilClose(tls) {
+async function tlsReadUntilClose(conn, fd) {
 	const chunks = []
 	const buf = new ArrayBuffer(65536)
 	for (;;) {
-		const n = tlsRead(tls, buf, 0, 65536)
+		const n = await tls.read(conn, fd, buf, 0, 65536)
 		if (n <= 0) break
 		chunks.push(new Uint8Array(buf.slice(0, n)))
 	}
@@ -146,13 +141,12 @@ function tlsReadUntilClose(tls) {
 /**
  * Read HTTP response from a TLS connection.
  * Parses headers incrementally, then reads the body based on
- * Content-Length or Transfer-Encoding to avoid blocking on EOF.
+ * Content-Length or Transfer-Encoding.
  */
-function readHttpResponseTls(tls) {
+async function readHttpResponseTls(conn, fd) {
 	const buf = new ArrayBuffer(65536)
 	let accumulated = new Uint8Array(0)
 
-	// Read until we have the full header block
 	while (true) {
 		const parsed = parseResponseHead(accumulated)
 		if (parsed) {
@@ -162,15 +156,14 @@ function readHttpResponseTls(tls) {
 			const isChunked = te && te.toLowerCase().includes('chunked')
 
 			if (isChunked) {
-				// Read chunked body - we might already have some/all of it
 				let chunkedData = bodyData
 				while (!isChunkedComplete(chunkedData)) {
-					const n = tlsRead(tls, buf, 0, 65536)
+					const n = await tls.read(conn, fd, buf, 0, 65536)
 					if (n <= 0) break
 					const prev = chunkedData
 					chunkedData = new Uint8Array(prev.length + n)
 					chunkedData.set(prev, 0)
-					chunkedData.set(new Uint8Array(buf.slice(0, n)), prev.length)
+					chunkedData.set(new Uint8Array(buf, 0, n), prev.length)
 				}
 				const body = decodeChunked(chunkedData)
 				parsed.headers.delete('transfer-encoding')
@@ -182,15 +175,14 @@ function readHttpResponseTls(tls) {
 				if (remaining <= 0) {
 					body = bodyData.subarray(0, contentLength)
 				} else {
-					const rest = tlsReadExact(tls, remaining)
+					const rest = await tlsReadExact(conn, fd, remaining)
 					body = new Uint8Array(bodyData.length + rest.length)
 					body.set(bodyData, 0)
 					body.set(rest, bodyData.length)
 				}
 				return { ...parsed, body }
 			} else {
-				// No Content-Length, no chunked: read until connection close
-				const rest = tlsReadUntilClose(tls)
+				const rest = await tlsReadUntilClose(conn, fd)
 				const body = new Uint8Array(bodyData.length + rest.length)
 				body.set(bodyData, 0)
 				body.set(rest, bodyData.length)
@@ -198,12 +190,12 @@ function readHttpResponseTls(tls) {
 			}
 		}
 
-		const n = tlsRead(tls, buf, 0, 65536)
+		const n = await tls.read(conn, fd, buf, 0, 65536)
 		if (n <= 0) break
 		const prev = accumulated
 		accumulated = new Uint8Array(prev.length + n)
 		accumulated.set(prev, 0)
-		accumulated.set(new Uint8Array(buf.slice(0, n)), prev.length)
+		accumulated.set(new Uint8Array(buf, 0, n), prev.length)
 	}
 
 	return null
@@ -216,7 +208,6 @@ function readHttpResponseTls(tls) {
 function isChunkedComplete(data) {
 	let pos = 0
 	while (pos < data.length) {
-		// Find end of chunk size line
 		let lineEnd = -1
 		for (let i = pos; i < data.length - 1; i++) {
 			if (data[i] === 0x0d && data[i + 1] === 0x0a) {
@@ -231,7 +222,6 @@ function isChunkedComplete(data) {
 		if (isNaN(chunkSize)) return false
 		if (chunkSize === 0) return true
 
-		// Skip: chunk size line (\r\n) + chunk data + trailing \r\n
 		const nextPos = lineEnd + 2 + chunkSize + 2
 		if (nextPos > data.length) return false
 		pos = nextPos
@@ -285,7 +275,6 @@ function concatChunks(chunks) {
 
 /**
  * Race a promise against an AbortSignal.
- * On abort, closes the socket fd to unblock any pending reads.
  */
 function raceAbort(signal, promise, fd) {
 	return new Promise((resolve, reject) => {
@@ -324,13 +313,11 @@ function buildRequest(method, path, host, port, headers, isDefaultPort) {
 
 /**
  * Decode a chunked transfer-encoded body.
- * Each chunk: <hex-size>\r\n<data>\r\n ... ending with 0\r\n\r\n
  */
 function decodeChunked(data) {
 	const chunks = []
 	let pos = 0
 	while (pos < data.length) {
-		// Find end of chunk size line
 		let lineEnd = -1
 		for (let i = pos; i < data.length - 1; i++) {
 			if (data[i] === 0x0d && data[i + 1] === 0x0a) {
@@ -341,7 +328,6 @@ function decodeChunked(data) {
 		if (lineEnd === -1) break
 
 		const sizeLine = new TextDecoder().decode(data.subarray(pos, lineEnd))
-		// Chunk size may have extensions after semicolon
 		const chunkSize = parseInt(sizeLine.split(';')[0].trim(), 16)
 		if (isNaN(chunkSize)) break
 		if (chunkSize === 0) break
@@ -351,7 +337,6 @@ function decodeChunked(data) {
 		if (dataEnd > data.length) break
 
 		chunks.push(data.subarray(dataStart, dataEnd))
-		// Skip past chunk data and trailing \r\n
 		pos = dataEnd + 2
 	}
 	return concatChunks(chunks)
@@ -467,29 +452,21 @@ export async function fetch(input, init = {}) {
 
 			if (isHttps) {
 				ensureCACerts()
-				const tls = tlsConnect(fd, host)
+				const conn = tls.connect(fd, host)
 				try {
-					const reqBytes = new TextEncoder().encode(reqStr)
-					const reqBuf = reqBytes.buffer.slice(
-						reqBytes.byteOffset,
-						reqBytes.byteOffset + reqBytes.byteLength
-					)
-					tlsWriteAll(tls, reqBuf, 0, reqBytes.byteLength)
-					if (bodyBytes) {
-						const bodyBuf = bodyBytes.buffer.slice(
-							bodyBytes.byteOffset,
-							bodyBytes.byteOffset + bodyBytes.byteLength
-						)
-						tlsWriteAll(tls, bodyBuf, 0, bodyBytes.byteLength)
-					}
-					tlsFlush(tls)
+					await tls.handshake(conn, fd)
 
-					const httpResp = readHttpResponseTls(tls)
+					const reqBytes = new TextEncoder().encode(reqStr)
+					await tls.writeAll(conn, fd, reqBytes)
+					if (bodyBytes) {
+						await tls.writeAll(conn, fd, bodyBytes)
+					}
+
+					const httpResp = await readHttpResponseTls(conn, fd)
 					if (!httpResp) {
 						throw new TypeError('fetch failed: invalid HTTP response')
 					}
 
-					// Handle redirects
 					if (isRedirectStatus(httpResp.status)) {
 						if (redirectMode === 'error') {
 							throw new TypeError('fetch failed: redirect encountered')
@@ -524,7 +501,7 @@ export async function fetch(input, init = {}) {
 						redirected,
 					})
 				} finally {
-					tlsClose(tls)
+					await tls.close(conn, fd)
 				}
 			} else {
 				const reqBytes = new TextEncoder().encode(reqStr)
@@ -532,7 +509,6 @@ export async function fetch(input, init = {}) {
 				if (bodyBytes) {
 					await writeAllSocket(fd, bodyBytes)
 				}
-				// Race the socket read against abort signal
 				if (signal) {
 					responseData = await raceAbort(signal, readAllSocket(fd), fd)
 				} else {
@@ -553,10 +529,8 @@ export async function fetch(input, init = {}) {
 		const rawBody = responseData.subarray(parsed.bodyStart)
 		const body = isChunked ? decodeChunked(rawBody) : rawBody
 
-		// Remove transfer-encoding header since we've decoded the body
 		if (isChunked) parsed.headers.delete('transfer-encoding')
 
-		// Handle redirects
 		if (isRedirectStatus(parsed.status)) {
 			if (redirectMode === 'error') {
 				throw new TypeError('fetch failed: redirect encountered')
@@ -570,7 +544,6 @@ export async function fetch(input, init = {}) {
 					redirected,
 				})
 			}
-			// follow mode
 			redirectCount++
 			if (redirectCount > MAX_REDIRECTS) {
 				throw new TypeError('fetch failed: too many redirects')
