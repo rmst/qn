@@ -50,6 +50,9 @@ export class ServerResponse extends EventEmitter {
 	set statusMessage(msg) { this.#statusMessage = msg }
 
 	setHeader(name, value) {
+		if (/[\r\n]/.test(name) || /[\r\n]/.test(String(value))) {
+			throw new TypeError(`Invalid header: ${name}`)
+		}
 		this.#headers[name.toLowerCase()] = value
 	}
 
@@ -78,6 +81,9 @@ export class ServerResponse extends EventEmitter {
 		this.#statusMessage = statusMessage || STATUS_CODES[statusCode] || 'Unknown'
 		if (headers) {
 			for (const [k, v] of Object.entries(headers)) {
+				if (/[\r\n]/.test(k) || /[\r\n]/.test(String(v))) {
+					throw new TypeError(`Invalid header: ${k}`)
+				}
 				this.#headers[k.toLowerCase()] = v
 			}
 		}
@@ -227,8 +233,13 @@ function parseRequestHead(data) {
  *
  * Events: 'request', 'listening', 'close', 'error'
  */
+const DEFAULT_MAX_HEADER_SIZE = 64 * 1024  // 64 KB
+const DEFAULT_MAX_BODY_SIZE = 1024 * 1024  // 1 MB
+
 export class HTTPServer extends EventEmitter {
 	#server
+	#maxHeaderSize
+	#maxBodySize
 
 	constructor(options, requestListener) {
 		super()
@@ -236,6 +247,8 @@ export class HTTPServer extends EventEmitter {
 			requestListener = options
 			options = {}
 		}
+		this.#maxHeaderSize = options?.maxHeaderSize ?? DEFAULT_MAX_HEADER_SIZE
+		this.#maxBodySize = options?.maxBodySize ?? DEFAULT_MAX_BODY_SIZE
 		if (requestListener) {
 			this.on('request', requestListener)
 		}
@@ -254,7 +267,15 @@ export class HTTPServer extends EventEmitter {
 				buffer = newBuf
 
 				const parsed = parseRequestHead(buffer)
-				if (!parsed) return
+				if (!parsed) {
+					if (buffer.length > this.#maxHeaderSize) {
+						const res = new ServerResponse(socket)
+						res.writeHead(431, { 'Connection': 'close' })
+						res.end('Request Header Fields Too Large')
+						socket.destroy()
+					}
+					return
+				}
 
 				const req = new IncomingMessage(socket)
 				req.method = parsed.method
@@ -268,6 +289,14 @@ export class HTTPServer extends EventEmitter {
 				const contentLength = parseInt(parsed.headers['content-length'], 10) || 0
 				const bodyStart = parsed.headerEnd
 				const bodyData = buffer.subarray(bodyStart)
+
+				if (contentLength > this.#maxBodySize) {
+					const res = new ServerResponse(socket)
+					res.writeHead(413, { 'Connection': 'close' })
+					res.end('Payload Too Large')
+					socket.destroy()
+					return
+				}
 
 				if (contentLength === 0 || parsed.method === 'GET' || parsed.method === 'HEAD') {
 					req.complete = true

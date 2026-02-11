@@ -57,10 +57,10 @@ Reference: [Node.js Globals](https://nodejs.org/api/globals.html)
 
 | Global | Status | Notes |
 |--------|--------|-------|
-| `fetch` | ⚠️ | Requires `curl` in PATH; supports GET/POST/PUT/DELETE/etc, headers, body, redirects |
+| `fetch` | ✅ | Native sockets + BearSSL TLS; HTTP and HTTPS; no external dependencies |
 | `Response` | ✅ | `.text()`, `.json()`, `.arrayBuffer()`, `.clone()`, `Response.json()` |
 | `Headers` | ✅ | Full WHATWG Headers interface |
-| `Request` | ❌ | |
+| `Request` | ✅ | `.url`, `.method`, `.headers`, `.body`, `.text()`, `.json()`, `.arrayBuffer()`, `.clone()` |
 | `AbortController` / `AbortSignal` | ✅ | Full implementation with `abort()`, `signal.aborted`, events |
 | `DOMException` | ✅ | Used by fetch and AbortController |
 | `Blob` / `File` | ❌ | |
@@ -244,17 +244,17 @@ WHATWG URL Standard implementation. Also available as globals.
 ### `node:fetch`
 
 ```js
-import { fetch, Headers, Response } from 'node:fetch';
+import { fetch, Headers, Request, Response } from 'node:fetch';
 ```
 
-Fetch API implementation using curl. Also available as globals (`fetch`, `Headers`, `Response`).
+Fetch API implementation using native sockets and BearSSL for TLS. Also available as globals (`fetch`, `Headers`, `Request`, `Response`).
 
 | API | Status | Notes |
 |-----|--------|-------|
-| `fetch` | ⚠️ | Async HTTP client; requires `curl` in PATH |
+| `fetch` | ✅ | Async HTTP/HTTPS client; no external dependencies |
 | `Headers` | ✅ | Case-insensitive header management |
+| `Request` | ✅ | WHATWG Request object |
 | `Response` | ✅ | Response object with body consumption methods |
-| `Request` | ❌ | Use plain options object instead |
 
 **fetch() options:**
 | Option | Status | Notes |
@@ -279,7 +279,86 @@ Fetch API implementation using curl. Also available as globals (`fetch`, `Header
 | `Response.redirect()` | ✅ | |
 | `Response.error()` | ✅ | |
 
-**Requirement:** `curl` must be available in PATH.
+**TLS:** Uses BearSSL. System CA certificates are loaded automatically from standard paths. `NODE_EXTRA_CA_CERTS` adds additional certs on top of system certs (matching Node.js behavior). `SSL_CERT_FILE` overrides system cert paths entirely.
+
+### `node:net`
+
+```js
+import { createServer, createConnection, Socket, Server } from 'node:net';
+```
+
+TCP networking module built on POSIX sockets.
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `createServer` | ✅ | TCP server with `connection` event |
+| `createConnection` / `connect` | ✅ | TCP client |
+| `Socket` | ✅ | TCP socket with EventEmitter interface |
+| `Server` | ✅ | TCP server with `listen`, `close`, `address` |
+
+**Socket:**
+| Method/Event | Status | Notes |
+|--------------|--------|-------|
+| `write` | ✅ | String or Buffer/Uint8Array |
+| `end` | ✅ | Half-close |
+| `destroy` | ✅ | |
+| `setNoDelay` | ✅ | |
+| `connect` event | ✅ | |
+| `data` event | ✅ | Emits Uint8Array chunks |
+| `end` event | ✅ | |
+| `close` event | ✅ | |
+| `error` event | ✅ | |
+| `drain` event | ✅ | |
+| `remoteAddress` / `remotePort` | ✅ | |
+| `localAddress` / `localPort` | ✅ | |
+| `setTimeout` | ❌ | |
+| `setKeepAlive` | ❌ | |
+| `pipe` | ❌ | |
+
+**Server:**
+| Method/Event | Status | Notes |
+|--------------|--------|-------|
+| `listen` | ✅ | Port, host, backlog, callback |
+| `close` | ✅ | |
+| `address` | ✅ | Returns `{ address, family, port }` |
+| `connection` event | ✅ | |
+| `listening` event | ✅ | |
+| `close` event | ✅ | |
+| `error` event | ✅ | |
+
+### `node:http`
+
+```js
+import { createServer, IncomingMessage, ServerResponse } from 'node:http';
+```
+
+HTTP server built on `node:net`.
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `createServer` | ✅ | HTTP/1.1 server |
+| `IncomingMessage` | ✅ | Request object with headers, method, url |
+| `ServerResponse` | ✅ | Response object with write, end, setHeader |
+| `STATUS_CODES` | ✅ | HTTP status code map |
+| `http.request` | ❌ | Use `fetch` instead |
+| `http.get` | ❌ | Use `fetch` instead |
+
+**ServerResponse:**
+| Method | Status | Notes |
+|--------|--------|-------|
+| `writeHead` | ✅ | Status code + headers |
+| `setHeader` | ✅ | With CRLF injection validation |
+| `getHeader` | ✅ | |
+| `removeHeader` | ✅ | |
+| `write` | ✅ | String or Buffer/Uint8Array |
+| `end` | ✅ | |
+| `statusCode` | ✅ | |
+
+**Server options:**
+| Option | Status | Notes |
+|--------|--------|-------|
+| `maxHeaderSize` | ✅ | Default 64 KB |
+| `maxBodySize` | ✅ | Default 1 MB; 413 on exceed |
 
 ### `node:sqlite`
 
@@ -400,11 +479,9 @@ The following Node.js built-in modules are **not available**:
 - `node:diagnostics_channel`
 - `node:dns`
 - `node:domain`
-- `node:http`
 - `node:http2`
 - `node:https`
 - `node:inspector`
-- `node:net`
 - `node:perf_hooks`
 - `node:punycode`
 - `node:querystring`

@@ -157,9 +157,10 @@ globalThis.URL = URL
 globalThis.URLSearchParams = URLSearchParams
 
 // Fetch API (Web standard, also in Node.js)
-import { fetch, Headers, Response } from "node:fetch"
+import { fetch, Headers, Request, Response } from "node:fetch"
 globalThis.fetch = fetch
 globalThis.Headers = Headers
+globalThis.Request = Request
 globalThis.Response = Response
 
 // AbortController/AbortSignal (Web standard, also in Node.js)

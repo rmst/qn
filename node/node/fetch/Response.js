@@ -7,7 +7,13 @@ import { Headers } from './Headers.js'
 
 export class Response {
 	constructor(body, init = {}) {
-		this._body = body // Uint8Array or null
+		if (typeof body === 'string') {
+			this._body = new TextEncoder().encode(body)
+		} else if (body instanceof ArrayBuffer) {
+			this._body = new Uint8Array(body)
+		} else {
+			this._body = body // Uint8Array or null
+		}
 		this._bodyUsed = false
 
 		this.status = init.status !== undefined ? init.status : 200
