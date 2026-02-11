@@ -655,3 +655,398 @@ describe('Streaming response body', () => {
 		}
 	})
 })
+
+/**
+ * Helper: write a qn TLS server script that accepts one connection,
+ * sends rawResponse bytes, then closes.
+ * The server prints its port to stdout.
+ */
+function writeRawServer(dir, rawResponseExpr) {
+	const script = `
+		import * as tls from 'node:tls'
+		import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
+		import * as os from 'os'
+
+		const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
+		const fd = socket(AF_INET, SOCK_STREAM)
+		setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
+		bind(fd, '127.0.0.1', 0)
+		listen(fd, 1)
+		console.log(getsockname(fd).port)
+
+		os.setReadHandler(fd, async () => {
+			const result = accept(fd)
+			if (!result) return
+			os.setReadHandler(fd, null)
+			const conn = tls.accept(result.fd, cred)
+			await tls.handshake(conn, result.fd)
+			// Read the request (and discard it)
+			const buf = new ArrayBuffer(65536)
+			await tls.read(conn, result.fd, buf, 0, 65536)
+			// Send the raw response
+			const raw = ${rawResponseExpr}
+			await tls.writeAll(conn, result.fd, typeof raw === 'string' ? new TextEncoder().encode(raw) : raw)
+			await tls.close(conn, result.fd)
+			os.close(result.fd)
+			os.close(fd)
+		})
+	`
+	writeFileSync(`${dir}/server.js`, script)
+	return `${dir}/server.js`
+}
+
+describe('Adversarial: malformed responses', () => {
+	testQnOnly('server sends garbage (not HTTP)', async ({ bin, dir }) => {
+		writeRawServer(dir, `'this is not http at all\\r\\n'`)
+		const { port, close } = await startQnTlsServer(`${dir}/server.js`)
+		try {
+			writeFileSync(`${dir}/client.js`, `
+				try {
+					const res = await fetch('https://localhost:${port}/')
+					// status 0 is acceptable for unparseable responses
+					console.log('status:' + res.status)
+				} catch (e) {
+					console.log('error:' + e.constructor.name)
+				}
+			`)
+			const output = await execAsync(bin, [`${dir}/client.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			// Should get an error since headers can't be parsed
+			assert.strictEqual(output, 'error:TypeError')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('server closes connection immediately (no response)', async ({ bin, dir }) => {
+		const script = `
+			import * as tls from 'node:tls'
+			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
+			import * as os from 'os'
+
+			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
+			const fd = socket(AF_INET, SOCK_STREAM)
+			setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
+			bind(fd, '127.0.0.1', 0)
+			listen(fd, 1)
+			console.log(getsockname(fd).port)
+
+			os.setReadHandler(fd, async () => {
+				const result = accept(fd)
+				if (!result) return
+				os.setReadHandler(fd, null)
+				const conn = tls.accept(result.fd, cred)
+				await tls.handshake(conn, result.fd)
+				// Read the request then close immediately without responding
+				const buf = new ArrayBuffer(65536)
+				await tls.read(conn, result.fd, buf, 0, 65536)
+				await tls.close(conn, result.fd)
+				os.close(result.fd)
+				os.close(fd)
+			})
+		`
+		writeFileSync(`${dir}/server.js`, script)
+		const { port, close } = await startQnTlsServer(`${dir}/server.js`)
+		try {
+			writeFileSync(`${dir}/client.js`, `
+				try {
+					await fetch('https://localhost:${port}/')
+					console.log('should-not-reach')
+				} catch (e) {
+					console.log('error:' + e.constructor.name)
+				}
+			`)
+			const output = await execAsync(bin, [`${dir}/client.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'error:TypeError')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('server sends headers only, no body, with Content-Length', async ({ bin, dir }) => {
+		writeRawServer(dir, `'HTTP/1.1 200 OK\\r\\nContent-Length: 100\\r\\nConnection: close\\r\\n\\r\\n'`)
+		const { port, close } = await startQnTlsServer(`${dir}/server.js`)
+		try {
+			writeFileSync(`${dir}/client.js`, `
+				const res = await fetch('https://localhost:${port}/')
+				// Server promised 100 bytes but sent 0 - text() should return truncated body
+				const text = await res.text()
+				console.log('status:' + res.status + ' len:' + text.length)
+			`)
+			const output = await execAsync(bin, [`${dir}/client.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'status:200 len:0')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('server sends wrong Content-Length (less than actual body)', async ({ bin, dir }) => {
+		const body = 'Hello, this is a long body!'
+		writeRawServer(dir, `'HTTP/1.1 200 OK\\r\\nContent-Length: 5\\r\\nConnection: close\\r\\n\\r\\n${body}'`)
+		const { port, close } = await startQnTlsServer(`${dir}/server.js`)
+		try {
+			writeFileSync(`${dir}/client.js`, `
+				const res = await fetch('https://localhost:${port}/')
+				const text = await res.text()
+				// Should only read Content-Length bytes
+				console.log(text)
+			`)
+			const output = await execAsync(bin, [`${dir}/client.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'Hello')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('server sends empty body with Content-Length: 0', async ({ bin, dir }) => {
+		writeRawServer(dir, `'HTTP/1.1 204 No Content\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n'`)
+		const { port, close } = await startQnTlsServer(`${dir}/server.js`)
+		try {
+			writeFileSync(`${dir}/client.js`, `
+				const res = await fetch('https://localhost:${port}/')
+				const text = await res.text()
+				console.log('status:' + res.status + ' body:' + JSON.stringify(text))
+			`)
+			const output = await execAsync(bin, [`${dir}/client.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'status:204 body:""')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('server sends chunked with zero-length final chunk', async ({ bin, dir }) => {
+		const chunkedBody = '5\\r\\nhello\\r\\n7\\r\\n world!\\r\\n0\\r\\n\\r\\n'
+		writeRawServer(dir, `'HTTP/1.1 200 OK\\r\\nTransfer-Encoding: chunked\\r\\nConnection: close\\r\\n\\r\\n${chunkedBody}'`)
+		const { port, close } = await startQnTlsServer(`${dir}/server.js`)
+		try {
+			writeFileSync(`${dir}/client.js`, `
+				const res = await fetch('https://localhost:${port}/')
+				console.log(await res.text())
+			`)
+			const output = await execAsync(bin, [`${dir}/client.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'hello world!')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('redirect loop is detected', async ({ bin, dir }) => {
+		// Server that always redirects to itself
+		const script = `
+			import * as tls from 'node:tls'
+			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
+			import * as os from 'os'
+
+			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
+			const fd = socket(AF_INET, SOCK_STREAM)
+			setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
+			bind(fd, '127.0.0.1', 0)
+			listen(fd, 128)
+			const port = getsockname(fd).port
+			console.log(port)
+
+			const handleClient = async () => {
+				os.setReadHandler(fd, async () => {
+					const result = accept(fd)
+					if (!result) return
+					const conn = tls.accept(result.fd, cred)
+					try {
+						await tls.handshake(conn, result.fd)
+						const buf = new ArrayBuffer(65536)
+						await tls.read(conn, result.fd, buf, 0, 65536)
+						const response = 'HTTP/1.1 302 Found\\r\\nLocation: https://localhost:' + port + '/loop\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n'
+						await tls.writeAll(conn, result.fd, new TextEncoder().encode(response))
+					} catch {}
+					try { await tls.close(conn, result.fd) } catch {}
+					try { os.close(result.fd) } catch {}
+				})
+			}
+			handleClient()
+		`
+		writeFileSync(`${dir}/server.js`, script)
+		const { port, close } = await startQnTlsServer(`${dir}/server.js`)
+		try {
+			writeFileSync(`${dir}/client.js`, `
+				try {
+					await fetch('https://localhost:${port}/')
+					console.log('should-not-reach')
+				} catch (e) {
+					console.log(e.message.includes('redirect') ? 'redirect-error' : e.message)
+				}
+			`)
+			const output = await execAsync(bin, [`${dir}/client.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'redirect-error')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('redirect with manual mode returns redirect response', async ({ bin, dir }) => {
+		writeRawServer(dir, `'HTTP/1.1 302 Found\\r\\nLocation: /other\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n'`)
+		const { port, close } = await startQnTlsServer(`${dir}/server.js`)
+		try {
+			writeFileSync(`${dir}/client.js`, `
+				const res = await fetch('https://localhost:${port}/', { redirect: 'manual' })
+				console.log('status:' + res.status + ' location:' + res.headers.get('location'))
+			`)
+			const output = await execAsync(bin, [`${dir}/client.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'status:302 location:/other')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('redirect with error mode throws', async ({ bin, dir }) => {
+		writeRawServer(dir, `'HTTP/1.1 301 Moved\\r\\nLocation: /other\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n'`)
+		const { port, close } = await startQnTlsServer(`${dir}/server.js`)
+		try {
+			writeFileSync(`${dir}/client.js`, `
+				try {
+					await fetch('https://localhost:${port}/', { redirect: 'error' })
+					console.log('should-not-reach')
+				} catch (e) {
+					console.log(e.message.includes('redirect') ? 'redirect-error' : e.message)
+				}
+			`)
+			const output = await execAsync(bin, [`${dir}/client.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'redirect-error')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('large response body (1MB)', async ({ bin, dir }) => {
+		// Server that sends 1MB of data
+		const script = `
+			import * as tls from 'node:tls'
+			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
+			import * as os from 'os'
+
+			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
+			const fd = socket(AF_INET, SOCK_STREAM)
+			setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
+			bind(fd, '127.0.0.1', 0)
+			listen(fd, 1)
+			console.log(getsockname(fd).port)
+
+			os.setReadHandler(fd, async () => {
+				const result = accept(fd)
+				if (!result) return
+				os.setReadHandler(fd, null)
+				const conn = tls.accept(result.fd, cred)
+				await tls.handshake(conn, result.fd)
+				const buf = new ArrayBuffer(65536)
+				await tls.read(conn, result.fd, buf, 0, 65536)
+
+				const bodySize = 1024 * 1024
+				const header = 'HTTP/1.1 200 OK\\r\\nContent-Length: ' + bodySize + '\\r\\nConnection: close\\r\\n\\r\\n'
+				await tls.writeAll(conn, result.fd, new TextEncoder().encode(header))
+				// Send body in 64KB chunks
+				const chunk = new Uint8Array(65536)
+				chunk.fill(0x41) // 'A'
+				let sent = 0
+				while (sent < bodySize) {
+					const toSend = Math.min(65536, bodySize - sent)
+					await tls.writeAll(conn, result.fd, chunk.subarray(0, toSend))
+					sent += toSend
+				}
+				await tls.close(conn, result.fd)
+				os.close(result.fd)
+				os.close(fd)
+			})
+		`
+		writeFileSync(`${dir}/server.js`, script)
+		const { port, close } = await startQnTlsServer(`${dir}/server.js`)
+		try {
+			writeFileSync(`${dir}/client.js`, `
+				const res = await fetch('https://localhost:${port}/')
+				const text = await res.text()
+				const allA = text.split('').every(c => c === 'A')
+				console.log('len:' + text.length + ' allA:' + allA)
+			`)
+			const output = await execAsync(bin, [`${dir}/client.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'len:1048576 allA:true')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('abort during streaming body read', async ({ bin, dir }) => {
+		// Server that sends headers quickly, then delays body
+		const script = `
+			import * as tls from 'node:tls'
+			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
+			import * as os from 'os'
+
+			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
+			const fd = socket(AF_INET, SOCK_STREAM)
+			setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
+			bind(fd, '127.0.0.1', 0)
+			listen(fd, 1)
+			console.log(getsockname(fd).port)
+
+			os.setReadHandler(fd, async () => {
+				const result = accept(fd)
+				if (!result) return
+				os.setReadHandler(fd, null)
+				const conn = tls.accept(result.fd, cred)
+				await tls.handshake(conn, result.fd)
+				const buf = new ArrayBuffer(65536)
+				await tls.read(conn, result.fd, buf, 0, 65536)
+
+				// Send headers with a large content-length, then send data slowly
+				const header = 'HTTP/1.1 200 OK\\r\\nContent-Length: 10000\\r\\nConnection: close\\r\\n\\r\\n'
+				await tls.writeAll(conn, result.fd, new TextEncoder().encode(header))
+				// Send a small bit then wait forever
+				await tls.writeAll(conn, result.fd, new TextEncoder().encode('partial'))
+				await new Promise(r => setTimeout(r, 5000))
+				try { await tls.close(conn, result.fd) } catch {}
+				os.close(result.fd)
+				os.close(fd)
+			})
+		`
+		writeFileSync(`${dir}/server.js`, script)
+		const { port, close } = await startQnTlsServer(`${dir}/server.js`)
+		try {
+			writeFileSync(`${dir}/client.js`, `
+				const controller = new AbortController()
+				const res = await fetch('https://localhost:${port}/', {
+					signal: controller.signal
+				})
+				// Headers received, now abort while reading body
+				setTimeout(() => controller.abort(), 200)
+				try {
+					await res.text()
+					console.log('should-not-reach')
+				} catch (e) {
+					console.log(e.name)
+				}
+			`)
+			const output = await execAsync(bin, [`${dir}/client.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'AbortError')
+		} finally {
+			close()
+		}
+	})
+})
