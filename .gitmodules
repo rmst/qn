@@ -2,3 +2,6 @@
 	path = quickjs
 	url = https://github.com/bellard/quickjs.git
 	ignore = dirty
+[submodule "vendor/bearssl"]
+	path = vendor/bearssl
+	url = https://github.com/nickray/bearssl

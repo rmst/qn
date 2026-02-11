@@ -43,6 +43,11 @@ globalThis.clearInterval = () => {
 	throw new NodeCompatibilityError('clearInterval is not supported')
 }
 
+// queueMicrotask (Web standard, also in Node.js)
+// QuickJS doesn't have a separate microtask queue, but setTimeout(fn, 0)
+// integrates with the event loop and fires before the next I/O poll.
+globalThis.queueMicrotask = (fn) => os.setTimeout(fn, 0)
+
 // Performance API
 globalThis.performance = {
 	now: os.now
@@ -152,9 +157,10 @@ globalThis.URL = URL
 globalThis.URLSearchParams = URLSearchParams
 
 // Fetch API (Web standard, also in Node.js)
-import { fetch, Headers, Response } from "node:fetch"
+import { fetch, Headers, Request, Response } from "node:fetch"
 globalThis.fetch = fetch
 globalThis.Headers = Headers
+globalThis.Request = Request
 globalThis.Response = Response
 
 // AbortController/AbortSignal (Web standard, also in Node.js)
