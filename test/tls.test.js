@@ -459,3 +459,199 @@ describe('TLS server', () => {
 		}
 	})
 })
+
+const HTTPS_SERVER_SLOW = `
+const https = require('https');
+const fs = require('fs');
+const server = https.createServer({
+	cert: fs.readFileSync(${JSON.stringify(certFile)}),
+	key: fs.readFileSync(${JSON.stringify(keyFile)}),
+}, (req, res) => {
+	res.setHeader('Connection', 'close');
+	setTimeout(() => {
+		res.writeHead(200, { 'Content-Type': 'text/plain' });
+		res.end('slow-response');
+	}, 2000);
+});
+server.listen(0, '127.0.0.1', () => {
+	console.log(server.address().port);
+});
+`
+
+function startSlowHttpsServer() {
+	return new Promise((resolve, reject) => {
+		const child = spawn('node', ['-e', HTTPS_SERVER_SLOW], {
+			stdio: ['ignore', 'pipe', 'inherit']
+		})
+		let output = ''
+		child.stdout.on('data', (data) => {
+			output += data.toString()
+			const port = parseInt(output.trim(), 10)
+			if (!isNaN(port)) {
+				setTimeout(() => resolve({ port, close: () => child.kill() }), 50)
+			}
+		})
+		child.on('error', reject)
+		child.on('exit', (code) => {
+			if (code !== null && code !== 0)
+				reject(new Error(`HTTPS server exited with code ${code}`))
+		})
+	})
+}
+
+describe('Fetch timeout and AbortSignal', () => {
+	testQnOnly('AbortSignal.timeout aborts slow HTTPS request', async ({ bin, dir }) => {
+		const { port, close } = await startSlowHttpsServer()
+		try {
+			writeFileSync(`${dir}/test.js`, `
+				try {
+					await fetch('https://localhost:${port}/', {
+						signal: AbortSignal.timeout(200)
+					})
+					console.log('should-not-reach')
+				} catch (e) {
+					console.log(e.name)
+				}
+			`)
+			const output = await execAsync(bin, [`${dir}/test.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'TimeoutError')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('AbortController aborts HTTPS request', async ({ bin, dir }) => {
+		const { port, close } = await startSlowHttpsServer()
+		try {
+			writeFileSync(`${dir}/test.js`, `
+				const controller = new AbortController()
+				setTimeout(() => controller.abort(), 100)
+				try {
+					await fetch('https://localhost:${port}/', {
+						signal: controller.signal
+					})
+					console.log('should-not-reach')
+				} catch (e) {
+					console.log(e.name)
+				}
+			`)
+			const output = await execAsync(bin, [`${dir}/test.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'AbortError')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('Already-aborted signal rejects immediately', async ({ bin, dir }) => {
+		const { port, close } = await startHttpsServer()
+		try {
+			writeFileSync(`${dir}/test.js`, `
+				try {
+					await fetch('https://localhost:${port}/get', {
+						signal: AbortSignal.abort()
+					})
+					console.log('should-not-reach')
+				} catch (e) {
+					console.log(e.name)
+				}
+			`)
+			const output = await execAsync(bin, [`${dir}/test.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'AbortError')
+		} finally {
+			close()
+		}
+	})
+})
+
+describe('Streaming response body', () => {
+	testQnOnly('response.body async iteration', async ({ bin, dir }) => {
+		const { port, close } = await startHttpsServer()
+		try {
+			writeFileSync(`${dir}/test.js`, `
+				const res = await fetch('https://localhost:${port}/text')
+				const chunks = []
+				for await (const chunk of res.body) {
+					chunks.push(chunk)
+				}
+				const text = chunks.map(c => new TextDecoder().decode(c)).join('')
+				console.log(chunks.length > 0 && text === 'Hello, TLS!' ? 'ok' : 'bad: ' + text)
+			`)
+			const output = await execAsync(bin, [`${dir}/test.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'ok')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('response.body getReader', async ({ bin, dir }) => {
+		const { port, close } = await startHttpsServer()
+		try {
+			writeFileSync(`${dir}/test.js`, `
+				const res = await fetch('https://localhost:${port}/text')
+				const reader = res.body.getReader()
+				const parts = []
+				while (true) {
+					const { value, done } = await reader.read()
+					if (done) break
+					parts.push(new TextDecoder().decode(value))
+				}
+				console.log(parts.join(''))
+			`)
+			const output = await execAsync(bin, [`${dir}/test.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'Hello, TLS!')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('body consumed via text() then body iteration throws', async ({ bin, dir }) => {
+		const { port, close } = await startHttpsServer()
+		try {
+			writeFileSync(`${dir}/test.js`, `
+				const res = await fetch('https://localhost:${port}/text')
+				await res.text()
+				try {
+					for await (const chunk of res.body) {}
+					console.log('should-not-reach')
+				} catch (e) {
+					console.log(e.message)
+				}
+			`)
+			const output = await execAsync(bin, [`${dir}/test.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'Body has already been consumed')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('bodyUsed reflects consumption state', async ({ bin, dir }) => {
+		const { port, close } = await startHttpsServer()
+		try {
+			writeFileSync(`${dir}/test.js`, `
+				const res = await fetch('https://localhost:${port}/text')
+				const before = res.bodyUsed
+				await res.text()
+				const after = res.bodyUsed
+				console.log(before + ' ' + after)
+			`)
+			const output = await execAsync(bin, [`${dir}/test.js`], {
+				env: { NODE_EXTRA_CA_CERTS: certFile }
+			})
+			assert.strictEqual(output, 'false true')
+		} finally {
+			close()
+		}
+	})
+})

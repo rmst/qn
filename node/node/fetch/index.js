@@ -58,7 +58,9 @@ function isRedirectStatus(status) {
 /**
  * Connect a TCP socket to host:port via event loop.
  */
-function tcpConnect(host, port) {
+function tcpConnect(host, port, signal) {
+	if (signal?.aborted) return Promise.reject(signal.reason)
+
 	const addrs = _getaddrinfo(host, port, { family: AF_INET })
 	if (addrs.length === 0) {
 		const addrs6 = _getaddrinfo(host, port)
@@ -71,8 +73,15 @@ function tcpConnect(host, port) {
 
 	if (ret === -EINPROGRESS) {
 		return new Promise((resolve, reject) => {
+			const onAbort = () => {
+				os.setWriteHandler(fd, null)
+				os.close(fd)
+				reject(signal.reason)
+			}
+			if (signal) signal.addEventListener('abort', onAbort, { once: true })
 			os.setWriteHandler(fd, () => {
 				os.setWriteHandler(fd, null)
+				if (signal) signal.removeEventListener('abort', onAbort)
 				try {
 					_connectFinish(fd)
 					resolve(fd)
@@ -88,117 +97,100 @@ function tcpConnect(host, port) {
 }
 
 /**
- * Read all available data from a plain socket fd via event loop.
+ * Read one chunk from a plain socket asynchronously.
+ * Waits for the read handler to fire, then reads.
+ * Returns number of bytes read, or 0 for EOF.
  */
-function readAllSocket(fd) {
+function socketReadAsync(fd, buf, off, len, signal) {
+	if (signal?.aborted) return Promise.reject(signal.reason)
 	return new Promise((resolve, reject) => {
-		const chunks = []
-		const buf = new ArrayBuffer(65536)
-
+		const onAbort = () => {
+			os.setReadHandler(fd, null)
+			reject(signal.reason)
+		}
+		if (signal) signal.addEventListener('abort', onAbort, { once: true })
 		os.setReadHandler(fd, () => {
-			const n = _recv(fd, buf, 0, 65536)
+			const n = _recv(fd, buf, off, len)
 			if (n === -EAGAIN) return
-			if (n <= 0) {
-				os.setReadHandler(fd, null)
-				resolve(concatChunks(chunks))
-				return
-			}
-			chunks.push(new Uint8Array(buf.slice(0, n)))
+			os.setReadHandler(fd, null)
+			if (signal) signal.removeEventListener('abort', onAbort)
+			resolve(n <= 0 ? 0 : n)
 		})
 	})
 }
 
 /**
- * Read exactly `count` bytes from a TLS connection.
+ * Write all data to a plain socket via event loop.
  */
-async function tlsReadExact(conn, fd, count) {
-	const chunks = []
-	let remaining = count
-	const buf = new ArrayBuffer(65536)
-	while (remaining > 0) {
-		const n = await tls.read(conn, fd, buf, 0, Math.min(remaining, 65536))
-		if (n <= 0) break
-		chunks.push(new Uint8Array(buf.slice(0, n)))
-		remaining -= n
-	}
-	return concatChunks(chunks)
-}
+function writeAllSocket(fd, data, signal) {
+	if (signal?.aborted) return Promise.reject(signal.reason)
+	return new Promise((resolve, reject) => {
+		let offset = 0
+		const buf = data.buffer instanceof ArrayBuffer ? data.buffer : new ArrayBuffer(data.byteLength)
+		if (buf !== data.buffer) new Uint8Array(buf).set(data)
 
-/**
- * Read all data from a TLS connection until EOF.
- */
-async function tlsReadUntilClose(conn, fd) {
-	const chunks = []
-	const buf = new ArrayBuffer(65536)
-	for (;;) {
-		const n = await tls.read(conn, fd, buf, 0, 65536)
-		if (n <= 0) break
-		chunks.push(new Uint8Array(buf.slice(0, n)))
-	}
-	return concatChunks(chunks)
-}
-
-/**
- * Read HTTP response from a TLS connection.
- * Parses headers incrementally, then reads the body based on
- * Content-Length or Transfer-Encoding.
- */
-async function readHttpResponseTls(conn, fd) {
-	const buf = new ArrayBuffer(65536)
-	let accumulated = new Uint8Array(0)
-
-	while (true) {
-		const parsed = parseResponseHead(accumulated)
-		if (parsed) {
-			const bodyData = accumulated.subarray(parsed.bodyStart)
-			const te = parsed.headers.get('transfer-encoding')
-			const cl = parsed.headers.get('content-length')
-			const isChunked = te && te.toLowerCase().includes('chunked')
-
-			if (isChunked) {
-				let chunkedData = bodyData
-				while (!isChunkedComplete(chunkedData)) {
-					const n = await tls.read(conn, fd, buf, 0, 65536)
-					if (n <= 0) break
-					const prev = chunkedData
-					chunkedData = new Uint8Array(prev.length + n)
-					chunkedData.set(prev, 0)
-					chunkedData.set(new Uint8Array(buf, 0, n), prev.length)
-				}
-				const body = decodeChunked(chunkedData)
-				parsed.headers.delete('transfer-encoding')
-				return { ...parsed, body }
-			} else if (cl !== null) {
-				const contentLength = parseInt(cl, 10)
-				const remaining = contentLength - bodyData.length
-				let body
-				if (remaining <= 0) {
-					body = bodyData.subarray(0, contentLength)
-				} else {
-					const rest = await tlsReadExact(conn, fd, remaining)
-					body = new Uint8Array(bodyData.length + rest.length)
-					body.set(bodyData, 0)
-					body.set(rest, bodyData.length)
-				}
-				return { ...parsed, body }
-			} else {
-				const rest = await tlsReadUntilClose(conn, fd)
-				const body = new Uint8Array(bodyData.length + rest.length)
-				body.set(bodyData, 0)
-				body.set(rest, bodyData.length)
-				return { ...parsed, body }
-			}
+		const onAbort = () => {
+			os.setWriteHandler(fd, null)
+			reject(signal.reason)
 		}
+		if (signal) signal.addEventListener('abort', onAbort, { once: true })
 
-		const n = await tls.read(conn, fd, buf, 0, 65536)
-		if (n <= 0) break
-		const prev = accumulated
-		accumulated = new Uint8Array(prev.length + n)
-		accumulated.set(prev, 0)
-		accumulated.set(new Uint8Array(buf, 0, n), prev.length)
+		const doWrite = () => {
+			while (offset < data.byteLength) {
+				const n = _send(fd, buf, data.byteOffset + offset, data.byteLength - offset)
+				if (n === -EAGAIN) {
+					os.setWriteHandler(fd, () => {
+						os.setWriteHandler(fd, null)
+						doWrite()
+					})
+					return
+				}
+				if (n < 0) {
+					if (signal) signal.removeEventListener('abort', onAbort)
+					reject(new TypeError('fetch failed: write error'))
+					return
+				}
+				offset += n
+			}
+			if (signal) signal.removeEventListener('abort', onAbort)
+			resolve()
+		}
+		doWrite()
+	})
+}
+
+function concatChunks(chunks) {
+	if (chunks.length === 0) return new Uint8Array(0)
+	if (chunks.length === 1) return chunks[0]
+	const total = chunks.reduce((sum, c) => sum + c.length, 0)
+	const result = new Uint8Array(total)
+	let off = 0
+	for (const chunk of chunks) {
+		result.set(chunk, off)
+		off += chunk.length
 	}
+	return result
+}
 
-	return null
+function validateHeaderValue(name, value) {
+	if (/[\r\n]/.test(name) || /[\r\n]/.test(value)) {
+		throw new TypeError(`Invalid header: ${name}`)
+	}
+}
+
+/**
+ * Build HTTP request string
+ */
+function buildRequest(method, path, host, port, headers, isDefaultPort) {
+	const hostHeader = isDefaultPort ? host : `${host}:${port}`
+	let req = `${method} ${path} HTTP/1.1\r\nHost: ${hostHeader}\r\nConnection: close\r\n`
+	for (const [key, value] of headers) {
+		if (key.toLowerCase() === 'host') continue
+		validateHeaderValue(key, value)
+		req += `${key}: ${value}\r\n`
+	}
+	req += '\r\n'
+	return req
 }
 
 /**
@@ -227,88 +219,6 @@ function isChunkedComplete(data) {
 		pos = nextPos
 	}
 	return false
-}
-
-/**
- * Write all data to a plain socket via event loop.
- */
-function writeAllSocket(fd, data) {
-	return new Promise((resolve, reject) => {
-		let offset = 0
-		const buf = data.buffer instanceof ArrayBuffer ? data.buffer : new ArrayBuffer(data.byteLength)
-		if (buf !== data.buffer) new Uint8Array(buf).set(data)
-
-		const doWrite = () => {
-			while (offset < data.byteLength) {
-				const n = _send(fd, buf, data.byteOffset + offset, data.byteLength - offset)
-				if (n === -EAGAIN) {
-					os.setWriteHandler(fd, () => {
-						os.setWriteHandler(fd, null)
-						doWrite()
-					})
-					return
-				}
-				if (n < 0) {
-					reject(new TypeError('fetch failed: write error'))
-					return
-				}
-				offset += n
-			}
-			resolve()
-		}
-		doWrite()
-	})
-}
-
-function concatChunks(chunks) {
-	if (chunks.length === 0) return new Uint8Array(0)
-	if (chunks.length === 1) return chunks[0]
-	const total = chunks.reduce((sum, c) => sum + c.length, 0)
-	const result = new Uint8Array(total)
-	let off = 0
-	for (const chunk of chunks) {
-		result.set(chunk, off)
-		off += chunk.length
-	}
-	return result
-}
-
-/**
- * Race a promise against an AbortSignal.
- */
-function raceAbort(signal, promise, fd) {
-	return new Promise((resolve, reject) => {
-		const onAbort = () => {
-			os.setReadHandler(fd, null)
-			reject(signal.reason)
-		}
-		signal.addEventListener('abort', onAbort, { once: true })
-		promise.then(
-			v => { signal.removeEventListener('abort', onAbort); resolve(v) },
-			e => { signal.removeEventListener('abort', onAbort); reject(e) },
-		)
-	})
-}
-
-function validateHeaderValue(name, value) {
-	if (/[\r\n]/.test(name) || /[\r\n]/.test(value)) {
-		throw new TypeError(`Invalid header: ${name}`)
-	}
-}
-
-/**
- * Build HTTP request string
- */
-function buildRequest(method, path, host, port, headers, isDefaultPort) {
-	const hostHeader = isDefaultPort ? host : `${host}:${port}`
-	let req = `${method} ${path} HTTP/1.1\r\nHost: ${hostHeader}\r\nConnection: close\r\n`
-	for (const [key, value] of headers) {
-		if (key.toLowerCase() === 'host') continue
-		validateHeaderValue(key, value)
-		req += `${key}: ${value}\r\n`
-	}
-	req += '\r\n'
-	return req
 }
 
 /**
@@ -378,6 +288,137 @@ function parseResponseHead(data) {
 }
 
 /**
+ * Send an HTTP request over an established TCP connection and return
+ * a reader { read(buf, off, len), close() } for the response.
+ * Handles TLS handshake if isHttps. On error, cleans up fd before throwing.
+ */
+async function sendRequest(fd, host, isHttps, reqBytes, bodyBytes, signal) {
+	if (isHttps) {
+		ensureCACerts()
+		const conn = tls.connect(fd, host)
+		try {
+			await tls.handshake(conn, fd, signal)
+			await tls.writeAll(conn, fd, reqBytes, signal)
+			if (bodyBytes) await tls.writeAll(conn, fd, bodyBytes, signal)
+		} catch (e) {
+			try { await tls.close(conn, fd) } catch {}
+			try { os.close(fd) } catch {}
+			throw e
+		}
+		let closed = false
+		return {
+			read(buf, off, len) {
+				return tls.read(conn, fd, buf, off, len, signal)
+			},
+			async close() {
+				if (closed) return
+				closed = true
+				try { await tls.close(conn, fd) } catch {}
+				try { os.close(fd) } catch {}
+			},
+		}
+	}
+
+	try {
+		await writeAllSocket(fd, reqBytes, signal)
+		if (bodyBytes) await writeAllSocket(fd, bodyBytes, signal)
+	} catch (e) {
+		os.close(fd)
+		throw e
+	}
+	let closed = false
+	return {
+		read(buf, off, len) {
+			return socketReadAsync(fd, buf, off, len, signal)
+		},
+		close() {
+			if (closed) return
+			closed = true
+			os.close(fd)
+		},
+	}
+}
+
+/**
+ * Read HTTP response headers from a reader.
+ * Returns { status, statusText, headers, leftover } or null on error.
+ */
+async function readResponseHead(reader) {
+	const buf = new ArrayBuffer(65536)
+	let accumulated = new Uint8Array(0)
+
+	while (true) {
+		const parsed = parseResponseHead(accumulated)
+		if (parsed) {
+			return {
+				status: parsed.status,
+				statusText: parsed.statusText,
+				headers: parsed.headers,
+				leftover: accumulated.subarray(parsed.bodyStart),
+			}
+		}
+
+		const n = await reader.read(buf, 0, 65536)
+		if (n <= 0) break
+		const prev = accumulated
+		accumulated = new Uint8Array(prev.length + n)
+		accumulated.set(prev, 0)
+		accumulated.set(new Uint8Array(buf, 0, n), prev.length)
+	}
+
+	return null
+}
+
+/**
+ * Async generator that streams body data from a reader.
+ * Handles Content-Length, chunked transfer-encoding, and connection-close framing.
+ * Owns the reader — closes it when done or on error.
+ */
+async function* bodyStream(reader, leftover, contentLength, isChunked) {
+	try {
+		if (isChunked) {
+			// Buffer chunked data and decode (chunk framing makes true streaming complex)
+			let buffer = leftover
+			const readBuf = new ArrayBuffer(65536)
+			while (!isChunkedComplete(buffer)) {
+				const n = await reader.read(readBuf, 0, 65536)
+				if (n <= 0) break
+				const prev = buffer
+				buffer = new Uint8Array(prev.length + n)
+				buffer.set(prev, 0)
+				buffer.set(new Uint8Array(readBuf, 0, n), prev.length)
+			}
+			yield decodeChunked(buffer)
+		} else if (contentLength !== null) {
+			let remaining = contentLength
+			if (leftover.length > 0) {
+				const toYield = leftover.subarray(0, Math.min(leftover.length, remaining))
+				remaining -= toYield.length
+				if (toYield.length > 0) yield toYield
+			}
+			const readBuf = new ArrayBuffer(65536)
+			while (remaining > 0) {
+				const n = await reader.read(readBuf, 0, Math.min(remaining, 65536))
+				if (n <= 0) break
+				remaining -= n
+				yield new Uint8Array(readBuf.slice(0, n))
+			}
+		} else {
+			// Read until connection close
+			if (leftover.length > 0) yield leftover
+			const readBuf = new ArrayBuffer(65536)
+			for (;;) {
+				const n = await reader.read(readBuf, 0, 65536)
+				if (n <= 0) break
+				yield new Uint8Array(readBuf.slice(0, n))
+			}
+		}
+	} finally {
+		await reader.close()
+	}
+}
+
+/**
  * Fetch a resource from the network
  *
  * @param {string|URL} input - The URL to fetch
@@ -391,7 +432,7 @@ export async function fetch(input, init = {}) {
 	} else if (typeof input === 'string') {
 		try {
 			url = new URL(input)
-		} catch (e) {
+		} catch {
 			throw new TypeError(`Invalid URL: ${input}`)
 		}
 	} else {
@@ -441,130 +482,79 @@ export async function fetch(input, init = {}) {
 
 		let fd
 		try {
-			fd = await tcpConnect(host, port)
+			fd = await tcpConnect(host, port, signal)
 		} catch (e) {
+			if (signal?.aborted) throw signal.reason
 			throw new TypeError(`fetch failed: ${e.message}`)
 		}
 
-		let responseData
+		const reqStr = buildRequest(method, path, host, port, headers, isDefaultPort)
+		const reqBytes = new TextEncoder().encode(reqStr)
+
+		let reader
 		try {
-			const reqStr = buildRequest(method, path, host, port, headers, isDefaultPort)
+			reader = await sendRequest(fd, host, isHttps, reqBytes, bodyBytes, signal)
+		} catch (e) {
+			if (signal?.aborted) throw signal.reason
+			throw e instanceof TypeError ? e : new TypeError(`fetch failed: ${e.message}`)
+		}
 
-			if (isHttps) {
-				ensureCACerts()
-				const conn = tls.connect(fd, host)
-				try {
-					await tls.handshake(conn, fd)
+		try {
+			const head = await readResponseHead(reader)
+			if (!head) throw new TypeError('fetch failed: invalid HTTP response')
 
-					const reqBytes = new TextEncoder().encode(reqStr)
-					await tls.writeAll(conn, fd, reqBytes)
-					if (bodyBytes) {
-						await tls.writeAll(conn, fd, bodyBytes)
-					}
+			if (isRedirectStatus(head.status)) {
+				await reader.close()
+				reader = null
 
-					const httpResp = await readHttpResponseTls(conn, fd)
-					if (!httpResp) {
-						throw new TypeError('fetch failed: invalid HTTP response')
-					}
-
-					if (isRedirectStatus(httpResp.status)) {
-						if (redirectMode === 'error') {
-							throw new TypeError('fetch failed: redirect encountered')
-						}
-						if (redirectMode === 'manual') {
-							return new Response(httpResp.body, {
-								status: httpResp.status,
-								statusText: httpResp.statusText,
-								headers: httpResp.headers,
-								url: url.href,
-								redirected,
-							})
-						}
-						redirectCount++
-						if (redirectCount > MAX_REDIRECTS) {
-							throw new TypeError('fetch failed: too many redirects')
-						}
-						const location = httpResp.headers.get('location')
-						if (!location) {
-							throw new TypeError('fetch failed: redirect without Location header')
-						}
-						url = new URL(location, url)
-						redirected = true
-						continue
-					}
-
-					return new Response(httpResp.body, {
-						status: httpResp.status,
-						statusText: httpResp.statusText,
-						headers: httpResp.headers,
+				if (redirectMode === 'error') {
+					throw new TypeError('fetch failed: redirect encountered')
+				}
+				if (redirectMode === 'manual') {
+					return new Response(null, {
+						status: head.status,
+						statusText: head.statusText,
+						headers: head.headers,
 						url: url.href,
 						redirected,
 					})
-				} finally {
-					await tls.close(conn, fd)
 				}
-			} else {
-				const reqBytes = new TextEncoder().encode(reqStr)
-				await writeAllSocket(fd, reqBytes)
-				if (bodyBytes) {
-					await writeAllSocket(fd, bodyBytes)
+				redirectCount++
+				if (redirectCount > MAX_REDIRECTS) {
+					throw new TypeError('fetch failed: too many redirects')
 				}
-				if (signal) {
-					responseData = await raceAbort(signal, readAllSocket(fd), fd)
-				} else {
-					responseData = await readAllSocket(fd)
+				const location = head.headers.get('location')
+				if (!location) {
+					throw new TypeError('fetch failed: redirect without Location header')
 				}
+				url = new URL(location, url)
+				redirected = true
+				continue
 			}
+
+			const te = head.headers.get('transfer-encoding')
+			const cl = head.headers.get('content-length')
+			const isChunked = te && te.toLowerCase().includes('chunked')
+			const contentLength = cl !== null ? parseInt(cl, 10) : null
+			if (isChunked) head.headers.delete('transfer-encoding')
+
+			const body = bodyStream(reader, head.leftover, contentLength, isChunked)
+			reader = null
+
+			return new Response(body, {
+				status: head.status,
+				statusText: head.statusText,
+				headers: head.headers,
+				url: url.href,
+				redirected,
+			})
+		} catch (e) {
+			if (signal?.aborted) throw signal.reason
+			throw e instanceof TypeError ? e : new TypeError(`fetch failed: ${e.message}`)
 		} finally {
-			os.close(fd)
+			if (reader) {
+				try { await reader.close() } catch {}
+			}
 		}
-
-		const parsed = parseResponseHead(responseData)
-		if (!parsed) {
-			throw new TypeError('fetch failed: invalid HTTP response')
-		}
-
-		const te = parsed.headers.get('transfer-encoding')
-		const isChunked = te && te.toLowerCase().includes('chunked')
-		const rawBody = responseData.subarray(parsed.bodyStart)
-		const body = isChunked ? decodeChunked(rawBody) : rawBody
-
-		if (isChunked) parsed.headers.delete('transfer-encoding')
-
-		if (isRedirectStatus(parsed.status)) {
-			if (redirectMode === 'error') {
-				throw new TypeError('fetch failed: redirect encountered')
-			}
-			if (redirectMode === 'manual') {
-				return new Response(body, {
-					status: parsed.status,
-					statusText: parsed.statusText,
-					headers: parsed.headers,
-					url: url.href,
-					redirected,
-				})
-			}
-			redirectCount++
-			if (redirectCount > MAX_REDIRECTS) {
-				throw new TypeError('fetch failed: too many redirects')
-			}
-
-			const location = parsed.headers.get('location')
-			if (!location) {
-				throw new TypeError('fetch failed: redirect without Location header')
-			}
-
-			url = new URL(location, url)
-			redirected = true
-			continue
-		}
-
-		return new Response(body, {
-			status: parsed.status,
-			statusText: parsed.statusText,
-			headers: parsed.headers,
-			url: url.href,
-			redirected,
-		})
 	}
 }

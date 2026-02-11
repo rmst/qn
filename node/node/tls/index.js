@@ -25,19 +25,33 @@ export { TLS_CLOSED, TLS_SENDREC, TLS_RECVREC, TLS_SENDAPP, TLS_RECVAPP }
 export const connect = _tlsConnect
 export const accept = _tlsAccept
 
-function waitReadable(fd) {
-	return new Promise(resolve => {
+function waitReadable(fd, signal) {
+	if (signal?.aborted) return Promise.reject(signal.reason)
+	return new Promise((resolve, reject) => {
+		const onAbort = () => {
+			os.setReadHandler(fd, null)
+			reject(signal.reason)
+		}
+		if (signal) signal.addEventListener('abort', onAbort, { once: true })
 		os.setReadHandler(fd, () => {
 			os.setReadHandler(fd, null)
+			if (signal) signal.removeEventListener('abort', onAbort)
 			resolve()
 		})
 	})
 }
 
-function waitWritable(fd) {
-	return new Promise(resolve => {
+function waitWritable(fd, signal) {
+	if (signal?.aborted) return Promise.reject(signal.reason)
+	return new Promise((resolve, reject) => {
+		const onAbort = () => {
+			os.setWriteHandler(fd, null)
+			reject(signal.reason)
+		}
+		if (signal) signal.addEventListener('abort', onAbort, { once: true })
 		os.setWriteHandler(fd, () => {
 			os.setWriteHandler(fd, null)
+			if (signal) signal.removeEventListener('abort', onAbort)
 			resolve()
 		})
 	})
@@ -47,20 +61,21 @@ function waitWritable(fd) {
  * Core engine driver: pumps record I/O until condition is met or engine closes.
  * Returns the engine state that satisfied the condition (or TLS_CLOSED).
  */
-async function drive(conn, fd, condition) {
+async function drive(conn, fd, condition, signal) {
 	for (;;) {
+		if (signal?.aborted) throw signal.reason
 		const state = tlsState(conn)
 		if (condition(state)) return state
 		if (state & TLS_CLOSED) return state
 		if (state & TLS_SENDREC) {
 			const n = tlsPumpWrite(conn)
-			if (n === -_EAGAIN) await waitWritable(fd)
+			if (n === -_EAGAIN) await waitWritable(fd, signal)
 			else if (n < 0) throw new Error('TLS: socket write error')
 			continue
 		}
 		if (state & TLS_RECVREC) {
 			const n = tlsPumpRead(conn)
-			if (n === -_EAGAIN) await waitReadable(fd)
+			if (n === -_EAGAIN) await waitReadable(fd, signal)
 			else if (n === 0) _tlsClose(conn)
 			else if (n < 0) throw new Error('TLS: socket read error')
 			continue
@@ -72,8 +87,8 @@ async function drive(conn, fd, condition) {
  * Perform TLS handshake asynchronously.
  * Drives the engine until SENDAPP is available (handshake complete).
  */
-export async function handshake(conn, fd) {
-	const state = await drive(conn, fd, s => s & TLS_SENDAPP)
+export async function handshake(conn, fd, signal) {
+	const state = await drive(conn, fd, s => s & TLS_SENDAPP, signal)
 	if (!(state & TLS_SENDAPP)) {
 		const err = tlsError(conn)
 		throw new Error('TLS handshake failed' + (err ? ': error ' + err : ''))
@@ -84,12 +99,12 @@ export async function handshake(conn, fd) {
  * Write all data over TLS asynchronously.
  * Handles partial sends and flushes automatically.
  */
-export async function writeAll(conn, fd, data) {
+export async function writeAll(conn, fd, data, signal) {
 	const ab = data.buffer
 	let off = data.byteOffset
 	let rem = data.byteLength
 	while (rem > 0) {
-		const state = await drive(conn, fd, s => (s & TLS_SENDAPP) || (s & TLS_CLOSED))
+		const state = await drive(conn, fd, s => (s & TLS_SENDAPP) || (s & TLS_CLOSED), signal)
 		if (state & TLS_CLOSED) throw new Error('TLS: connection closed during write')
 		const n = tlsSendApp(conn, ab, off, rem)
 		off += n
@@ -97,15 +112,15 @@ export async function writeAll(conn, fd, data) {
 		if (rem > 0) _tlsFlush(conn, 0)
 	}
 	_tlsFlush(conn, 0)
-	await drive(conn, fd, s => !(s & TLS_SENDREC))
+	await drive(conn, fd, s => !(s & TLS_SENDREC), signal)
 }
 
 /**
  * Read decrypted data from TLS connection asynchronously.
  * Returns number of bytes read, or 0 for EOF.
  */
-export async function read(conn, fd, buf, off, len) {
-	const state = await drive(conn, fd, s => (s & TLS_RECVAPP) || (s & TLS_CLOSED))
+export async function read(conn, fd, buf, off, len, signal) {
+	const state = await drive(conn, fd, s => (s & TLS_RECVAPP) || (s & TLS_CLOSED), signal)
 	if (state & TLS_RECVAPP) return tlsRecvApp(conn, buf, off, len)
 	return 0
 }
@@ -113,9 +128,9 @@ export async function read(conn, fd, buf, off, len) {
 /**
  * Flush buffered TLS data and pump it to the network.
  */
-export async function flush(conn, fd) {
+export async function flush(conn, fd, signal) {
 	_tlsFlush(conn, 0)
-	await drive(conn, fd, s => !(s & TLS_SENDREC))
+	await drive(conn, fd, s => !(s & TLS_SENDREC), signal)
 }
 
 /**
