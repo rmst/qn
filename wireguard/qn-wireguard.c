@@ -199,6 +199,50 @@ static JSValue js_wg_add_peer(JSContext *ctx, JSValueConst this_val,
 }
 
 /*
+ * wgUpdatePeerEndpoint(tunnel, peerIndex, endpoint, port) -> undefined
+ */
+static JSValue js_wg_update_peer_endpoint(JSContext *ctx, JSValueConst this_val,
+                                           int argc, JSValueConst *argv) {
+	struct wg_tunnel *tunnel = JS_GetOpaque2(ctx, argv[0], wg_tunnel_class_id);
+	if (!tunnel) return JS_EXCEPTION;
+
+	int peer_index;
+	JS_ToInt32(ctx, &peer_index, argv[1]);
+
+	const char *endpoint = JS_ToCString(ctx, argv[2]);
+	if (!endpoint) return JS_EXCEPTION;
+
+	int port;
+	JS_ToInt32(ctx, &port, argv[3]);
+
+	int rc = wg_tunnel_update_peer_endpoint(tunnel, peer_index,
+	                                         endpoint, (uint16_t)port);
+	JS_FreeCString(ctx, endpoint);
+
+	if (rc != 0)
+		return JS_ThrowInternalError(ctx, "WireGuard: failed to update peer endpoint");
+
+	return JS_UNDEFINED;
+}
+
+/*
+ * wgRemovePeer(tunnel, peerIndex) -> undefined
+ */
+static JSValue js_wg_remove_peer(JSContext *ctx, JSValueConst this_val,
+                                  int argc, JSValueConst *argv) {
+	struct wg_tunnel *tunnel = JS_GetOpaque2(ctx, argv[0], wg_tunnel_class_id);
+	if (!tunnel) return JS_EXCEPTION;
+
+	int peer_index;
+	JS_ToInt32(ctx, &peer_index, argv[1]);
+
+	if (wg_tunnel_remove_peer(tunnel, peer_index) != 0)
+		return JS_ThrowInternalError(ctx, "WireGuard: failed to remove peer");
+
+	return JS_UNDEFINED;
+}
+
+/*
  * wgConnect(tunnel, peerIndex) -> undefined
  */
 static JSValue js_wg_connect(JSContext *ctx, JSValueConst this_val,
@@ -575,6 +619,8 @@ static const JSCFunctionListEntry js_wg_funcs[] = {
 	JS_CFUNC_DEF("wgCreateTunnel", 5, js_wg_create_tunnel),
 	JS_CFUNC_DEF("wgGetFd", 1, js_wg_get_fd),
 	JS_CFUNC_DEF("wgAddPeer", 8, js_wg_add_peer),
+	JS_CFUNC_DEF("wgUpdatePeerEndpoint", 4, js_wg_update_peer_endpoint),
+	JS_CFUNC_DEF("wgRemovePeer", 2, js_wg_remove_peer),
 	JS_CFUNC_DEF("wgConnect", 2, js_wg_connect),
 	JS_CFUNC_DEF("wgPeerIsUp", 2, js_wg_peer_is_up),
 	JS_CFUNC_DEF("wgProcessInput", 1, js_wg_process_input),

@@ -103,6 +103,13 @@ int wg_tunnel_add_peer(struct wg_tunnel *tunnel, const char *public_key,
 /* Initiate handshake with a peer */
 int wg_tunnel_connect(struct wg_tunnel *tunnel, int peer_index);
 
+/* Update peer endpoint address and port */
+int wg_tunnel_update_peer_endpoint(struct wg_tunnel *tunnel, int peer_index,
+                                   const char *endpoint, uint16_t endpoint_port);
+
+/* Remove a peer */
+int wg_tunnel_remove_peer(struct wg_tunnel *tunnel, int peer_index);
+
 /* Check if peer has an active session */
 int wg_tunnel_peer_is_up(struct wg_tunnel *tunnel, int peer_index);
 

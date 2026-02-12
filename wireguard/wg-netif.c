@@ -742,6 +742,27 @@ int wg_tunnel_connect(struct wg_tunnel *tunnel, int peer_index) {
 	return 0;
 }
 
+int wg_tunnel_update_peer_endpoint(struct wg_tunnel *tunnel, int peer_index,
+                                   const char *endpoint, uint16_t endpoint_port) {
+	struct wireguard_peer *peer = peer_lookup_by_peer_index(&tunnel->device, peer_index);
+	if (!peer) return -1;
+
+	ip4_addr_t ep_addr;
+	if (!ip4addr_aton(endpoint, &ep_addr)) return -1;
+
+	ip_addr_copy_from_ip4(peer->connect_ip, ep_addr);
+	peer->connect_port = endpoint_port;
+	return 0;
+}
+
+int wg_tunnel_remove_peer(struct wg_tunnel *tunnel, int peer_index) {
+	struct wireguard_peer *peer = peer_lookup_by_peer_index(&tunnel->device, peer_index);
+	if (!peer) return -1;
+	crypto_zero(peer, sizeof(struct wireguard_peer));
+	peer->valid = false;
+	return 0;
+}
+
 int wg_tunnel_peer_is_up(struct wg_tunnel *tunnel, int peer_index) {
 	struct wireguard_peer *peer = peer_lookup_by_peer_index(&tunnel->device, peer_index);
 	if (!peer) return 0;

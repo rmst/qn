@@ -73,20 +73,20 @@ describe('qn:wireguard', () => {
 			})
 
 			const fd = tunnel.fd
-			const peerUp = tunnel.peerIsUp(0)
+			const hasPeers = Object.keys(tunnel.peers).length === 0
 
 			// Let the event loop tick once to verify timers don't crash
 			setTimeout(() => {
 				tunnel.close()
 				// closing again should be a no-op
 				tunnel.close()
-				console.log(JSON.stringify({ fdValid: fd >= 0, peerUp }))
+				console.log(JSON.stringify({ fdValid: fd >= 0, hasPeers }))
 			}, 60)
 		`)
 		const output = $({ timeout: 5000 })`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), {
 			fdValid: true,
-			peerUp: false,
+			hasPeers: true,
 		})
 	})
 
@@ -299,23 +299,17 @@ describe('qn:wireguard', () => {
 						privateKey: ${JSON.stringify(PRIV_B)},
 						address: "10.0.0.2",
 						listenPort: udpPort,
-						peers: [{
-							publicKey: ${JSON.stringify(PUB_A)},
-							endpoint: "127.0.0.1",
-							endpointPort: 0,
-							allowedIP: "0.0.0.0",
-							allowedMask: "0.0.0.0",
-						}],
 					})
 					break
 				} catch { continue }
 			}
 			if (!tunnel) { console.error("no free port"); process.exit(1) }
+			tunnel.peers[${JSON.stringify(PUB_A)}] = {}
 
 			writeFileSync(${JSON.stringify(portFile)}, String(udpPort))
 
 			const listener = tunnel.listen(7777)
-			await tunnel.waitForPeer()
+			await tunnel.waitForPeer(${JSON.stringify(PUB_A)})
 
 			const conn = await listener.accept({ timeout: 10000 })
 			const data = await conn.read()
@@ -344,16 +338,13 @@ describe('qn:wireguard', () => {
 			const tunnel = new WireGuardTunnel({
 				privateKey: ${JSON.stringify(PRIV_A)},
 				address: "10.0.0.1",
-				peers: [{
-					publicKey: ${JSON.stringify(PUB_B)},
-					endpoint: "127.0.0.1",
-					endpointPort: serverPort,
-					allowedIP: "0.0.0.0",
-					allowedMask: "0.0.0.0",
-				}],
 			})
+			tunnel.peers[${JSON.stringify(PUB_B)}] = {
+				endpoint: "127.0.0.1",
+				endpointPort: serverPort,
+			}
 
-			await tunnel.waitForPeer()
+			await tunnel.waitForPeer(${JSON.stringify(PUB_B)})
 			const proxy = await tunnel.socksProxy({ port: 0 })
 			const addr = proxy.address()
 			writeFileSync(${JSON.stringify(socksPortFile)}, String(addr.port))
@@ -468,14 +459,12 @@ describe('qn:wireguard', () => {
 						privateKey: ${JSON.stringify(PRIV_B)},
 						address: "10.0.0.2",
 						listenPort: udpPort,
-						peers: [{
-							publicKey: ${JSON.stringify(PUB_A)},
-						}],
 					})
 					break
 				} catch { continue }
 			}
 			if (!tunnel) { console.error("no free port"); process.exit(1) }
+			tunnel.peers[${JSON.stringify(PUB_A)}] = {}
 
 			const httpServer = tunnel.serve(8080, async (req) => {
 				const url = new URL(req.url)
@@ -515,14 +504,13 @@ describe('qn:wireguard', () => {
 			const tunnel = new WireGuardTunnel({
 				privateKey: ${JSON.stringify(PRIV_A)},
 				address: "10.0.0.1",
-				peers: [{
-					publicKey: ${JSON.stringify(PUB_B)},
-					endpoint: "127.0.0.1",
-					endpointPort: serverPort,
-				}],
 			})
+			tunnel.peers[${JSON.stringify(PUB_B)}] = {
+				endpoint: "127.0.0.1",
+				endpointPort: serverPort,
+			}
 
-			await tunnel.waitForPeer()
+			await tunnel.waitForPeer(${JSON.stringify(PUB_B)})
 
 			// Test GET
 			const resp1 = await tunnel.fetch("http://10.0.0.2:8080/hello")
@@ -577,12 +565,12 @@ describe('qn:wireguard', () => {
 						privateKey: ${JSON.stringify(PRIV_B)},
 						address: "10.0.0.2",
 						listenPort: udpPort,
-						peers: [{ publicKey: ${JSON.stringify(PUB_A)} }],
 					})
 					break
 				} catch { continue }
 			}
 			if (!tunnel) { console.error("no free port"); process.exit(1) }
+			tunnel.peers[${JSON.stringify(PUB_A)}] = {}
 
 			const httpServer = tunnel.serve(8080, async (req) => {
 				const url = new URL(req.url)
@@ -629,14 +617,13 @@ describe('qn:wireguard', () => {
 			const tunnel = new WireGuardTunnel({
 				privateKey: ${JSON.stringify(PRIV_A)},
 				address: "10.0.0.1",
-				peers: [{
-					publicKey: ${JSON.stringify(PUB_B)},
-					endpoint: "127.0.0.1",
-					endpointPort: serverPort,
-				}],
 			})
+			tunnel.peers[${JSON.stringify(PUB_B)}] = {
+				endpoint: "127.0.0.1",
+				endpointPort: serverPort,
+			}
 
-			await tunnel.waitForPeer()
+			await tunnel.waitForPeer(${JSON.stringify(PUB_B)})
 
 			// Test 1: streaming response (server sends chunks, no content-length)
 			const resp1 = await tunnel.fetch("http://10.0.0.2:8080/stream")
@@ -691,12 +678,12 @@ describe('qn:wireguard', () => {
 						privateKey: ${JSON.stringify(PRIV_B)},
 						address: "10.0.0.2",
 						listenPort: udpPort,
-						peers: [{ publicKey: ${JSON.stringify(PUB_A)} }],
 					})
 					break
 				} catch { continue }
 			}
 			if (!tunnel) { console.error("no free port"); process.exit(1) }
+			tunnel.peers[${JSON.stringify(PUB_A)}] = {}
 
 			const listener = tunnel.listen(7777)
 			writeFileSync(${JSON.stringify(portFile)}, String(udpPort))
@@ -729,14 +716,13 @@ describe('qn:wireguard', () => {
 			const tunnel = new WireGuardTunnel({
 				privateKey: ${JSON.stringify(PRIV_A)},
 				address: "10.0.0.1",
-				peers: [{
-					publicKey: ${JSON.stringify(PUB_B)},
-					endpoint: "127.0.0.1",
-					endpointPort: serverPort,
-				}],
 			})
+			tunnel.peers[${JSON.stringify(PUB_B)}] = {
+				endpoint: "127.0.0.1",
+				endpointPort: serverPort,
+			}
 
-			await tunnel.waitForPeer()
+			await tunnel.waitForPeer(${JSON.stringify(PUB_B)})
 
 			const results = []
 			for (let i = 0; i < ${NUM_CONNS}; i++) {
@@ -789,12 +775,12 @@ describe('qn:wireguard', () => {
 						privateKey: ${JSON.stringify(PRIV_B)},
 						address: "10.0.0.2",
 						listenPort: udpPort,
-						peers: [{ publicKey: ${JSON.stringify(PUB_A)} }],
 					})
 					break
 				} catch { continue }
 			}
 			if (!tunnel) { console.error("no free port"); process.exit(1) }
+			tunnel.peers[${JSON.stringify(PUB_A)}] = {}
 
 			let requestCount = 0
 			const httpServer = tunnel.serve(8080, async (req) => {
@@ -840,14 +826,13 @@ describe('qn:wireguard', () => {
 			const tunnel = new WireGuardTunnel({
 				privateKey: ${JSON.stringify(PRIV_A)},
 				address: "10.0.0.1",
-				peers: [{
-					publicKey: ${JSON.stringify(PUB_B)},
-					endpoint: "127.0.0.1",
-					endpointPort: serverPort,
-				}],
 			})
+			tunnel.peers[${JSON.stringify(PUB_B)}] = {
+				endpoint: "127.0.0.1",
+				endpointPort: serverPort,
+			}
 
-			await tunnel.waitForPeer()
+			await tunnel.waitForPeer(${JSON.stringify(PUB_B)})
 
 			const results = []
 
@@ -926,12 +911,12 @@ describe('qn:wireguard', () => {
 						privateKey: ${JSON.stringify(PRIV_B)},
 						address: "10.0.0.2",
 						listenPort: udpPort,
-						peers: [{ publicKey: ${JSON.stringify(PUB_A)} }],
 					})
 					break
 				} catch { continue }
 			}
 			if (!tunnel) { console.error("no free port"); process.exit(1) }
+			tunnel.peers[${JSON.stringify(PUB_A)}] = {}
 
 			const cred = tls.loadServerCert(${JSON.stringify(tunnelCertFile)}, ${JSON.stringify(tunnelKeyFile)})
 			const listener = tunnel.listen(443)
@@ -1003,14 +988,13 @@ describe('qn:wireguard', () => {
 			const tunnel = new WireGuardTunnel({
 				privateKey: ${JSON.stringify(PRIV_A)},
 				address: "10.0.0.1",
-				peers: [{
-					publicKey: ${JSON.stringify(PUB_B)},
-					endpoint: "127.0.0.1",
-					endpointPort: serverPort,
-				}],
 			})
+			tunnel.peers[${JSON.stringify(PUB_B)}] = {
+				endpoint: "127.0.0.1",
+				endpointPort: serverPort,
+			}
 
-			await tunnel.waitForPeer()
+			await tunnel.waitForPeer(${JSON.stringify(PUB_B)})
 
 			// HTTPS GET
 			const resp1 = await tunnel.fetch("https://10.0.0.2/hello")

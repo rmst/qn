@@ -7,7 +7,8 @@
  */
 
 import {
-	wgCreateTunnel, wgGetFd, wgAddPeer, wgConnect, wgPeerIsUp,
+	wgCreateTunnel, wgGetFd, wgAddPeer, wgUpdatePeerEndpoint, wgRemovePeer,
+	wgConnect, wgPeerIsUp,
 	wgProcessInput, wgCheckTimeouts,
 	wgTcpListen, wgTcpAccept, wgTcpUnlisten,
 	wgTcpConnect, wgTcpState, wgTcpWrite, wgTcpRead, wgTcpReadable, wgTcpClose,
@@ -16,6 +17,7 @@ import {
 	WG_TCP_NONE, WG_TCP_CONNECTING, WG_TCP_CONNECTED,
 	WG_TCP_CLOSING, WG_TCP_CLOSED, WG_TCP_ERROR,
 } from 'qn_wireguard'
+import { getaddrinfo as _getaddrinfo, AF_INET } from 'qn_socket'
 import * as os from 'os'
 import * as tls from 'node:tls'
 import { existsSync } from 'node:fs'
@@ -56,12 +58,22 @@ function ensureCACerts() {
 
 export { WG_TCP_NONE, WG_TCP_CONNECTING, WG_TCP_CONNECTED, WG_TCP_CLOSING, WG_TCP_CLOSED, WG_TCP_ERROR }
 
+/** Resolve a hostname or IP to an IPv4 address string */
+function resolveHost(host) {
+	// Fast path: already an IPv4 address
+	if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return host
+	const addrs = _getaddrinfo(host, 0, { family: AF_INET })
+	if (addrs.length === 0) throw new Error(`WireGuard: DNS lookup failed for ${host}`)
+	return addrs[0].address
+}
+
 export class WireGuardTunnel {
 	#tunnel
 	#fd
 	#timerHandle
 	#destroyed = false
 	#pumpWaiters = []
+	#peerMap = new Map() // publicKey -> { index, config }
 
 	/**
 	 * Create a WireGuard tunnel.
@@ -72,14 +84,6 @@ export class WireGuardTunnel {
 	 * @param {string} [config.netmask="255.255.255.0"] - Tunnel netmask
 	 * @param {string} [config.listenAddress] - UDP bind address (default: all interfaces)
 	 * @param {number} [config.listenPort=0] - UDP listen port (0 = random)
-	 * @param {Object[]} [config.peers] - Peer configurations
-	 * @param {string} config.peers[].publicKey - Base64-encoded peer public key
-	 * @param {string} [config.peers[].presharedKey] - Base64-encoded PSK
-	 * @param {string} config.peers[].endpoint - Peer endpoint IP
-	 * @param {number} config.peers[].endpointPort - Peer endpoint port
-	 * @param {string} [config.peers[].allowedIP="0.0.0.0"] - Allowed IP
-	 * @param {string} [config.peers[].allowedMask="0.0.0.0"] - Allowed mask
-	 * @param {number} [config.peers[].keepalive=0] - Keepalive interval in seconds
 	 */
 	constructor(config) {
 		this.#tunnel = wgCreateTunnel(
@@ -91,24 +95,77 @@ export class WireGuardTunnel {
 		)
 		this.#fd = wgGetFd(this.#tunnel)
 
-		if (config.peers) {
-			for (const peer of config.peers) {
-				const idx = wgAddPeer(
-					this.#tunnel,
-					peer.publicKey,
-					peer.presharedKey || null,
-					peer.endpoint || "0.0.0.0",
-					peer.endpointPort || 0,
-					peer.allowedIP || "0.0.0.0",
-					peer.allowedMask || "0.0.0.0",
-					peer.keepalive || 0,
-				)
-				if (peer.endpointPort)
-					wgConnect(this.#tunnel, idx)
-			}
-		}
+		const tunnel = this
+		this.peers = new Proxy({}, {
+			set(_, publicKey, peerConfig) {
+				tunnel.#setPeer(publicKey, peerConfig)
+				return true
+			},
+			get(_, publicKey) {
+				return tunnel.#getPeer(publicKey)
+			},
+			deleteProperty(_, publicKey) {
+				tunnel.#removePeer(publicKey)
+				return true
+			},
+			ownKeys() {
+				return [...tunnel.#peerMap.keys()]
+			},
+			getOwnPropertyDescriptor(_, publicKey) {
+				if (tunnel.#peerMap.has(publicKey))
+					return { configurable: true, enumerable: true, value: tunnel.#getPeer(publicKey) }
+			},
+			has(_, publicKey) {
+				return tunnel.#peerMap.has(publicKey)
+			},
+		})
 
 		this.#startEventLoop()
+	}
+
+	#setPeer(publicKey, config) {
+		const existing = this.#peerMap.get(publicKey)
+		if (existing) {
+			// Update existing peer endpoint
+			if (config.endpoint) {
+				const ip = resolveHost(config.endpoint)
+				wgUpdatePeerEndpoint(this.#tunnel, existing.index,
+					ip, config.endpointPort || existing.config.endpointPort || 0)
+				existing.config.endpoint = config.endpoint
+				if (config.endpointPort !== undefined)
+					existing.config.endpointPort = config.endpointPort
+			}
+			return
+		}
+		// Create new peer
+		const endpoint = config.endpoint ? resolveHost(config.endpoint) : "0.0.0.0"
+		const idx = wgAddPeer(
+			this.#tunnel, publicKey,
+			config.presharedKey || null,
+			endpoint,
+			config.endpointPort || 0,
+			config.allowedIP || "0.0.0.0",
+			config.allowedMask || "0.0.0.0",
+			config.keepalive || 0,
+		)
+		this.#peerMap.set(publicKey, { index: idx, config: { ...config } })
+		if (config.endpoint) wgConnect(this.#tunnel, idx)
+	}
+
+	#getPeer(publicKey) {
+		const entry = this.#peerMap.get(publicKey)
+		if (!entry) return undefined
+		return {
+			...entry.config,
+			isUp: wgPeerIsUp(this.#tunnel, entry.index),
+		}
+	}
+
+	#removePeer(publicKey) {
+		const entry = this.#peerMap.get(publicKey)
+		if (!entry) return
+		wgRemovePeer(this.#tunnel, entry.index)
+		this.#peerMap.delete(publicKey)
 	}
 
 	#pump() {
@@ -155,10 +212,12 @@ export class WireGuardTunnel {
 		})
 	}
 
-	/** Wait for at least one peer to establish a WireGuard session */
-	async waitForPeer(peerIndex = 0, { signal, timeout = 30000 } = {}) {
+	/** Wait for a peer to establish a WireGuard session */
+	async waitForPeer(publicKey, { signal, timeout = 30000 } = {}) {
+		const entry = this.#peerMap.get(publicKey)
+		if (!entry) throw new Error("WireGuard: unknown peer")
 		const start = Date.now()
-		while (!wgPeerIsUp(this.#tunnel, peerIndex)) {
+		while (!wgPeerIsUp(this.#tunnel, entry.index)) {
 			if (signal?.aborted) throw signal.reason
 			if (Date.now() - start > timeout)
 				throw new Error("WireGuard: peer handshake timed out")
@@ -359,11 +418,6 @@ export class WireGuardTunnel {
 		const proxy = new SocksProxy(this)
 		await proxy.listen(port, host)
 		return proxy
-	}
-
-	/** Check if a peer has an active session */
-	peerIsUp(peerIndex = 0) {
-		return wgPeerIsUp(this.#tunnel, peerIndex)
 	}
 
 	/** Close the tunnel and all connections */
