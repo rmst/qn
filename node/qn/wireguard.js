@@ -17,6 +17,8 @@ import {
 	WG_TCP_CLOSING, WG_TCP_CLOSED, WG_TCP_ERROR,
 } from 'qn_wireguard'
 import * as os from 'os'
+import * as tls from 'node:tls'
+import { existsSync } from 'node:fs'
 import {
 	buildRequest, readResponseHead, readRequestHead, bodyStream,
 	requestBodyStream, chunkedRequestBodyStream, writeChunkedBody,
@@ -26,6 +28,31 @@ import { Headers } from 'node:fetch/Headers'
 import { Response } from 'node:fetch/Response'
 import { Request } from 'node:fetch/Request'
 import { SocksProxy } from './wireguard-socks.js'
+
+const SYSTEM_CA_PATHS = [
+	'/etc/ssl/certs/ca-certificates.crt',
+	'/etc/pki/tls/certs/ca-bundle.crt',
+	'/etc/ssl/cert.pem',
+	'/etc/ssl/ca-bundle.pem',
+	'/usr/local/share/certs/ca-root-nss.crt',
+	'/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem',
+]
+
+let _caCertsLoaded = false
+function ensureCACerts() {
+	if (_caCertsLoaded) return
+	_caCertsLoaded = true
+	const sslCertFile = globalThis.process?.env?.SSL_CERT_FILE
+	if (sslCertFile) {
+		tls.loadCACerts(sslCertFile)
+	} else {
+		for (const p of SYSTEM_CA_PATHS) {
+			if (existsSync(p)) { tls.loadCACerts(p); break }
+		}
+	}
+	const extraCerts = globalThis.process?.env?.NODE_EXTRA_CA_CERTS
+	if (extraCerts) tls.loadCACerts(extraCerts)
+}
 
 export { WG_TCP_NONE, WG_TCP_CONNECTING, WG_TCP_CONNECTED, WG_TCP_CLOSING, WG_TCP_CLOSED, WG_TCP_ERROR }
 
@@ -202,8 +229,9 @@ export class WireGuardTunnel {
 	 */
 	async fetch(input, init = {}) {
 		const url = typeof input === 'string' ? new URL(input) : input
-		if (url.protocol !== 'http:')
-			throw new TypeError('tunnel.fetch: only http:// is supported')
+		const isHttps = url.protocol === 'https:'
+		if (url.protocol !== 'http:' && !isHttps)
+			throw new TypeError('tunnel.fetch: only http:// and https:// are supported')
 
 		const signal = init.signal || null
 		const method = (init.method || 'GET').toUpperCase()
@@ -236,25 +264,54 @@ export class WireGuardTunnel {
 		}
 
 		const host = url.hostname
-		const port = url.port ? parseInt(url.port, 10) : 80
+		const defaultPort = isHttps ? 443 : 80
+		const port = url.port ? parseInt(url.port, 10) : defaultPort
 		const path = (url.pathname || '/') + (url.search || '')
 
 		const sock = await this.connect(host, port, { signal })
 
-		const reqStr = buildRequest(method, path, host, port, headers, port === 80)
-		await sock.write(new TextEncoder().encode(reqStr), { signal })
-		if (bodyBytes) {
-			await sock.write(bodyBytes, { signal })
-		} else if (bodyIter) {
-			await writeChunkedBody(data => sock.write(data, { signal }), bodyIter)
+		let reader
+		if (isHttps) {
+			ensureCACerts()
+			const tlsConn = tls.connectBuf(host)
+			try {
+				await tls.handshake(tlsConn, sock, signal)
+				const reqBytes = new TextEncoder().encode(
+					buildRequest(method, path, host, port, headers, port === defaultPort),
+				)
+				await tls.writeAll(tlsConn, sock, reqBytes, signal)
+				if (bodyBytes) await tls.writeAll(tlsConn, sock, bodyBytes, signal)
+				else if (bodyIter) await writeChunkedBody(
+					data => tls.writeAll(tlsConn, sock, data, signal), bodyIter,
+				)
+			} catch (e) {
+				try { await tls.close(tlsConn, sock) } catch {}
+				sock.close()
+				throw e
+			}
+			reader = {
+				async read(buf, off, len) {
+					return tls.read(tlsConn, sock, buf, off, len, signal)
+				},
+				async close() {
+					try { await tls.close(tlsConn, sock) } catch {}
+					sock.close()
+				},
+			}
+		} else {
+			const reqStr = buildRequest(method, path, host, port, headers, port === defaultPort)
+			await sock.write(new TextEncoder().encode(reqStr), { signal })
+			if (bodyBytes) {
+				await sock.write(bodyBytes, { signal })
+			} else if (bodyIter) {
+				await writeChunkedBody(data => sock.write(data, { signal }), bodyIter)
+			}
+			reader = tunnelReader(sock, signal)
 		}
-
-		// Create a reader adapter for the shared HTTP parsing
-		const reader = tunnelReader(sock, signal)
 
 		const head = await readResponseHead(reader)
 		if (!head) {
-			sock.close()
+			await reader.close()
 			throw new TypeError('tunnel.fetch: invalid HTTP response')
 		}
 

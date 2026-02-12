@@ -1,7 +1,12 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync } from 'node:fs'
+import path from 'node:path'
 import { testQnOnly, $, execAsync, QN } from './util.js'
+
+const testDir = path.dirname(new URL(import.meta.url).pathname)
+const tunnelCertFile = path.join(testDir, 'fixtures', 'tunnel-cert.pem')
+const tunnelKeyFile = path.join(testDir, 'fixtures', 'tunnel-key.pem')
 
 describe('qn:wireguard', () => {
 	testQnOnly('exports state constants', ({ bin, dir }) => {
@@ -897,6 +902,150 @@ describe('qn:wireguard', () => {
 		assert.strictEqual(result.r4_path, "/final")
 		assert.deepStrictEqual(result.sequential, [1, 2, 3, 4])
 		serverP.then(() => {}, () => {})
+	})
+
+	testQnOnly('tunnel.fetch() HTTPS through WireGuard', async ({ bin, dir }) => {
+		const PRIV_A = "4N9+QQTiIy3jLeBh9esGoECGfUXU383qOOSiQ3/vlEY="
+		const PUB_A  = "1n+AWoDIGkuKQDkYf5bEn3p415Xc4r9vpxrDCWQ60FU="
+		const PRIV_B = "ABmangI2LTOsUk8Dh93vjlMEfqCmQ2TUFAOXexemvEk="
+		const PUB_B  = "HPBqprmBFlWl160jaW4rYYcEk25peXvyVpNwkj0/jx8="
+
+		const portFile = `${dir}/port`
+
+		// Server (tunnel B at 10.0.0.2): TLS server on tunnel using transport-agnostic API
+		writeFileSync(`${dir}/server.js`, `
+			import { writeFileSync } from 'node:fs'
+			import { WireGuardTunnel } from 'qn:wireguard'
+			import * as tls from 'node:tls'
+			import * as os from 'os'
+
+			let tunnel, udpPort
+			for (udpPort = 52700; udpPort < 52800; udpPort++) {
+				try {
+					tunnel = new WireGuardTunnel({
+						privateKey: ${JSON.stringify(PRIV_B)},
+						address: "10.0.0.2",
+						listenPort: udpPort,
+						peers: [{ publicKey: ${JSON.stringify(PUB_A)} }],
+					})
+					break
+				} catch { continue }
+			}
+			if (!tunnel) { console.error("no free port"); process.exit(1) }
+
+			const cred = tls.loadServerCert(${JSON.stringify(tunnelCertFile)}, ${JSON.stringify(tunnelKeyFile)})
+			const listener = tunnel.listen(443)
+			writeFileSync(${JSON.stringify(portFile)}, String(udpPort))
+
+			// Accept two HTTPS connections
+			for (let i = 0; i < 2; i++) {
+				const sock = await listener.accept({ timeout: 10000 })
+				const conn = tls.acceptBuf(cred)
+				try {
+					await tls.handshake(conn, sock)
+
+					// Read HTTP request
+					const buf = new ArrayBuffer(65536)
+					let total = new Uint8Array(0)
+					for (;;) {
+						const n = await tls.read(conn, sock, buf, 0, 65536)
+						if (n <= 0) break
+						const prev = total
+						total = new Uint8Array(prev.length + n)
+						total.set(prev, 0)
+						total.set(new Uint8Array(buf, 0, n), prev.length)
+						const text = new TextDecoder().decode(total)
+						if (text.includes('\\r\\n\\r\\n')) {
+							// Check for Content-Length to read body
+							const clMatch = text.match(/content-length:\\s*(\\d+)/i)
+							const cl = clMatch ? parseInt(clMatch[1], 10) : 0
+							const headerEnd = text.indexOf('\\r\\n\\r\\n') + 4
+							if (total.length >= headerEnd + cl) break
+						}
+					}
+
+					const request = new TextDecoder().decode(total)
+					const firstLine = request.split('\\r\\n')[0]
+					const method = firstLine.split(' ')[0]
+					const path = firstLine.split(' ')[1]
+
+					// Extract body if POST
+					const bodyStart = request.indexOf('\\r\\n\\r\\n') + 4
+					const body = bodyStart > 4 ? request.slice(bodyStart) : ''
+
+					const respBody = JSON.stringify({ method, path, body, requestNum: i + 1 })
+					const response = 'HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\nContent-Length: '
+						+ new TextEncoder().encode(respBody).length + '\\r\\nConnection: close\\r\\n\\r\\n' + respBody
+					await tls.writeAll(conn, sock, new TextEncoder().encode(response))
+					await tls.close(conn, sock)
+				} catch (e) {
+					try { await tls.close(conn, sock) } catch {}
+				}
+				sock.close()
+			}
+
+			listener.close()
+			tunnel.close()
+		`)
+
+		// Client (tunnel A at 10.0.0.1): use tunnel.fetch() with HTTPS
+		writeFileSync(`${dir}/client.js`, `
+			import { readFileSync } from 'node:fs'
+			import { WireGuardTunnel } from 'qn:wireguard'
+
+			let serverPort
+			for (let i = 0; i < 200; i++) {
+				try { serverPort = parseInt(readFileSync(${JSON.stringify(portFile)}, 'utf8')); break }
+				catch { const s = Date.now(); while (Date.now() - s < 25) {} }
+			}
+			if (!serverPort) { console.error("no port file"); process.exit(1) }
+
+			const tunnel = new WireGuardTunnel({
+				privateKey: ${JSON.stringify(PRIV_A)},
+				address: "10.0.0.1",
+				peers: [{
+					publicKey: ${JSON.stringify(PUB_B)},
+					endpoint: "127.0.0.1",
+					endpointPort: serverPort,
+				}],
+			})
+
+			await tunnel.waitForPeer()
+
+			// HTTPS GET
+			const resp1 = await tunnel.fetch("https://10.0.0.2/hello")
+			const json1 = await resp1.json()
+
+			// HTTPS POST
+			const resp2 = await tunnel.fetch("https://10.0.0.2/echo", {
+				method: "POST",
+				body: "secure payload",
+			})
+			const json2 = await resp2.json()
+
+			tunnel.close()
+			console.log(JSON.stringify({
+				status1: resp1.status,
+				method1: json1.method,
+				path1: json1.path,
+				status2: resp2.status,
+				method2: json2.method,
+				body2: json2.body,
+			}))
+		`)
+
+		const serverP = execAsync(bin, [`${dir}/server.js`])
+		const clientOutput = await execAsync(bin, [`${dir}/client.js`], {
+			env: { NODE_EXTRA_CA_CERTS: tunnelCertFile }
+		})
+		const result = JSON.parse(clientOutput)
+		assert.strictEqual(result.status1, 200)
+		assert.strictEqual(result.method1, "GET")
+		assert.strictEqual(result.path1, "/hello")
+		assert.strictEqual(result.status2, 200)
+		assert.strictEqual(result.method2, "POST")
+		assert.strictEqual(result.body2, "secure payload")
+		await serverP
 	})
 
 	testQnOnly('two tunnels: UDP echo through WireGuard', async ({ bin, dir }) => {

@@ -557,7 +557,7 @@ static JSValue js_tls_connect(JSContext *ctx, JSValueConst this_val,
 			"Call tlsLoadCACerts() first.");
 	}
 
-	if (set_nonblocking(fd) < 0) {
+	if (fd >= 0 && set_nonblocking(fd) < 0) {
 		JS_FreeCString(ctx, hostname);
 		return JS_ThrowTypeError(ctx, "TLS: failed to set non-blocking: %s",
 			strerror(errno));
@@ -610,7 +610,7 @@ static JSValue js_tls_accept(JSContext *ctx, JSValueConst this_val,
 	if (!cred)
 		return JS_EXCEPTION;
 
-	if (set_nonblocking(fd) < 0)
+	if (fd >= 0 && set_nonblocking(fd) < 0)
 		return JS_ThrowTypeError(ctx, "TLS: failed to set non-blocking: %s",
 			strerror(errno));
 
@@ -694,63 +694,6 @@ static JSValue js_tls_error(JSContext *ctx, JSValueConst this_val,
 	tls_conn_t *conn = JS_GetOpaque2(ctx, argv[0], tls_conn_class_id);
 	if (!conn) return JS_EXCEPTION;
 	return JS_NewInt32(ctx, br_ssl_engine_last_error(tls_engine(conn)));
-}
-
-/*
- * tlsPumpRead(conn) -> bytes read, 0 for EOF, negative for error
- *
- * Non-blocking read from the socket fd into the engine's recvrec buffer.
- * Returns -EAGAIN if no data available.
- */
-static JSValue js_tls_pump_read(JSContext *ctx, JSValueConst this_val,
-                                 int argc, JSValueConst *argv)
-{
-	tls_conn_t *conn = JS_GetOpaque2(ctx, argv[0], tls_conn_class_id);
-	if (!conn) return JS_EXCEPTION;
-
-	br_ssl_engine_context *eng = tls_engine(conn);
-	size_t len;
-	unsigned char *buf = br_ssl_engine_recvrec_buf(eng, &len);
-	if (!buf || len == 0) return JS_NewInt32(ctx, 0);
-
-	ssize_t n = read(conn->fd, buf, len);
-	if (n < 0) {
-		if (errno == EAGAIN || errno == EWOULDBLOCK)
-			return JS_NewInt32(ctx, -EAGAIN);
-		return JS_NewInt32(ctx, -errno);
-	}
-	if (n == 0) return JS_NewInt32(ctx, 0);
-
-	br_ssl_engine_recvrec_ack(eng, n);
-	return JS_NewInt32(ctx, n);
-}
-
-/*
- * tlsPumpWrite(conn) -> bytes written, negative for error
- *
- * Non-blocking write from the engine's sendrec buffer to the socket fd.
- * Returns -EAGAIN if the socket buffer is full.
- */
-static JSValue js_tls_pump_write(JSContext *ctx, JSValueConst this_val,
-                                  int argc, JSValueConst *argv)
-{
-	tls_conn_t *conn = JS_GetOpaque2(ctx, argv[0], tls_conn_class_id);
-	if (!conn) return JS_EXCEPTION;
-
-	br_ssl_engine_context *eng = tls_engine(conn);
-	size_t len;
-	unsigned char *buf = br_ssl_engine_sendrec_buf(eng, &len);
-	if (!buf || len == 0) return JS_NewInt32(ctx, 0);
-
-	ssize_t n = write(conn->fd, buf, len);
-	if (n < 0) {
-		if (errno == EAGAIN || errno == EWOULDBLOCK)
-			return JS_NewInt32(ctx, -EAGAIN);
-		return JS_NewInt32(ctx, -errno);
-	}
-
-	br_ssl_engine_sendrec_ack(eng, n);
-	return JS_NewInt32(ctx, n);
 }
 
 /*
@@ -850,6 +793,79 @@ static JSValue js_tls_close(JSContext *ctx, JSValueConst this_val,
 }
 
 /*
+ * tlsGetSendRec(conn) -> ArrayBuffer | null
+ *
+ * Returns a copy of the pending sendrec data (TLS records to be transmitted)
+ * without acknowledging it. Returns null if no data is pending.
+ * Call tlsSendRecAck after the data has been transmitted.
+ */
+static JSValue js_tls_get_sendrec(JSContext *ctx, JSValueConst this_val,
+                                   int argc, JSValueConst *argv)
+{
+	tls_conn_t *conn = JS_GetOpaque2(ctx, argv[0], tls_conn_class_id);
+	if (!conn) return JS_EXCEPTION;
+
+	br_ssl_engine_context *eng = tls_engine(conn);
+	size_t len;
+	unsigned char *buf = br_ssl_engine_sendrec_buf(eng, &len);
+	if (!buf || len == 0) return JS_NULL;
+
+	return JS_NewArrayBufferCopy(ctx, buf, len);
+}
+
+/*
+ * tlsSendRecAck(conn, n) -> undefined
+ *
+ * Acknowledges that n bytes of sendrec data have been transmitted.
+ */
+static JSValue js_tls_sendrec_ack(JSContext *ctx, JSValueConst this_val,
+                                   int argc, JSValueConst *argv)
+{
+	tls_conn_t *conn = JS_GetOpaque2(ctx, argv[0], tls_conn_class_id);
+	if (!conn) return JS_EXCEPTION;
+
+	uint32_t n;
+	if (JS_ToUint32(ctx, &n, argv[1])) return JS_EXCEPTION;
+
+	br_ssl_engine_sendrec_ack(tls_engine(conn), n);
+	return JS_UNDEFINED;
+}
+
+/*
+ * tlsRecvRecPush(conn, buffer, offset, length) -> bytes copied
+ *
+ * Copies network data from a JS buffer into the engine's recvrec buffer
+ * (incoming TLS records) and acknowledges it. Returns the number of bytes
+ * actually copied, which may be less than requested if the engine's buffer
+ * is smaller.
+ */
+static JSValue js_tls_recvrec_push(JSContext *ctx, JSValueConst this_val,
+                                    int argc, JSValueConst *argv)
+{
+	tls_conn_t *conn = JS_GetOpaque2(ctx, argv[0], tls_conn_class_id);
+	if (!conn) return JS_EXCEPTION;
+
+	size_t buf_size;
+	uint8_t *buf = JS_GetArrayBuffer(ctx, &buf_size, argv[1]);
+	if (!buf) return JS_EXCEPTION;
+
+	uint64_t off, len;
+	if (JS_ToIndex(ctx, &off, argv[2])) return JS_EXCEPTION;
+	if (JS_ToIndex(ctx, &len, argv[3])) return JS_EXCEPTION;
+	if (off + len > buf_size) return JS_ThrowRangeError(ctx, "buffer overflow");
+
+	br_ssl_engine_context *eng = tls_engine(conn);
+	size_t avail;
+	unsigned char *rec_buf = br_ssl_engine_recvrec_buf(eng, &avail);
+	if (!rec_buf || avail == 0) return JS_NewInt32(ctx, 0);
+
+	size_t to_copy = len < avail ? len : avail;
+	memcpy(rec_buf, buf + off, to_copy);
+	br_ssl_engine_recvrec_ack(eng, to_copy);
+	return JS_NewInt32(ctx, to_copy);
+}
+
+/*
  * tlsCaCertCount() -> number of loaded CA certs
  */
 static JSValue js_tls_ca_cert_count(JSContext *ctx, JSValueConst this_val,
@@ -865,12 +881,13 @@ static const JSCFunctionListEntry js_tls_funcs[] = {
 	JS_CFUNC_DEF("tlsAccept", 2, js_tls_accept),
 	JS_CFUNC_DEF("tlsState", 1, js_tls_state),
 	JS_CFUNC_DEF("tlsError", 1, js_tls_error),
-	JS_CFUNC_DEF("tlsPumpRead", 1, js_tls_pump_read),
-	JS_CFUNC_DEF("tlsPumpWrite", 1, js_tls_pump_write),
 	JS_CFUNC_DEF("tlsSendApp", 4, js_tls_send_app),
 	JS_CFUNC_DEF("tlsRecvApp", 4, js_tls_recv_app),
 	JS_CFUNC_DEF("tlsFlush", 1, js_tls_flush),
 	JS_CFUNC_DEF("tlsClose", 1, js_tls_close),
+	JS_CFUNC_DEF("tlsGetSendRec", 1, js_tls_get_sendrec),
+	JS_CFUNC_DEF("tlsSendRecAck", 2, js_tls_sendrec_ack),
+	JS_CFUNC_DEF("tlsRecvRecPush", 4, js_tls_recvrec_push),
 	JS_CFUNC_DEF("tlsCaCertCount", 0, js_tls_ca_cert_count),
 	JS_PROP_INT32_DEF("TLS_CLOSED", BR_SSL_CLOSED, JS_PROP_CONFIGURABLE),
 	JS_PROP_INT32_DEF("TLS_SENDREC", BR_SSL_SENDREC, JS_PROP_CONFIGURABLE),
