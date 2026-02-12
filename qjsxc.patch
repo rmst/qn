@@ -1,4 +1,4 @@
-# qjsxc.patch - Patches to QuickJS compiler for QJSXPATH module resolution
+# qjsxc.patch - Patches to QuickJS compiler for NODE_PATH module resolution
 #
 # Target file: quickjs/qjsc.c
 # Output: bin/<platform>/obj/qjsxc.c -> compiled to qjsxc binary
@@ -6,8 +6,8 @@
 #
 # Features added:
 #
-#   1. QJSXPATH module resolution at compile time
-#      - Resolves bare imports via QJSXPATH directories
+#   1. NODE_PATH module resolution at compile time
+#      - Resolves bare imports via NODE_PATH directories
 #      - Supports .js extension and /index.js fallbacks
 #      - Tracks embedded module names for runtime probing
 #
@@ -22,15 +22,15 @@
 #      - Colon-to-slash translation (node:fs -> node/fs)
 #      - -D flag module embedding
 #
---- quickjs/qjsc.c	2026-01-16 11:05:44.122659101 +0000
-+++ /tmp/qjsxc.c	2026-01-18 01:08:23.358604001 +0000
+--- quickjs/qjsc.c	2026-02-12 11:07:12.787606997 +0000
++++ bin/linux/obj/qjsxc.c	2026-02-12 13:14:29.960155579 +0000
 @@ -1,5 +1,8 @@
  /*
 - * QuickJS command line compiler
-+ * QJSXC - QuickJS Compiler with QJSXPATH module resolution
++ * QJSXC - QuickJS Compiler with NODE_PATH module resolution
 + *
 + * Based on QuickJS command line compiler by Fabrice Bellard
-+ * Modified to support QJSXPATH module resolution
++ * Modified to support NODE_PATH module resolution
   *
   * Copyright (c) 2018-2021 Fabrice Bellard
   *
@@ -235,7 +235,7 @@
 +        fprintf(fo,
 +                "static JSModuleDef *qjsx_loader(JSContext *ctx, const char *name, void *opaque, JSValueConst attributes) {\n"
 +                "    // Note: 'name' is already normalized by qjsx_module_normalizer\n"
-+                "    // Bare imports: try QJSXPATH resolution\n"
++                "    // Bare imports: try NODE_PATH resolution\n"
 +                "    if (name[0] != '.' && name[0] != '/') {\n"
 +                "        char *path = resolve_qjsxpath(ctx, name);\n"
 +                "        if (path) {\n"
@@ -268,7 +268,7 @@
 -            fprintf(stderr, "Could not load dynamic module '%s'\n",
 -                    dynamic_module_list.array[i].name);
 +        const char *dyn_name = dynamic_module_list.array[i].name;
-+        /* Normalize the -D module name (handles colon-to-slash, QJSXPATH resolution) */
++        /* Normalize the -D module name (handles colon-to-slash, NODE_PATH resolution) */
 +        char *normalized = qjsx_module_normalizer(ctx, "<input>", dyn_name, NULL);
 +        if (!normalized) {
 +            fprintf(stderr, "Could not normalize dynamic module '%s'\n", dyn_name);

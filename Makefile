@@ -1,7 +1,7 @@
 #
 # QJSX Makefile
 #
-# Builds the qjsx executable with QJSXPATH module resolution support
+# Builds the qjsx executable with NODE_PATH module resolution support
 #
 
 VERSION = 2024-01-13
@@ -184,12 +184,12 @@ $(BIN_DIR)/obj/qn/version-info.js: FORCE | $(BIN_DIR)/obj
 
 # Build qn (standalone executable with embedded node modules, qx, sqlite, and native extensions)
 $(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js $(QJSXC_PROG) $(NATIVE_OBJS) $(BEARSSL_LIB) $(WG_LIBS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -M qn_native,qn_native -M qn_socket,qn_socket -M qn_tls,qn_tls $(WG_MODULE_FLAGS) -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:stream/promises -D node:fs/promises -D node:buffer -D node:url -D node:abort -D node:fetch -D node:net -D node:tls -D node:http -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qn.c node/bootstrap.js
+	NODE_PATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -M qn_native,qn_native -M qn_socket,qn_socket -M qn_tls,qn_tls $(WG_MODULE_FLAGS) -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:stream/promises -D node:fs/promises -D node:buffer -D node:url -D node:abort -D node:fetch -D node:net -D node:tls -D node:http -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qn.c node/bootstrap.js
 	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qn.c $(NATIVE_OBJS) $(BEARSSL_LIB) $(WG_LIBS) $(BIN_DIR)/libquickjs.a $(LIBS)
 
 # Build qx (zx-compatible shell scripting with $ function)
 $(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js $(QJSXC_PROG) $(NATIVE_OBJS) $(BEARSSL_LIB) $(WG_LIBS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -M qn_native,qn_native -M qn_socket,qn_socket -M qn_tls,qn_tls $(WG_MODULE_FLAGS) -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:stream/promises -D node:fs/promises -D node:buffer -D node:url -D node:abort -D node:fetch -D node:net -D node:tls -D node:http -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qx.c qx/bootstrap.js
+	NODE_PATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -M qn_native,qn_native -M qn_socket,qn_socket -M qn_tls,qn_tls $(WG_MODULE_FLAGS) -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:stream/promises -D node:fs/promises -D node:buffer -D node:url -D node:abort -D node:fetch -D node:net -D node:tls -D node:http -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qx.c qx/bootstrap.js
 	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qx.c $(NATIVE_OBJS) $(BEARSSL_LIB) $(WG_LIBS) $(BIN_DIR)/libquickjs.a $(LIBS)
 
 # Create convenience symlinks in bin/ directory
@@ -259,8 +259,8 @@ help:
 	@echo "Usage examples:"
 	@echo "  make build"
 	@echo "  make test"
-	@echo "  QJSXPATH=./my_modules ./bin/qjsx script.js"
-	@echo "  QJSXPATH=./my_modules ./bin/qjsxc -o app.c app.js"
+	@echo "  NODE_PATH=./my_modules ./bin/qjsx script.js"
+	@echo "  NODE_PATH=./my_modules ./bin/qjsxc -o app.c app.js"
 	@echo "  ./bin/qx script.js    # zx-compatible shell scripting"
 
 .PHONY: all build clean clean-all install help quickjs-deps convenience-links test FORCE

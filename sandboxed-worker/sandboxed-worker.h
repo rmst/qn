@@ -48,7 +48,7 @@ void js_sandbox_add_export(JSContext *ctx, JSModuleDef *m);
 
 /*
  * Set the function used to create new contexts for sandboxed workers.
- * This allows the caller to customize context creation (e.g., for QJSXPATH).
+ * This allows the caller to customize context creation (e.g., for NODE_PATH).
  *
  * @param func - Function pointer that creates a new JSContext from a JSRuntime
  */

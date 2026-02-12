@@ -3,7 +3,7 @@
 Qn is [QuickJS](https://bellard.org/quickjs) with a few additional features:
 
 1. **Module resolution** with two modes (see [tests](test/module-resolution/)):
-   - **Bundler mode** (default): `QJSXPATH` for bare imports, `.js` and `/index.js` fallbacks
+   - **Bundler mode** (default): `NODE_PATH` for bare imports, `node_modules` walking, `.js` and `/index.js` fallbacks
    - **Node mode** (`QJSX_MODULE_RESOLUTION=node`): matches Node.js ESM exactly
 
 2. `import.meta.dirname` and `import.meta.filename`
@@ -38,13 +38,13 @@ make build  # Builds ./bin/qjsx, ./bin/qn, and ./bin/qjsxc
 ./bin/qjsx script.js
 ```
 
-**Module resolution with QJSXPATH**
+**Module resolution with NODE_PATH**
 ```bash
 # script.js can import all modules in ./mymodules and ./lib.
-QJSXPATH=./my_modules:./lib ./bin/qjsx script.js
+NODE_PATH=./my_modules:./lib ./bin/qjsx script.js
 ```
 
-This works like `NODE_PATH` in Node.js. `QJSXPATH` enables bare module imports (e.g., `import foo from "foo"`) by specifying search directories.
+`NODE_PATH` enables bare module imports (e.g., `import foo from "foo"`) by specifying search directories. Standard `node_modules` walking with `package.json` resolution is also supported.
 
 **With Node.js compatibility modules**
 ```bash
@@ -60,8 +60,8 @@ This works like `NODE_PATH` in Node.js. `QJSXPATH` enables bare module imports (
 
 #### Basic Usage
 ```bash
-# Compile an application and embeddes all modules imported by main.js
-QJSXPATH=./my_modules ./bin/qjsxc -o my-app main.js
+# Compile an application and embed all modules imported by main.js
+NODE_PATH=./my_modules ./bin/qjsxc -o my-app main.js
 
 # The resulting binary is a standalone executable
 ./my-app                          # (runs your application)
@@ -72,7 +72,7 @@ Use the `-D` flag to embed modules that aren't directly imported but should be a
 
 ```bash
 # Embed modules for dynamic loading
-QJSXPATH=./libs ./bin/qjsxc -D utils -D config -o runtime bootstrap.js
+NODE_PATH=./libs ./bin/qjsxc -D utils -D config -o runtime bootstrap.js
 
 # External scripts can now import these modules
 ./runtime external-script.js      # Can use import { ... } from "utils"
@@ -87,4 +87,4 @@ The following files are used to compile the `qjsx` binary:
 - `qjsx.patch` is applied to `quickjs/qjs.c`
 - `qjsxc.patch` is applied to `quickjs/qjsc.c`
 - `quickjs-libc.patch` is applied to `quickjs/quickjs-libc.c`
-- `qjsx-module-resolution.h` contains shared module resolution logic for QJSXPATH support, etc
+- `module_resolution/module-resolution.h` contains shared module resolution logic (NODE_PATH, node_modules, package.json)

@@ -6,7 +6,7 @@ This directory contains the module resolution implementation for QJSX.
 
 | Import type | Example | Resolution |
 |-------------|---------|------------|
-| **Bare** | `lodash`, `node:fs` | QJSXPATH / embedded lookup, no realpath |
+| **Bare** | `lodash`, `node:fs` | NODE_PATH / node_modules / embedded lookup, no realpath |
 | **Filesystem** | `./foo`, `../bar`, `/path/to/foo` | `realpath()` → absolute canonical path |
 
 ## Resolution Details
@@ -16,10 +16,12 @@ This directory contains the module resolution implementation for QJSX.
 Bare imports (no leading `/`, `./`, or `../`) are resolved via:
 
 1. **Colon-to-slash translation**: `node:fs` → `node/fs`
-2. **QJSXPATH lookup**: Search directories in `QJSXPATH` environment variable
-3. **Extension probing** (bundler mode only): Try `.js`, then `/index.js`
+2. **NODE_PATH lookup**: Search directories in `NODE_PATH` environment variable
+3. **node_modules walking**: Walk up directory tree from importing file, checking `node_modules/<pkg>/`
+4. **package.json resolution**: Read `exports` field (with subpath and conditional support), then `main`
+5. **Extension probing** (bundler mode only): Try `.js`, then `/index.js`
 
-For compiled binaries, bare imports check the embedded module list first, then fall back to QJSXPATH.
+For compiled binaries, bare imports check the embedded module list first, then fall back to NODE_PATH.
 
 ### Filesystem Paths (Relative and Absolute)
 
@@ -50,7 +52,7 @@ This means relative imports resolve against the **real location** of the importi
 
 - Explicit extensions required: `./foo.js` not `./foo`
 - Matches Node.js ESM behavior exactly
-- QJSXPATH and colon-to-slash still work
+- NODE_PATH and colon-to-slash still work
 
 ## Debugging
 
@@ -69,7 +71,7 @@ Output shows:
 
 When compiling with `qjsxc`, filesystem paths (relative and absolute imports) are embedded as absolute canonical paths. This may expose build environment paths in the binary.
 
-To avoid path leakage, use **bare imports** with QJSXPATH:
+To avoid path leakage, use **bare imports** with NODE_PATH:
 
 ```bash
 # Instead of relative imports:
@@ -77,7 +79,7 @@ import { foo } from './lib/utils.js'
 
 # Use bare imports:
 import { foo } from 'lib/utils'
-# With: QJSXPATH=./lib qjsxc -o app main.js
+# With: NODE_PATH=./lib qjsxc -o app main.js
 ```
 
 Bare imports are embedded under canonical names like `lib/utils.js` without absolute paths.
