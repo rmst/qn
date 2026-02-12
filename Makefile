@@ -148,8 +148,27 @@ $(BEARSSL_LIB):
 $(BIN_DIR)/obj/qn-tls.o: tls/qn-tls.c $(BEARSSL_LIB) quickjs-deps | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/bearssl/inc -c -o $@ $<
 
+# ---- lwIP + WireGuard (disable with: make USE_WIREGUARD=0) ----
+
+USE_WIREGUARD ?= 1
+
+WG_OBJS =
+WG_LIBS =
+WG_MODULE_FLAGS =
+
+ifeq ($(USE_WIREGUARD),1)
+
+WG_LIB = wireguard/build/libwireguard.a
+$(WG_LIB): FORCE quickjs-deps
+	$(MAKE) -C wireguard QUICKJS_INC=$(abspath $(BIN_DIR)/quickjs)
+
+WG_LIBS = $(WG_LIB)
+WG_MODULE_FLAGS = -M qn_wireguard,qn_wireguard -D qn:wireguard
+
+endif # USE_WIREGUARD
+
 # Native C extensions for linking
-NATIVE_OBJS = $(BIN_DIR)/obj/sqlite3.o $(BIN_DIR)/obj/qjs-sqlite.o $(BIN_DIR)/obj/qn-native.o $(BIN_DIR)/obj/qn-socket.o $(BIN_DIR)/obj/qn-tls.o
+NATIVE_OBJS = $(BIN_DIR)/obj/sqlite3.o $(BIN_DIR)/obj/qjs-sqlite.o $(BIN_DIR)/obj/qn-native.o $(BIN_DIR)/obj/qn-socket.o $(BIN_DIR)/obj/qn-tls.o $(WG_OBJS)
 
 # Generate version info module for qn/qx --version
 # Uses FORCE + cmp to always check but only update when content changes,
@@ -164,14 +183,14 @@ $(BIN_DIR)/obj/qn/version-info.js: FORCE | $(BIN_DIR)/obj
 	@cmp -s $@ $@.tmp && rm $@.tmp || mv $@.tmp $@
 
 # Build qn (standalone executable with embedded node modules, qx, sqlite, and native extensions)
-$(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js $(QJSXC_PROG) $(NATIVE_OBJS) $(BEARSSL_LIB) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -M qn_native,qn_native -M qn_socket,qn_socket -M qn_tls,qn_tls -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:net -D node:tls -D node:http -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qn.c node/bootstrap.js
-	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qn.c $(NATIVE_OBJS) $(BEARSSL_LIB) $(BIN_DIR)/libquickjs.a $(LIBS)
+$(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js $(QJSXC_PROG) $(NATIVE_OBJS) $(BEARSSL_LIB) $(WG_LIBS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
+	QJSXPATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -M qn_native,qn_native -M qn_socket,qn_socket -M qn_tls,qn_tls $(WG_MODULE_FLAGS) -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:net -D node:tls -D node:http -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qn.c node/bootstrap.js
+	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qn.c $(NATIVE_OBJS) $(BEARSSL_LIB) $(WG_LIBS) $(BIN_DIR)/libquickjs.a $(LIBS)
 
 # Build qx (zx-compatible shell scripting with $ function)
-$(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js $(QJSXC_PROG) $(NATIVE_OBJS) $(BEARSSL_LIB) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
-	QJSXPATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -M qn_native,qn_native -M qn_socket,qn_socket -M qn_tls,qn_tls -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:net -D node:tls -D node:http -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qx.c qx/bootstrap.js
-	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qx.c $(NATIVE_OBJS) $(BEARSSL_LIB) $(BIN_DIR)/libquickjs.a $(LIBS)
+$(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js $(QJSXC_PROG) $(NATIVE_OBJS) $(BEARSSL_LIB) $(WG_LIBS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
+	QJSXPATH=./node:./qx:$(BIN_DIR)/obj $(QJSXC_PROG) -e -M sqlite_native,sqlite -M qn_native,qn_native -M qn_socket,qn_socket -M qn_tls,qn_tls $(WG_MODULE_FLAGS) -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:buffer -D node:url -D node:abort -D node:fetch -D node:net -D node:tls -D node:http -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:version-info -D qx -o $(BIN_DIR)/obj/qx.c qx/bootstrap.js
+	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qx.c $(NATIVE_OBJS) $(BEARSSL_LIB) $(WG_LIBS) $(BIN_DIR)/libquickjs.a $(LIBS)
 
 # Create convenience symlinks in bin/ directory
 convenience-links: $(QJSX_PROG) $(QN_PROG) $(QX_PROG) $(QJSXC_PROG)
@@ -201,10 +220,12 @@ $(BIN_DIR)/obj/qjsx.o $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN
 # Clean build artifacts
 clean:
 	rm -rf $(BIN_DIR)
+	$(MAKE) -C wireguard clean
 
 # Clean all platforms
 clean-all:
 	rm -rf bin/
+	$(MAKE) -C wireguard clean
 
 # Build everything (QuickJS + qjsx)
 build: quickjs-deps all
