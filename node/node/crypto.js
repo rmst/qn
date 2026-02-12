@@ -1,10 +1,12 @@
 /**
  * https://github.com/kawanet/sha256-uint8array
- * 
+ *
  * sha256-uint8array.ts
  */
 
-// TODO: maybe put this under ./node/ ?
+import * as std from 'std'
+import * as os from 'os'
+import { Buffer } from 'node:buffer'
 
 
 // first 32 bits of the fractional parts of the cube roots of the first 64 primes 2..311
@@ -259,4 +261,55 @@ const gamma1 = x => ((x >>> 17 | x << 15) ^ (x >>> 19 | x << 13) ^ (x >>> 10));
 function isBE() {
 	const buf = new Uint8Array(new Uint16Array([0xFEFF]).buffer); // BOM
 	return (buf[0] === 0xFE);
+}
+
+/**
+ * Generate cryptographically strong random bytes.
+ * Reads from /dev/urandom on Unix systems.
+ * @param {number} size - Number of bytes to generate
+ * @returns {Buffer}
+ */
+export function randomBytes(size) {
+	if (typeof size !== 'number' || size < 0 || size !== Math.floor(size)) {
+		throw new TypeError(`The "size" argument must be a non-negative integer. Received ${size}`)
+	}
+	const buf = new ArrayBuffer(size)
+	const fd = os.open('/dev/urandom', os.O_RDONLY)
+	if (fd < 0) {
+		throw new Error('Failed to open /dev/urandom')
+	}
+	try {
+		let offset = 0
+		while (offset < size) {
+			const n = os.read(fd, buf, offset, size - offset)
+			if (n <= 0) throw new Error('Failed to read from /dev/urandom')
+			offset += n
+		}
+	} finally {
+		os.close(fd)
+	}
+	return Buffer.from(buf)
+}
+
+/**
+ * Timing-safe comparison of two buffers.
+ * @param {Buffer|Uint8Array} a
+ * @param {Buffer|Uint8Array} b
+ * @returns {boolean}
+ */
+export function timingSafeEqual(a, b) {
+	if (!(a instanceof Uint8Array) && !Buffer.isBuffer(a)) {
+		throw new TypeError('The "buf1" argument must be an instance of Buffer, TypedArray, or DataView.')
+	}
+	if (!(b instanceof Uint8Array) && !Buffer.isBuffer(b)) {
+		throw new TypeError('The "buf2" argument must be an instance of Buffer, TypedArray, or DataView.')
+	}
+	if (a.length !== b.length) {
+		throw new RangeError('Input buffers must have the same byte length')
+	}
+	let result = 0
+	for (let i = 0; i < a.length; i++) {
+		result |= a[i] ^ b[i]
+	}
+	return result === 0
 }

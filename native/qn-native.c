@@ -350,6 +350,54 @@ static JSValue js_qn_setNonBlock(JSContext *ctx, JSValueConst this_val,
         return JS_NewInt32(ctx, -errno);
     return JS_NewInt32(ctx, 0);
 }
+
+/* chown(path, uid, gid) -> 0 on success, -errno on failure */
+static JSValue js_qn_chown(JSContext *ctx, JSValueConst this_val,
+                            int argc, JSValueConst *argv)
+{
+    const char *path;
+    int uid, gid, ret;
+
+    path = JS_ToCString(ctx, argv[0]);
+    if (!path)
+        return JS_EXCEPTION;
+    if (JS_ToInt32(ctx, &uid, argv[1])) {
+        JS_FreeCString(ctx, path);
+        return JS_EXCEPTION;
+    }
+    if (JS_ToInt32(ctx, &gid, argv[2])) {
+        JS_FreeCString(ctx, path);
+        return JS_EXCEPTION;
+    }
+
+    ret = js_get_errno(chown(path, uid, gid));
+    JS_FreeCString(ctx, path);
+    return JS_NewInt32(ctx, ret);
+}
+
+/* lchown(path, uid, gid) -> 0 on success, -errno on failure */
+static JSValue js_qn_lchown(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv)
+{
+    const char *path;
+    int uid, gid, ret;
+
+    path = JS_ToCString(ctx, argv[0]);
+    if (!path)
+        return JS_EXCEPTION;
+    if (JS_ToInt32(ctx, &uid, argv[1])) {
+        JS_FreeCString(ctx, path);
+        return JS_EXCEPTION;
+    }
+    if (JS_ToInt32(ctx, &gid, argv[2])) {
+        JS_FreeCString(ctx, path);
+        return JS_EXCEPTION;
+    }
+
+    ret = js_get_errno(lchown(path, uid, gid));
+    JS_FreeCString(ctx, path);
+    return JS_NewInt32(ctx, ret);
+}
 #endif
 
 static const JSCFunctionListEntry js_qn_native_funcs[] = {
@@ -358,6 +406,8 @@ static const JSCFunctionListEntry js_qn_native_funcs[] = {
     JS_CFUNC_DEF("spawn_setsid", 2, js_qn_spawn_setsid),
     JS_CFUNC_DEF("getpgid", 1, js_qn_getpgid),
     JS_CFUNC_DEF("setNonBlock", 1, js_qn_setNonBlock),
+    JS_CFUNC_DEF("chown", 3, js_qn_chown),
+    JS_CFUNC_DEF("lchown", 3, js_qn_lchown),
 #endif
 };
 

@@ -61,10 +61,15 @@ export class StatementSync {
     #stmt;
     #db;
     #columnNames = null;
+    #readBigInts = false;
 
     constructor(stmt, db) {
         this.#stmt = stmt;
         this.#db = db;
+    }
+
+    setReadBigInts(enabled) {
+        this.#readBigInts = !!enabled;
     }
 
     #bindParams(params) {
@@ -92,6 +97,8 @@ export class StatementSync {
             // Convert ArrayBuffer to Uint8Array for BLOB columns (Node.js compatibility)
             if (value instanceof ArrayBuffer) {
                 value = new Uint8Array(value);
+            } else if (this.#readBigInts && typeof value === 'number' && Number.isInteger(value)) {
+                value = BigInt(value);
             }
             row[names[i]] = value;
         }

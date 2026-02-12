@@ -1,7 +1,7 @@
 import * as std from 'std';
 import * as os from 'os';
 import { Buffer } from 'node:buffer';
-import { chmod as native_chmod } from 'qn_native';
+import { chmod as native_chmod, chown as native_chown, lchown as native_lchown } from 'qn_native';
 
 // Re-export glob functions from separate module
 export { globSync, glob } from './glob.js';
@@ -457,4 +457,63 @@ export function mkdtempSync(prefix) {
 		throw new Error(`Failed to create temp directory: ${path}`);
 	}
 	return path;
+}
+
+export function accessSync(path, mode) {
+	if (mode === undefined) mode = constants.F_OK;
+	if (mode !== constants.F_OK) {
+		throw new Error('accessSync: only F_OK mode is supported (use existsSync for existence checks)')
+	}
+	const [, err] = os.stat(path);
+	if (err !== 0) {
+		const error = new Error(`ENOENT: no such file or directory, access '${path}'`);
+		error.code = 'ENOENT';
+		throw error;
+	}
+}
+
+export function utimesSync(path, atime, mtime) {
+	// Convert Date objects or seconds to milliseconds for os.utimes
+	const atimeMs = atime instanceof Date ? atime.getTime() : (typeof atime === 'number' ? atime * 1000 : atime);
+	const mtimeMs = mtime instanceof Date ? mtime.getTime() : (typeof mtime === 'number' ? mtime * 1000 : mtime);
+	const result = os.utimes(path, atimeMs, mtimeMs);
+	if (result < 0) {
+		throw new Error(`Failed to set timestamps on ${path}: error ${-result}`);
+	}
+}
+
+export function chownSync(path, uid, gid) {
+	const result = native_chown(path, uid, gid);
+	if (result !== 0) {
+		throw new Error(`Failed to chown ${path}: error ${-result}`);
+	}
+}
+
+export function lchownSync(path, uid, gid) {
+	const result = native_lchown(path, uid, gid);
+	if (result !== 0) {
+		throw new Error(`Failed to lchown ${path}: error ${-result}`);
+	}
+}
+
+export { createReadStream, createWriteStream } from './streams.js';
+
+export const constants = {
+	F_OK: 0,
+	R_OK: 4,
+	W_OK: 2,
+	X_OK: 1,
+	COPYFILE_EXCL: 1,
+	COPYFILE_FICLONE: 2,
+	COPYFILE_FICLONE_FORCE: 4,
+	O_RDONLY: os.O_RDONLY,
+	O_WRONLY: os.O_WRONLY,
+	O_RDWR: os.O_RDWR,
+	O_CREAT: os.O_CREAT,
+	O_TRUNC: os.O_TRUNC,
+	O_APPEND: os.O_APPEND,
+	S_IFMT: os.S_IFMT,
+	S_IFREG: os.S_IFREG,
+	S_IFDIR: os.S_IFDIR,
+	S_IFLNK: os.S_IFLNK,
 }
