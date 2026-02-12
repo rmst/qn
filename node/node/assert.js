@@ -527,6 +527,12 @@ assert.doesNotThrow = function doesNotThrow(fn, error, message) {
 	}
 }
 
+// Legacy loose-equality aliases — Node.js docs recommend the strict variants,
+// but many codebases (and Node's own test suite) still use these.
+assert.equal = assert.strictEqual
+assert.notEqual = assert.notStrictEqual
+assert.deepEqual = assert.deepStrictEqual
+
 // Also export AssertionError
 assert.AssertionError = AssertionError
 
@@ -534,4 +540,5 @@ export default assert
 export { assert }
 
 const { ok, strictEqual, deepStrictEqual, notStrictEqual, notDeepStrictEqual, fail, match, doesNotMatch, throws, doesNotThrow } = assert
-export { ok, strictEqual, deepStrictEqual, notStrictEqual, notDeepStrictEqual, fail, match, doesNotMatch, throws, doesNotThrow }
+const equal = assert.equal, notEqual = assert.notEqual, deepEqual = assert.deepEqual
+export { ok, strictEqual, deepStrictEqual, notStrictEqual, notDeepStrictEqual, fail, match, doesNotMatch, throws, doesNotThrow, equal, notEqual, deepEqual }

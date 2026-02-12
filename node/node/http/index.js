@@ -5,6 +5,7 @@
 
 import { EventEmitter } from 'node:events'
 import { createServer as createTcpServer, Socket } from 'node:net'
+import { parseRequestHead } from 'node:http/parse'
 
 const CRLF = '\r\n'
 
@@ -177,55 +178,6 @@ export class ServerResponse extends EventEmitter {
 		this.emit('finish')
 		return this
 	}
-}
-
-/**
- * Parse an HTTP request from raw data.
- * Returns { method, url, httpVersion, headers, rawHeaders, headerEnd }
- * or null if headers aren't complete yet.
- */
-function parseRequestHead(data) {
-	// Find \r\n\r\n
-	let headerEnd = -1
-	for (let i = 0; i < data.length - 3; i++) {
-		if (data[i] === 0x0d && data[i + 1] === 0x0a &&
-			data[i + 2] === 0x0d && data[i + 3] === 0x0a) {
-			headerEnd = i + 4
-			break
-		}
-	}
-	if (headerEnd === -1) return null
-
-	const headerText = new TextDecoder().decode(data.subarray(0, headerEnd))
-	const lines = headerText.split('\r\n')
-
-	const requestLine = lines[0]
-	const parts = requestLine.split(' ')
-	if (parts.length < 3) return null
-
-	const method = parts[0]
-	const url = parts[1]
-	const httpVersion = parts[2].replace('HTTP/', '')
-
-	const headers = {}
-	const rawHeaders = []
-	for (let i = 1; i < lines.length; i++) {
-		const line = lines[i]
-		if (!line) break
-		const colonIdx = line.indexOf(':')
-		if (colonIdx <= 0) continue
-		const key = line.slice(0, colonIdx)
-		const value = line.slice(colonIdx + 1).trim()
-		rawHeaders.push(key, value)
-		const lowerKey = key.toLowerCase()
-		if (headers[lowerKey] !== undefined) {
-			headers[lowerKey] += ', ' + value
-		} else {
-			headers[lowerKey] = value
-		}
-	}
-
-	return { method, url, httpVersion, headers, rawHeaders, headerEnd }
 }
 
 /**

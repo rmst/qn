@@ -12,6 +12,7 @@ export class Request {
 			this._method = init.method ? init.method.toUpperCase() : input._method
 			this._headers = new Headers(init.headers || input._headers)
 			this._body = init.body !== undefined ? normalizeBody(init.body) : input._body
+			this._bodyStream = init.body !== undefined ? normalizeBodyStream(init.body) : input._bodyStream || null
 			this._signal = init.signal || input._signal || null
 		} else {
 			this._url = typeof input === 'string' ? input : input instanceof URL ? input.href : String(input)
@@ -19,8 +20,9 @@ export class Request {
 			this._headers = init.headers instanceof Headers
 				? new Headers(init.headers)
 				: new Headers(init.headers || {})
-			this._body = init.body !== undefined && init.body !== null
-				? normalizeBody(init.body) : null
+			const rawBody = init.body !== undefined && init.body !== null ? init.body : null
+			this._body = rawBody ? normalizeBody(rawBody) : null
+			this._bodyStream = rawBody ? normalizeBodyStream(rawBody) : null
 			this._signal = init.signal || null
 		}
 		this._bodyUsed = false
@@ -38,25 +40,39 @@ export class Request {
 	get referrerPolicy() { return '' }
 
 	get body() {
+		if (this._bodyStream) return this._bodyStream
 		return this._body
 	}
 
-	_consumeBody() {
+	async _consumeBody() {
 		if (this._bodyUsed) {
 			throw new TypeError('Body has already been consumed')
 		}
 		this._bodyUsed = true
+		if (this._bodyStream) {
+			const chunks = []
+			for await (const chunk of this._bodyStream) {
+				chunks.push(typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk)
+			}
+			if (chunks.length === 0) return null
+			if (chunks.length === 1) return chunks[0]
+			const total = chunks.reduce((sum, c) => sum + c.length, 0)
+			const result = new Uint8Array(total)
+			let off = 0
+			for (const c of chunks) { result.set(c, off); off += c.length }
+			return result
+		}
 		return this._body
 	}
 
 	async arrayBuffer() {
-		const body = this._consumeBody()
+		const body = await this._consumeBody()
 		if (body === null) return new ArrayBuffer(0)
 		return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength)
 	}
 
 	async text() {
-		const body = this._consumeBody()
+		const body = await this._consumeBody()
 		if (body === null) return ''
 		return new TextDecoder().decode(body)
 	}
@@ -95,6 +111,13 @@ function normalizeBody(body) {
 	}
 	if (body instanceof ArrayBuffer) {
 		return new Uint8Array(body)
+	}
+	return null
+}
+
+function normalizeBodyStream(body) {
+	if (typeof body?.[Symbol.asyncIterator] === 'function') {
+		return body
 	}
 	return null
 }

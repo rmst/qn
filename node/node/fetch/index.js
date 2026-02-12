@@ -14,6 +14,11 @@ import { existsSync } from 'node:fs'
 import { Headers } from './Headers.js'
 import { Request } from './Request.js'
 import { Response } from './Response.js'
+import {
+	concatChunks, isChunkedComplete, decodeChunked,
+	parseResponseHead, buildRequest as _buildRequest,
+	readResponseHead, bodyStream, writeChunkedBody,
+} from 'node:http/parse'
 
 export { Headers, Request, Response }
 
@@ -159,132 +164,8 @@ function writeAllSocket(fd, data, signal) {
 	})
 }
 
-function concatChunks(chunks) {
-	if (chunks.length === 0) return new Uint8Array(0)
-	if (chunks.length === 1) return chunks[0]
-	const total = chunks.reduce((sum, c) => sum + c.length, 0)
-	const result = new Uint8Array(total)
-	let off = 0
-	for (const chunk of chunks) {
-		result.set(chunk, off)
-		off += chunk.length
-	}
-	return result
-}
-
-function validateHeaderValue(name, value) {
-	if (/[\r\n]/.test(name) || /[\r\n]/.test(value)) {
-		throw new TypeError(`Invalid header: ${name}`)
-	}
-}
-
-/**
- * Build HTTP request string
- */
 function buildRequest(method, path, host, port, headers, isDefaultPort) {
-	const hostHeader = isDefaultPort ? host : `${host}:${port}`
-	let req = `${method} ${path} HTTP/1.1\r\nHost: ${hostHeader}\r\nConnection: close\r\n`
-	for (const [key, value] of headers) {
-		if (key.toLowerCase() === 'host') continue
-		validateHeaderValue(key, value)
-		req += `${key}: ${value}\r\n`
-	}
-	req += '\r\n'
-	return req
-}
-
-/**
- * Check if chunked data is complete by walking chunk boundaries.
- * Returns true when we've seen the terminating 0-length chunk.
- */
-function isChunkedComplete(data) {
-	let pos = 0
-	while (pos < data.length) {
-		let lineEnd = -1
-		for (let i = pos; i < data.length - 1; i++) {
-			if (data[i] === 0x0d && data[i + 1] === 0x0a) {
-				lineEnd = i
-				break
-			}
-		}
-		if (lineEnd === -1) return false
-
-		const sizeLine = new TextDecoder().decode(data.subarray(pos, lineEnd))
-		const chunkSize = parseInt(sizeLine.split(';')[0].trim(), 16)
-		if (isNaN(chunkSize)) return false
-		if (chunkSize === 0) return true
-
-		const nextPos = lineEnd + 2 + chunkSize + 2
-		if (nextPos > data.length) return false
-		pos = nextPos
-	}
-	return false
-}
-
-/**
- * Decode a chunked transfer-encoded body.
- */
-function decodeChunked(data) {
-	const chunks = []
-	let pos = 0
-	while (pos < data.length) {
-		let lineEnd = -1
-		for (let i = pos; i < data.length - 1; i++) {
-			if (data[i] === 0x0d && data[i + 1] === 0x0a) {
-				lineEnd = i
-				break
-			}
-		}
-		if (lineEnd === -1) break
-
-		const sizeLine = new TextDecoder().decode(data.subarray(pos, lineEnd))
-		const chunkSize = parseInt(sizeLine.split(';')[0].trim(), 16)
-		if (isNaN(chunkSize)) break
-		if (chunkSize === 0) break
-
-		const dataStart = lineEnd + 2
-		const dataEnd = dataStart + chunkSize
-		if (dataEnd > data.length) break
-
-		chunks.push(data.subarray(dataStart, dataEnd))
-		pos = dataEnd + 2
-	}
-	return concatChunks(chunks)
-}
-
-/**
- * Parse HTTP response headers from raw data.
- * Returns { status, statusText, headers, bodyStart } or null if incomplete.
- */
-function parseResponseHead(data) {
-	let headerEnd = -1
-	for (let i = 0; i < data.length - 3; i++) {
-		if (data[i] === 0x0d && data[i + 1] === 0x0a &&
-			data[i + 2] === 0x0d && data[i + 3] === 0x0a) {
-			headerEnd = i
-			break
-		}
-	}
-	if (headerEnd === -1) return null
-
-	const headerText = new TextDecoder().decode(data.subarray(0, headerEnd))
-	const lines = headerText.split('\r\n')
-
-	const statusLine = lines[0] || ''
-	const statusMatch = statusLine.match(/^HTTP\/[\d.]+ (\d+)(?: (.*))?$/)
-	const status = statusMatch ? parseInt(statusMatch[1], 10) : 0
-	const statusText = statusMatch ? (statusMatch[2] || '') : ''
-
-	const headers = new Headers()
-	for (let i = 1; i < lines.length; i++) {
-		const line = lines[i]
-		const colonIdx = line.indexOf(':')
-		if (colonIdx > 0) {
-			headers.append(line.slice(0, colonIdx).trim(), line.slice(colonIdx + 1).trim())
-		}
-	}
-
-	return { status, statusText, headers, bodyStart: headerEnd + 4 }
+	return _buildRequest(method, path, host, port, headers, isDefaultPort)
 }
 
 /**
@@ -292,7 +173,7 @@ function parseResponseHead(data) {
  * a reader { read(buf, off, len), close() } for the response.
  * Handles TLS handshake if isHttps. On error, cleans up fd before throwing.
  */
-async function sendRequest(fd, host, isHttps, reqBytes, bodyBytes, signal) {
+async function sendRequest(fd, host, isHttps, reqBytes, bodyBytes, bodyIter, signal) {
 	if (isHttps) {
 		ensureCACerts()
 		const conn = tls.connect(fd, host)
@@ -300,6 +181,7 @@ async function sendRequest(fd, host, isHttps, reqBytes, bodyBytes, signal) {
 			await tls.handshake(conn, fd, signal)
 			await tls.writeAll(conn, fd, reqBytes, signal)
 			if (bodyBytes) await tls.writeAll(conn, fd, bodyBytes, signal)
+			else if (bodyIter) await writeChunkedBody(data => tls.writeAll(conn, fd, data, signal), bodyIter)
 		} catch (e) {
 			try { await tls.close(conn, fd) } catch {}
 			try { os.close(fd) } catch {}
@@ -322,6 +204,7 @@ async function sendRequest(fd, host, isHttps, reqBytes, bodyBytes, signal) {
 	try {
 		await writeAllSocket(fd, reqBytes, signal)
 		if (bodyBytes) await writeAllSocket(fd, bodyBytes, signal)
+		else if (bodyIter) await writeChunkedBody(data => writeAllSocket(fd, data, signal), bodyIter)
 	} catch (e) {
 		os.close(fd)
 		throw e
@@ -339,84 +222,6 @@ async function sendRequest(fd, host, isHttps, reqBytes, bodyBytes, signal) {
 	}
 }
 
-/**
- * Read HTTP response headers from a reader.
- * Returns { status, statusText, headers, leftover } or null on error.
- */
-async function readResponseHead(reader) {
-	const buf = new ArrayBuffer(65536)
-	let accumulated = new Uint8Array(0)
-
-	while (true) {
-		const parsed = parseResponseHead(accumulated)
-		if (parsed) {
-			return {
-				status: parsed.status,
-				statusText: parsed.statusText,
-				headers: parsed.headers,
-				leftover: accumulated.subarray(parsed.bodyStart),
-			}
-		}
-
-		const n = await reader.read(buf, 0, 65536)
-		if (n <= 0) break
-		const prev = accumulated
-		accumulated = new Uint8Array(prev.length + n)
-		accumulated.set(prev, 0)
-		accumulated.set(new Uint8Array(buf, 0, n), prev.length)
-	}
-
-	return null
-}
-
-/**
- * Async generator that streams body data from a reader.
- * Handles Content-Length, chunked transfer-encoding, and connection-close framing.
- * Owns the reader — closes it when done or on error.
- */
-async function* bodyStream(reader, leftover, contentLength, isChunked) {
-	try {
-		if (isChunked) {
-			// Buffer chunked data and decode (chunk framing makes true streaming complex)
-			let buffer = leftover
-			const readBuf = new ArrayBuffer(65536)
-			while (!isChunkedComplete(buffer)) {
-				const n = await reader.read(readBuf, 0, 65536)
-				if (n <= 0) break
-				const prev = buffer
-				buffer = new Uint8Array(prev.length + n)
-				buffer.set(prev, 0)
-				buffer.set(new Uint8Array(readBuf, 0, n), prev.length)
-			}
-			yield decodeChunked(buffer)
-		} else if (contentLength !== null) {
-			let remaining = contentLength
-			if (leftover.length > 0) {
-				const toYield = leftover.subarray(0, Math.min(leftover.length, remaining))
-				remaining -= toYield.length
-				if (toYield.length > 0) yield toYield
-			}
-			const readBuf = new ArrayBuffer(65536)
-			while (remaining > 0) {
-				const n = await reader.read(readBuf, 0, Math.min(remaining, 65536))
-				if (n <= 0) break
-				remaining -= n
-				yield new Uint8Array(readBuf.slice(0, n))
-			}
-		} else {
-			// Read until connection close
-			if (leftover.length > 0) yield leftover
-			const readBuf = new ArrayBuffer(65536)
-			for (;;) {
-				const n = await reader.read(readBuf, 0, 65536)
-				if (n <= 0) break
-				yield new Uint8Array(readBuf.slice(0, n))
-			}
-		}
-	} finally {
-		await reader.close()
-	}
-}
 
 /**
  * Fetch a resource from the network
@@ -450,20 +255,28 @@ export async function fetch(input, init = {}) {
 		: new Headers(init.headers || {})
 
 	let bodyBytes = null
+	let bodyIter = null
 	if (init.body !== undefined && init.body !== null) {
 		if (typeof init.body === 'string') {
 			bodyBytes = new TextEncoder().encode(init.body)
 			if (!headers.has('content-type')) {
 				headers.set('content-type', 'text/plain;charset=UTF-8')
 			}
+			headers.set('content-length', String(bodyBytes.byteLength))
 		} else if (init.body instanceof Uint8Array) {
 			bodyBytes = init.body
+			headers.set('content-length', String(bodyBytes.byteLength))
 		} else if (init.body instanceof ArrayBuffer) {
 			bodyBytes = new Uint8Array(init.body)
+			headers.set('content-length', String(bodyBytes.byteLength))
+		} else if (typeof init.body?.[Symbol.asyncIterator] === 'function'
+			|| typeof init.body?.[Symbol.iterator] === 'function') {
+			bodyIter = init.body
+			if (!headers.has('transfer-encoding'))
+				headers.set('transfer-encoding', 'chunked')
 		} else {
 			throw new TypeError('Unsupported body type')
 		}
-		headers.set('content-length', String(bodyBytes.byteLength))
 	}
 
 	let redirectCount = 0
@@ -493,7 +306,7 @@ export async function fetch(input, init = {}) {
 
 		let reader
 		try {
-			reader = await sendRequest(fd, host, isHttps, reqBytes, bodyBytes, signal)
+			reader = await sendRequest(fd, host, isHttps, reqBytes, bodyBytes, bodyIter, signal)
 		} catch (e) {
 			if (signal?.aborted) throw signal.reason
 			throw e instanceof TypeError ? e : new TypeError(`fetch failed: ${e.message}`)
