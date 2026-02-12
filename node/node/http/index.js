@@ -5,9 +5,55 @@
 
 import { EventEmitter } from 'node:events'
 import { createServer as createTcpServer, Socket } from 'node:net'
-import { parseRequestHead } from 'node:http/parse'
+import { readRequestHead, requestBodyStream, chunkedRequestBodyStream } from 'node:http/parse'
 
 const CRLF = '\r\n'
+
+/**
+ * Wrap a node:net Socket into the async reader interface used by HTTP parsing.
+ * Does NOT own the socket — caller manages lifecycle.
+ */
+function socketReader(socket) {
+	const pending = []
+	let waiter = null
+	let ended = false
+
+	socket.on('data', (chunk) => {
+		if (waiter) {
+			const resolve = waiter
+			waiter = null
+			resolve(chunk)
+		} else {
+			pending.push(chunk)
+		}
+	})
+	socket.on('end', () => {
+		ended = true
+		if (waiter) { const r = waiter; waiter = null; r(null) }
+	})
+	socket.on('error', () => {
+		ended = true
+		if (waiter) { const r = waiter; waiter = null; r(null) }
+	})
+
+	return {
+		async read(buf, off, len) {
+			let chunk
+			if (pending.length > 0) {
+				chunk = pending.shift()
+			} else if (ended) {
+				return 0
+			} else {
+				chunk = await new Promise(r => { waiter = r })
+				if (!chunk) return 0
+			}
+			const n = Math.min(chunk.length, len)
+			new Uint8Array(buf, off, n).set(chunk.subarray(0, n))
+			if (chunk.length > n) pending.unshift(chunk.subarray(n))
+			return n
+		},
+	}
+}
 
 /**
  * Incoming HTTP message (request on server, response on client)
@@ -187,11 +233,13 @@ export class ServerResponse extends EventEmitter {
  */
 const DEFAULT_MAX_HEADER_SIZE = 64 * 1024  // 64 KB
 const DEFAULT_MAX_BODY_SIZE = 1024 * 1024  // 1 MB
+const DEFAULT_MAX_HEADER_COUNT = 128
 
 export class HTTPServer extends EventEmitter {
 	#server
 	#maxHeaderSize
 	#maxBodySize
+	#maxHeaderCount
 
 	constructor(options, requestListener) {
 		super()
@@ -201,6 +249,7 @@ export class HTTPServer extends EventEmitter {
 		}
 		this.#maxHeaderSize = options?.maxHeaderSize ?? DEFAULT_MAX_HEADER_SIZE
 		this.#maxBodySize = options?.maxBodySize ?? DEFAULT_MAX_BODY_SIZE
+		this.#maxHeaderCount = options?.maxHeaderCount ?? DEFAULT_MAX_HEADER_COUNT
 		if (requestListener) {
 			this.on('request', requestListener)
 		}
@@ -209,91 +258,107 @@ export class HTTPServer extends EventEmitter {
 		this.#server.on('close', () => this.emit('close'))
 
 		this.#server.on('connection', (socket) => {
-			let buffer = new Uint8Array(0)
-
-			socket.on('data', (chunk) => {
-				// Accumulate data
-				const newBuf = new Uint8Array(buffer.length + chunk.length)
-				newBuf.set(buffer, 0)
-				newBuf.set(chunk, buffer.length)
-				buffer = newBuf
-
-				const parsed = parseRequestHead(buffer)
-				if (!parsed) {
-					if (buffer.length > this.#maxHeaderSize) {
-						const res = new ServerResponse(socket)
-						res.writeHead(431, { 'Connection': 'close' })
-						res.end('Request Header Fields Too Large')
-						socket.destroy()
-					}
-					return
-				}
-
-				const req = new IncomingMessage(socket)
-				req.method = parsed.method
-				req.url = parsed.url
-				req.httpVersion = parsed.httpVersion
-				req.headers = parsed.headers
-				req.rawHeaders = parsed.rawHeaders
-
-				const res = new ServerResponse(socket)
-
-				const contentLength = parseInt(parsed.headers['content-length'], 10) || 0
-				const bodyStart = parsed.headerEnd
-				const bodyData = buffer.subarray(bodyStart)
-
-				if (contentLength > this.#maxBodySize) {
-					const res = new ServerResponse(socket)
-					res.writeHead(413, { 'Connection': 'close' })
-					res.end('Payload Too Large')
-					socket.destroy()
-					return
-				}
-
-				if (contentLength === 0 || parsed.method === 'GET' || parsed.method === 'HEAD') {
-					req.complete = true
-					buffer = new Uint8Array(0)
-					this.emit('request', req, res)
-					queueMicrotask(() => req.emit('end'))
-				} else if (bodyData.length >= contentLength) {
-					const body = bodyData.subarray(0, contentLength)
-					req.complete = true
-					buffer = bodyData.subarray(contentLength)
-					this.emit('request', req, res)
-					queueMicrotask(() => {
-						req.emit('data', body)
-						req.emit('end')
-					})
-				} else {
-					// Need more body data
-					let received = bodyData.length
-					let bodyChunks = [bodyData]
-
-					this.emit('request', req, res)
-
-					if (bodyData.length > 0) {
-						queueMicrotask(() => req.emit('data', bodyData))
-					}
-
-					const origHandler = socket.listeners('data')[0]
-					socket.removeListener('data', origHandler)
-
-					const bodyHandler = (chunk) => {
-						received += chunk.length
-						req.emit('data', chunk)
-						if (received >= contentLength) {
-							req.complete = true
-							socket.removeListener('data', bodyHandler)
-							buffer = new Uint8Array(0)
-							req.emit('end')
-						}
-					}
-					socket.on('data', bodyHandler)
-				}
-			})
-
 			socket.on('error', () => {})
+			this.#handleConnection(socket)
 		})
+	}
+
+	async #handleConnection(socket) {
+		const reader = socketReader(socket)
+
+		let head
+		try {
+			head = await readRequestHead(reader, this.#maxHeaderSize)
+		} catch (err) {
+			if (err.code === 'ERR_HTTP_HEADER_TOO_LARGE') {
+				const res = new ServerResponse(socket)
+				res.writeHead(431, { 'Connection': 'close' })
+				res.end('Request Header Fields Too Large')
+			}
+			socket.destroy()
+			return
+		}
+		if (!head) { socket.destroy(); return }
+
+		// Header count limit
+		if (head.rawHeaders.length > this.#maxHeaderCount * 2) {
+			const res = new ServerResponse(socket)
+			res.writeHead(431, { 'Connection': 'close' })
+			res.end('Too Many Headers')
+			socket.destroy()
+			return
+		}
+
+		const req = new IncomingMessage(socket)
+		req.method = head.method
+		req.url = head.url
+		req.httpVersion = head.httpVersion
+		req.headers = head.headers
+		req.rawHeaders = head.rawHeaders
+
+		const res = new ServerResponse(socket)
+
+		const hasContentLength = 'content-length' in head.headers
+		const hasTransferEncoding = 'transfer-encoding' in head.headers
+		const isChunked = hasTransferEncoding &&
+			head.headers['transfer-encoding'].toLowerCase().includes('chunked')
+
+		// Reject conflicting framing headers (request smuggling prevention)
+		if (hasContentLength && hasTransferEncoding) {
+			res.writeHead(400, { 'Connection': 'close' })
+			res.end('Bad Request')
+			socket.destroy()
+			return
+		}
+
+		// Validate and parse Content-Length
+		let contentLength = 0
+		if (hasContentLength) {
+			const clValue = head.headers['content-length'].trim()
+			if (!/^\d+$/.test(clValue)) {
+				res.writeHead(400, { 'Connection': 'close' })
+				res.end('Bad Request')
+				socket.destroy()
+				return
+			}
+			contentLength = parseInt(clValue, 10)
+		}
+
+		if (!isChunked && contentLength > this.#maxBodySize) {
+			res.writeHead(413, { 'Connection': 'close' })
+			res.end('Payload Too Large')
+			socket.destroy()
+			return
+		}
+
+		const hasBody = isChunked ||
+			(contentLength > 0 && head.method !== 'GET' && head.method !== 'HEAD')
+
+		this.emit('request', req, res)
+
+		if (hasBody) {
+			const bodyIter = isChunked
+				? chunkedRequestBodyStream(reader, head.leftover)
+				: requestBodyStream(reader, head.leftover, contentLength)
+
+			// Pump body stream into EventEmitter data/end events
+			try {
+				let total = 0
+				for await (const chunk of bodyIter) {
+					total += chunk.length
+					if (total > this.#maxBodySize) {
+						socket.destroy()
+						return
+					}
+					req.emit('data', chunk)
+				}
+			} catch {}
+			req.complete = true
+			req.emit('end')
+		} else {
+			req.complete = true
+			queueMicrotask(() => req.emit('end'))
+		}
 	}
 
 	listen(port, host, backlog, callback) {

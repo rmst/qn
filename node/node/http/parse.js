@@ -211,8 +211,9 @@ export async function readResponseHead(reader) {
 /**
  * Read HTTP request headers from a reader ({ read(buf, off, len) }).
  * Returns { method, url, httpVersion, headers, rawHeaders, leftover } or null.
+ * Throws with code 'ERR_HTTP_HEADER_TOO_LARGE' if maxSize is exceeded.
  */
-export async function readRequestHead(reader) {
+export async function readRequestHead(reader, maxSize) {
 	const buf = new ArrayBuffer(65536)
 	let accumulated = new Uint8Array(0)
 
@@ -227,6 +228,12 @@ export async function readRequestHead(reader) {
 				rawHeaders: parsed.rawHeaders,
 				leftover: accumulated.subarray(parsed.headerEnd),
 			}
+		}
+
+		if (maxSize && accumulated.length > maxSize) {
+			const err = new Error('Request header fields too large')
+			err.code = 'ERR_HTTP_HEADER_TOO_LARGE'
+			throw err
 		}
 
 		const n = await reader.read(buf, 0, 65536)
@@ -273,23 +280,55 @@ export function requestBodyStream(reader, leftover, contentLength) {
 }
 
 /**
+ * Incrementally decode chunked transfer-encoded data from a reader,
+ * yielding each decoded chunk as it becomes available.
+ */
+async function* readChunkedBody(reader, buffer) {
+	const readBuf = new ArrayBuffer(65536)
+	while (true) {
+		let lineEnd = -1
+		for (let i = 0; i < buffer.length - 1; i++) {
+			if (buffer[i] === 0x0d && buffer[i + 1] === 0x0a) {
+				lineEnd = i
+				break
+			}
+		}
+		if (lineEnd === -1) {
+			const n = await reader.read(readBuf, 0, 65536)
+			if (n <= 0) return
+			const prev = buffer
+			buffer = new Uint8Array(prev.length + n)
+			buffer.set(prev, 0)
+			buffer.set(new Uint8Array(readBuf, 0, n), prev.length)
+			continue
+		}
+		const sizeLine = new TextDecoder().decode(buffer.subarray(0, lineEnd))
+		const chunkSize = parseInt(sizeLine.split(';')[0].trim(), 16)
+		if (isNaN(chunkSize) || chunkSize < 0) return
+		if (chunkSize === 0) return
+		const dataStart = lineEnd + 2
+		const needed = dataStart + chunkSize + 2
+		while (buffer.length < needed) {
+			const n = await reader.read(readBuf, 0, 65536)
+			if (n <= 0) return
+			const prev = buffer
+			buffer = new Uint8Array(prev.length + n)
+			buffer.set(prev, 0)
+			buffer.set(new Uint8Array(readBuf, 0, n), prev.length)
+		}
+		yield buffer.subarray(dataStart, dataStart + chunkSize)
+		buffer = buffer.slice(needed)
+	}
+}
+
+/**
  * Create an async iterable that reads a chunked request body.
  * Does NOT close the reader — suitable for server-side body reading.
  */
 export function chunkedRequestBodyStream(reader, leftover) {
 	return {
-		async *[Symbol.asyncIterator]() {
-			let buffer = leftover
-			const readBuf = new ArrayBuffer(65536)
-			while (!isChunkedComplete(buffer)) {
-				const n = await reader.read(readBuf, 0, 65536)
-				if (n <= 0) break
-				const prev = buffer
-				buffer = new Uint8Array(prev.length + n)
-				buffer.set(prev, 0)
-				buffer.set(new Uint8Array(readBuf, 0, n), prev.length)
-			}
-			yield decodeChunked(buffer)
+		[Symbol.asyncIterator]() {
+			return readChunkedBody(reader, leftover)[Symbol.asyncIterator]()
 		},
 	}
 }
@@ -318,17 +357,7 @@ export async function writeChunkedBody(writeFn, iterable) {
 export async function* bodyStream(reader, leftover, contentLength, isChunked) {
 	try {
 		if (isChunked) {
-			let buffer = leftover
-			const readBuf = new ArrayBuffer(65536)
-			while (!isChunkedComplete(buffer)) {
-				const n = await reader.read(readBuf, 0, 65536)
-				if (n <= 0) break
-				const prev = buffer
-				buffer = new Uint8Array(prev.length + n)
-				buffer.set(prev, 0)
-				buffer.set(new Uint8Array(readBuf, 0, n), prev.length)
-			}
-			yield decodeChunked(buffer)
+			yield* readChunkedBody(reader, leftover)
 		} else if (contentLength !== null) {
 			let remaining = contentLength
 			if (leftover.length > 0) {
