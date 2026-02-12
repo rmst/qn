@@ -315,6 +315,105 @@ export class Readable extends EventEmitter {
 	get destroyed() {
 		return this.#destroyed
 	}
+
+	/**
+	 * Convert a Web ReadableStream (or any object with getReader()) to a Node.js Readable.
+	 * @param {object} webStream - Object with getReader() method
+	 * @returns {Readable}
+	 */
+	static fromWeb(webStream, options) {
+		const readable = new Readable(null)
+		const reader = webStream.getReader()
+		async function pump() {
+			try {
+				while (true) {
+					const { value, done } = await reader.read()
+					if (done) {
+						readable.emit('end')
+						readable.emit('close')
+						break
+					}
+					readable.emit('data', Buffer.isBuffer(value) ? value : Buffer.from(value))
+				}
+			} catch (err) {
+				readable.emit('error', err)
+				readable.emit('close')
+			}
+		}
+		pump()
+		return readable
+	}
+
+	/**
+	 * Convert a Node.js Readable to an async-iterable object
+	 * compatible with qn's Response (which accepts async iterables).
+	 * @param {Readable} streamReadable - Node.js Readable stream
+	 * @returns {object} Async iterable with getReader()
+	 */
+	static toWeb(streamReadable) {
+		const stream = {
+			async *[Symbol.asyncIterator]() {
+				const chunks = []
+				let resolve
+				let done = false
+				let error = null
+
+				streamReadable.on('data', (chunk) => {
+					const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+					if (resolve) {
+						const r = resolve
+						resolve = null
+						r({ value: buf, done: false })
+					} else {
+						chunks.push(buf)
+					}
+				})
+				streamReadable.on('end', () => {
+					done = true
+					if (resolve) {
+						const r = resolve
+						resolve = null
+						r({ value: undefined, done: true })
+					}
+				})
+				streamReadable.on('error', (err) => {
+					error = err
+					done = true
+					if (resolve) {
+						const r = resolve
+						resolve = null
+						r({ value: undefined, done: true })
+					}
+				})
+
+				while (true) {
+					if (error) throw error
+					if (chunks.length > 0) {
+						yield chunks.shift()
+						continue
+					}
+					if (done) return
+					const result = await new Promise(r => { resolve = r })
+					if (result.done) return
+					yield result.value
+				}
+			},
+			getReader() {
+				const iter = this[Symbol.asyncIterator]()
+				return {
+					async read() {
+						const { value, done } = await iter.next()
+						return { value: done ? undefined : value, done }
+					},
+					releaseLock() {},
+					cancel() {
+						if (!streamReadable.destroyed) streamReadable.destroy()
+					},
+				}
+			}
+		}
+		return stream
+	}
 }
 
 /**

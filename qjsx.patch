@@ -1,4 +1,4 @@
-# qjsx.patch - Patches to QuickJS CLI for QJSXPATH module resolution
+# qjsx.patch - Patches to QuickJS CLI for NODE_PATH module resolution
 #
 # Target file: quickjs/qjs.c
 # Output: bin/<platform>/obj/qjsx.c -> compiled to qjsx binary
@@ -6,9 +6,9 @@
 #
 # Features added:
 #
-#   1. QJSXPATH module resolution
+#   1. NODE_PATH module resolution
 #      Custom module loader that supports:
-#      - QJSXPATH environment variable for bare import resolution
+#      - NODE_PATH environment variable for bare import resolution
 #      - .js extension and /index.js fallbacks (bundler mode)
 #      - Strict ESM resolution (node mode via QJSX_MODULE_RESOLUTION=node)
 #
@@ -18,10 +18,10 @@
 #
 #   3. Branding changes
 #      - Program name changed from "qjs" to "qjsx"
-#      - Help text updated to document QJSXPATH usage
+#      - Help text updated to document NODE_PATH usage
 #
---- quickjs/qjs.c	2025-10-08 10:58:22.940197863 +0000
-+++ bin/linux/obj/qjsx.c	2026-01-17 22:06:16.144952052 +0000
+--- quickjs/qjs.c	2026-02-12 11:07:12.787193339 +0000
++++ bin/linux/obj/qjsx.c	2026-02-12 13:13:53.481077712 +0000
 @@ -42,10 +42,40 @@
  
  #include "cutils.h"
@@ -36,7 +36,7 @@
 +    // Note: 'name' is already normalized by qjsx_module_normalizer
 +    // (colon-to-slash done, relative paths resolved, .js/.index.js stripped in bundler mode)
 +
-+    // Bare imports: try QJSXPATH resolution
++    // Bare imports: try NODE_PATH resolution
 +    if (name[0] != '.' && name[0] != '/') {
 +        char *path = resolve_qjsxpath(ctx, name);
 +        if (path) {
@@ -73,7 +73,7 @@
  void help(void)
  {
 -    printf("QuickJS version " CONFIG_VERSION "\n"
-+    printf("QJSX (QuickJS with QJSXPATH) version " CONFIG_VERSION "\n"
++    printf("QJSX (QuickJS with NODE_PATH) version " CONFIG_VERSION "\n"
             "usage: " PROG_NAME " [options] [file [args]]\n"
             "-h  --help         list options\n"
             "-e  --eval EXPR    evaluate EXPR\n"
@@ -84,9 +84,9 @@
 -           "-q  --quit         just instantiate the interpreter and quit\n");
 +           "-q  --quit         just instantiate the interpreter and quit\n"
 +           "\n"
-+           "QJSXPATH module resolution:\n"
-+           "  Set QJSXPATH environment variable for Node.js-style module resolution.\n"
-+           "  Example: QJSXPATH=./my_modules:./lib qjsx script.js\n");
++           "NODE_PATH module resolution:\n"
++           "  Set NODE_PATH environment variable for Node.js-style module resolution.\n"
++           "  Example: NODE_PATH=./my_modules:./lib qjsx script.js\n");
      exit(1);
  }
  

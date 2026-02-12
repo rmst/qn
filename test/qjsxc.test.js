@@ -5,7 +5,7 @@ import { test, $, QJSXC } from './util.js'
 
 describe('qjsxc compiler', () => {
 	describe('standalone compilation', () => {
-		test('compiles and runs with QJSXPATH imports', ({ dir }) => {
+		test('compiles and runs with NODE_PATH imports', ({ dir }) => {
 			mkdirSync(`${dir}/modules/math`, { recursive: true })
 			writeFileSync(`${dir}/modules/math/index.js`, `
 				export function add(a, b) { return a + b }
@@ -24,7 +24,7 @@ describe('qjsxc compiler', () => {
 				}))
 			`)
 
-			$`QJSXPATH=${dir}/modules ${QJSXC()} -o ${dir}/app ${dir}/app.js`
+			$`NODE_PATH=${dir}/modules ${QJSXC()} -o ${dir}/app ${dir}/app.js`
 			const output = $`${dir}/app`
 
 			assert.deepStrictEqual(JSON.parse(output.trim()), {
@@ -49,7 +49,7 @@ describe('qjsxc compiler', () => {
 	})
 
 	describe('dynamic script loading', () => {
-		test('compiled runtime loads external scripts with QJSXPATH', ({ dir }) => {
+		test('compiled runtime loads external scripts with NODE_PATH', ({ dir }) => {
 			writeFileSync(`${dir}/runtime.js`, `
 				import * as std from "std"
 				import * as os from "os"
@@ -71,7 +71,7 @@ describe('qjsxc compiler', () => {
 			`)
 
 			$`${QJSXC()} -o ${dir}/runtime ${dir}/runtime.js`
-			const output = $`QJSXPATH=${dir}/modules ${dir}/runtime ${dir}/external.js`
+			const output = $`NODE_PATH=${dir}/modules ${dir}/runtime ${dir}/external.js`
 
 			assert.deepStrictEqual(JSON.parse(output.trim()), { result: "Hello, dynamic" })
 		})

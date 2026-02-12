@@ -84,7 +84,7 @@ typedef struct {
 /* Class ID for SandboxedWorker */
 static JSClassID js_sandboxed_worker_class_id;
 
-/* Function to create new contexts (can be customized for QJSXPATH support) */
+/* Function to create new contexts (can be customized for NODE_PATH support) */
 static JSContext *(*sandbox_new_context_func)(JSRuntime *rt) = NULL;
 
 /* ========================================================================

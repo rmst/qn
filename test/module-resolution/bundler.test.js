@@ -52,22 +52,22 @@ describe('Bundler Mode (default)', () => {
 			import { value } from 'node:test';
 			console.log(value);
 		`)
-		const output = $`QJSXPATH=${dir} ${QJSX()} ${dir}/main.js`
+		const output = $`NODE_PATH=${dir} ${QJSX()} ${dir}/main.js`
 		assert.strictEqual(output, '42')
 	})
 
-	test('QJSXPATH bare imports', ({ dir }) => {
+	test('NODE_PATH bare imports', ({ dir }) => {
 		mkdirSync(`${dir}/modules`)
 		writeFileSync(`${dir}/modules/myutil.js`, `export const val = "bare import works";`)
 		writeFileSync(`${dir}/main.js`, `
 			import { val } from 'myutil';
 			console.log(val);
 		`)
-		const output = $`QJSXPATH=${dir}/modules ${QJSX()} ${dir}/main.js`
+		const output = $`NODE_PATH=${dir}/modules ${QJSX()} ${dir}/main.js`
 		assert.strictEqual(output, 'bare import works')
 	})
 
-	test('QJSXPATH multiple paths', ({ dir }) => {
+	test('NODE_PATH multiple paths', ({ dir }) => {
 		mkdirSync(`${dir}/lib1`)
 		mkdirSync(`${dir}/lib2`)
 		writeFileSync(`${dir}/lib1/foo.js`, `export const x = 1;`)
@@ -77,7 +77,7 @@ describe('Bundler Mode (default)', () => {
 			import { y } from 'bar';
 			console.log(x + y);
 		`)
-		const output = $`QJSXPATH=${dir}/lib1:${dir}/lib2 ${QJSX()} ${dir}/main.js`
+		const output = $`NODE_PATH=${dir}/lib1:${dir}/lib2 ${QJSX()} ${dir}/main.js`
 		assert.strictEqual(output, '3')
 	})
 
@@ -104,7 +104,7 @@ describe('Bundler Mode (default)', () => {
 			}
 			main();
 		`)
-		const output = $`QJSXPATH=${dir} ${QJSX()} ${dir}/main.js`
+		const output = $`NODE_PATH=${dir} ${QJSX()} ${dir}/main.js`
 		assert.strictEqual(output, 'from namespace')
 	})
 
@@ -144,6 +144,198 @@ describe('Bundler Mode (default)', () => {
 	})
 })
 
+describe('node_modules resolution', () => {
+	test('resolves via package.json exports', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/mypkg/dist`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/mypkg/package.json`, JSON.stringify({
+			name: "mypkg",
+			exports: { ".": { "import": "./dist/index.js" }, "./utils": { "import": "./dist/utils.js" } }
+		}))
+		writeFileSync(`${dir}/node_modules/mypkg/dist/index.js`, `export const hello = "from mypkg";`)
+		writeFileSync(`${dir}/node_modules/mypkg/dist/utils.js`, `export const greet = name => "hi " + name;`)
+		writeFileSync(`${dir}/main.js`, `
+			import { hello } from 'mypkg';
+			import { greet } from 'mypkg/utils';
+			console.log(hello, greet("world"));
+		`)
+		const output = $`${QJSX()} ${dir}/main.js`
+		assert.strictEqual(output, 'from mypkg hi world')
+	})
+
+	test('resolves via package.json main field', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/oldpkg/lib`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/oldpkg/package.json`, JSON.stringify({
+			name: "oldpkg", main: "./lib/main.js"
+		}))
+		writeFileSync(`${dir}/node_modules/oldpkg/lib/main.js`, `export const val = 42;`)
+		writeFileSync(`${dir}/main.js`, `
+			import { val } from 'oldpkg';
+			console.log(val);
+		`)
+		const output = $`${QJSX()} ${dir}/main.js`
+		assert.strictEqual(output, '42')
+	})
+
+	test('resolves scoped packages', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/@scope/pkg`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/@scope/pkg/package.json`, JSON.stringify({
+			name: "@scope/pkg", exports: { ".": "./index.js" }
+		}))
+		writeFileSync(`${dir}/node_modules/@scope/pkg/index.js`, `export const scoped = "works";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { scoped } from '@scope/pkg';
+			console.log(scoped);
+		`)
+		const output = $`${QJSX()} ${dir}/main.js`
+		assert.strictEqual(output, 'works')
+	})
+
+	test('walks up directory tree', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/uppkg`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/uppkg/index.js`, `export const found = "walked up";`)
+		mkdirSync(`${dir}/sub/deep`, { recursive: true })
+		writeFileSync(`${dir}/sub/deep/main.js`, `
+			import { found } from 'uppkg';
+			console.log(found);
+		`)
+		const output = $`${QJSX()} ${dir}/sub/deep/main.js`
+		assert.strictEqual(output, 'walked up')
+	})
+
+	test('NODE_PATH takes precedence over node_modules', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/dualpkg`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/dualpkg/index.js`, `export const src = "node_modules";`)
+		mkdirSync(`${dir}/mylibs`)
+		writeFileSync(`${dir}/mylibs/dualpkg.js`, `export const src = "NODE_PATH";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { src } from 'dualpkg';
+			console.log(src);
+		`)
+		const output = $`NODE_PATH=${dir}/mylibs ${QJSX()} ${dir}/main.js`
+		assert.strictEqual(output, 'NODE_PATH')
+	})
+
+	test('exports as direct string', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/simplepkg`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/simplepkg/package.json`, JSON.stringify({
+			name: "simplepkg", exports: "./entry.js"
+		}))
+		writeFileSync(`${dir}/node_modules/simplepkg/entry.js`, `export const v = "direct string";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { v } from 'simplepkg';
+			console.log(v);
+		`)
+		const output = $`${QJSX()} ${dir}/main.js`
+		assert.strictEqual(output, 'direct string')
+	})
+
+	test('exports with "default" condition fallback', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/defpkg/dist`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/defpkg/package.json`, JSON.stringify({
+			name: "defpkg", exports: { ".": { "default": "./dist/main.js" } }
+		}))
+		writeFileSync(`${dir}/node_modules/defpkg/dist/main.js`, `export const v = "from default";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { v } from 'defpkg';
+			console.log(v);
+		`)
+		const output = $`${QJSX()} ${dir}/main.js`
+		assert.strictEqual(output, 'from default')
+	})
+
+	test('package with no package.json falls back to index.js', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/nopkgjson`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/nopkgjson/index.js`, `export const v = "no pkg json";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { v } from 'nopkgjson';
+			console.log(v);
+		`)
+		const output = $`${QJSX()} ${dir}/main.js`
+		assert.strictEqual(output, 'no pkg json')
+	})
+
+	test('scoped package with subpath exports', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/@myorg/lib/dist`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/@myorg/lib/package.json`, JSON.stringify({
+			name: "@myorg/lib",
+			exports: { ".": "./dist/index.js", "./utils": "./dist/utils.js" }
+		}))
+		writeFileSync(`${dir}/node_modules/@myorg/lib/dist/index.js`, `export const root = "root";`)
+		writeFileSync(`${dir}/node_modules/@myorg/lib/dist/utils.js`, `export const util = "util";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { root } from '@myorg/lib';
+			import { util } from '@myorg/lib/utils';
+			console.log(root, util);
+		`)
+		const output = $`${QJSX()} ${dir}/main.js`
+		assert.strictEqual(output, 'root util')
+	})
+
+	test('unmatched subpath falls back to direct file resolution', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/loosepkg`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/loosepkg/package.json`, JSON.stringify({
+			name: "loosepkg",
+			exports: { ".": "./index.js" }
+		}))
+		writeFileSync(`${dir}/node_modules/loosepkg/index.js`, `export const v = 1;`)
+		writeFileSync(`${dir}/node_modules/loosepkg/extra.js`, `export const v = 2;`)
+		writeFileSync(`${dir}/main.js`, `
+			import { v } from 'loosepkg/extra';
+			console.log(v);
+		`)
+		const output = $`${QJSX()} ${dir}/main.js`
+		assert.strictEqual(output, '2')
+	})
+
+	test('unsupported exports patterns are silently skipped', ({ dir }) => {
+		// Array targets and wildcard patterns are not supported;
+		// resolution falls back to index.js
+		mkdirSync(`${dir}/node_modules/fancypkg`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/fancypkg/package.json`, JSON.stringify({
+			name: "fancypkg",
+			exports: { ".": ["./not-supported.js"], "./*": "./src/*.js" }
+		}))
+		writeFileSync(`${dir}/node_modules/fancypkg/index.js`, `export const v = "fallback";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { v } from 'fancypkg';
+			console.log(v);
+		`)
+		const output = $`${QJSX()} ${dir}/main.js`
+		assert.strictEqual(output, 'fallback')
+	})
+
+	test('malformed package.json is gracefully ignored', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/badpkg`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/badpkg/package.json`, `{not valid json!!!`)
+		writeFileSync(`${dir}/node_modules/badpkg/index.js`, `export const v = "survived";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { v } from 'badpkg';
+			console.log(v);
+		`)
+		const output = $`${QJSX()} ${dir}/main.js`
+		assert.strictEqual(output, 'survived')
+	})
+
+	test('nested node_modules (dependency of dependency)', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/outer`, { recursive: true })
+		mkdirSync(`${dir}/node_modules/outer/node_modules/inner`, { recursive: true })
+		mkdirSync(`${dir}/node_modules/inner`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/inner/index.js`, `export const v = "top-level";`)
+		writeFileSync(`${dir}/node_modules/outer/node_modules/inner/index.js`, `export const v = "nested";`)
+		writeFileSync(`${dir}/node_modules/outer/index.js`, `
+			import { v } from 'inner';
+			export const result = v;
+		`)
+		writeFileSync(`${dir}/main.js`, `
+			import { result } from 'outer';
+			console.log(result);
+		`)
+		const output = $`${QJSX()} ${dir}/main.js`
+		assert.strictEqual(output, 'nested')
+	})
+
+})
+
 describe('Bundler Mode Compilation', () => {
 	test('colon-to-slash in compiled binary', ({ dir }) => {
 		mkdirSync(`${dir}/node`)
@@ -152,7 +344,7 @@ describe('Bundler Mode Compilation', () => {
 			import { greet } from 'node:mymod';
 			console.log(greet());
 		`)
-		$`QJSXPATH=${dir} ${QJSXC()} -o ${dir}/app ${dir}/main.js`
+		$`NODE_PATH=${dir} ${QJSXC()} -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, 'hello')
 	})
@@ -167,7 +359,7 @@ describe('Bundler Mode Compilation', () => {
 			}
 			main();
 		`)
-		$`QJSXPATH=${dir} ${QJSXC()} -D mylibs:dynamic -o ${dir}/app ${dir}/main.js`
+		$`NODE_PATH=${dir} ${QJSXC()} -D mylibs:dynamic -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, '99')
 	})
@@ -184,14 +376,14 @@ describe('Bundler Mode Compilation', () => {
 		assert.strictEqual(output, '42')
 	})
 
-	test('QJSXPATH bare imports in compiled binary', ({ dir }) => {
+	test('NODE_PATH bare imports in compiled binary', ({ dir }) => {
 		mkdirSync(`${dir}/modules`)
 		writeFileSync(`${dir}/modules/myutil.js`, `export const val = "bare import works";`)
 		writeFileSync(`${dir}/main.js`, `
 			import { val } from 'myutil';
 			console.log(val);
 		`)
-		$`QJSXPATH=${dir}/modules ${QJSXC()} -o ${dir}/app ${dir}/main.js`
+		$`NODE_PATH=${dir}/modules ${QJSXC()} -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, 'bare import works')
 	})

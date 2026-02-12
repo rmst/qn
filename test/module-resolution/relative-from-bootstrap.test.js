@@ -82,7 +82,7 @@ describe('Relative path resolution from qn bootstrap', () => {
 
 	test('bare path (no ./) falls back to filesystem', ({ dir }) => {
 		writeFileSync(`${dir}/script.js`, `console.log('bare success');`)
-		// Bare imports first try QJSXPATH, then fall back to filesystem
+		// Bare imports first try NODE_PATH, then fall back to filesystem
 		// This is qn-specific behavior (different from Node.js ESM which requires ./)
 		const result = exec(`${QN()} script.js`, { cwd: dir })
 		// Should succeed because loader falls back to trying the path in cwd

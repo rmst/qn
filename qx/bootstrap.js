@@ -86,7 +86,7 @@ if (scriptArgs[1] === '-e' || scriptArgs[1] === '--eval') {
  * Resolve a script path to an absolute path.
  * - Relative paths (./ or ../) are resolved against cwd
  * - Absolute paths are returned as-is
- * - Bare paths are returned as-is for QJSXPATH resolution
+ * - Bare paths are returned as-is for NODE_PATH / node_modules resolution
  */
 function resolveScriptPath(path) {
 	if (!path || path.startsWith('/')) return path

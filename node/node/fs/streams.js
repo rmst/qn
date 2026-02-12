@@ -1,0 +1,255 @@
+import * as os from 'os'
+import * as std from 'std'
+import { Buffer } from 'node:buffer'
+import { EventEmitter } from 'node:events'
+
+/**
+ * Readable stream for reading from a file path.
+ * Supports start/end byte offsets for range reads.
+ */
+export class ReadStream extends EventEmitter {
+	#fd = null
+	#path
+	#start
+	#end
+	#pos
+	#flowing = false
+	#ended = false
+	#destroyed = false
+	#readSize = 65536
+	#paused = true
+
+	constructor(path, options = {}) {
+		super()
+		this.#path = path
+		this.#start = options.start ?? 0
+		this.#end = options.end ?? Infinity
+		this.#pos = this.#start
+		this.path = path
+
+		// Open the file
+		try {
+			this.#fd = os.open(path, os.O_RDONLY)
+			if (this.#fd < 0) {
+				throw new Error(`Failed to open file: ${path}`)
+			}
+		} catch (e) {
+			// Defer error to next tick
+			os.setTimeout(() => {
+				this.emit('error', e instanceof Error ? e : new Error(String(e)))
+			}, 0)
+			return
+		}
+
+		// Seek to start position
+		if (this.#start > 0) {
+			os.seek(this.#fd, this.#start, os.SEEK_SET)
+		}
+
+		// Defer 'open' and start reading on next tick
+		os.setTimeout(() => {
+			this.emit('open', this.#fd)
+			if (!this.#destroyed) {
+				this.#startReading()
+			}
+		}, 0)
+	}
+
+	#startReading() {
+		this.#paused = false
+		this.#readChunk()
+	}
+
+	#readChunk() {
+		if (this.#destroyed || this.#ended || this.#paused) return
+
+		const remaining = this.#end === Infinity ? this.#readSize : Math.min(this.#readSize, this.#end - this.#pos + 1)
+		if (remaining <= 0) {
+			this.#finish()
+			return
+		}
+
+		const buf = new ArrayBuffer(remaining)
+		let n
+		try {
+			n = os.read(this.#fd, buf, 0, remaining)
+		} catch (e) {
+			this.emit('error', e instanceof Error ? e : new Error(String(e)))
+			this.destroy()
+			return
+		}
+
+		if (n > 0) {
+			this.#pos += n
+			const chunk = Buffer.from(buf, 0, n)
+			this.emit('data', chunk)
+			// Schedule next read
+			if (!this.#paused && !this.#destroyed) {
+				os.setTimeout(() => this.#readChunk(), 0)
+			}
+		} else {
+			this.#finish()
+		}
+	}
+
+	#finish() {
+		if (this.#ended) return
+		this.#ended = true
+		this.emit('end')
+		this.destroy()
+	}
+
+	pause() {
+		this.#paused = true
+		return this
+	}
+
+	resume() {
+		if (this.#paused) {
+			this.#paused = false
+			if (!this.#ended && !this.#destroyed) {
+				this.#readChunk()
+			}
+		}
+		return this
+	}
+
+	destroy(error) {
+		if (this.#destroyed) return this
+		this.#destroyed = true
+		if (this.#fd !== null) {
+			try { os.close(this.#fd) } catch {}
+			this.#fd = null
+		}
+		if (error) {
+			this.emit('error', error)
+		}
+		this.emit('close')
+		return this
+	}
+
+	get destroyed() { return this.#destroyed }
+	get readableEnded() { return this.#ended }
+}
+
+/**
+ * Writable stream for writing to a file path.
+ */
+export class WriteStream extends EventEmitter {
+	#fd = null
+	#path
+	#destroyed = false
+	#finished = false
+	#ending = false
+	bytesWritten = 0
+
+	constructor(path, options = {}) {
+		super()
+		this.#path = path
+		this.path = path
+
+		const flags = options.flags === 'a' ? (os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+			: (os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+
+		try {
+			this.#fd = os.open(path, flags, options.mode ?? 0o666)
+			if (this.#fd < 0) {
+				throw new Error(`Failed to open file for writing: ${path}`)
+			}
+		} catch (e) {
+			os.setTimeout(() => {
+				this.emit('error', e instanceof Error ? e : new Error(String(e)))
+			}, 0)
+			return
+		}
+
+		os.setTimeout(() => {
+			this.emit('open', this.#fd)
+		}, 0)
+	}
+
+	write(chunk, encoding, callback) {
+		if (typeof encoding === 'function') {
+			callback = encoding
+			encoding = undefined
+		}
+		if (this.#destroyed || this.#ending) {
+			const err = new Error('write after end')
+			if (callback) callback(err)
+			return false
+		}
+
+		let bytes
+		if (typeof chunk === 'string') {
+			bytes = new Uint8Array(std._encodeUtf8(chunk))
+		} else if (chunk instanceof Uint8Array) {
+			bytes = chunk
+		} else if (chunk instanceof ArrayBuffer) {
+			bytes = new Uint8Array(chunk)
+		} else if (ArrayBuffer.isView(chunk)) {
+			bytes = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+		} else {
+			bytes = new Uint8Array(std._encodeUtf8(String(chunk)))
+		}
+
+		try {
+			const written = os.write(this.#fd, bytes.buffer, bytes.byteOffset, bytes.byteLength)
+			this.bytesWritten += written
+			if (callback) callback(null)
+			return true
+		} catch (e) {
+			const err = e instanceof Error ? e : new Error(String(e))
+			if (callback) callback(err)
+			this.emit('error', err)
+			return false
+		}
+	}
+
+	end(chunk, encoding, callback) {
+		if (typeof chunk === 'function') {
+			callback = chunk
+			chunk = undefined
+		} else if (typeof encoding === 'function') {
+			callback = encoding
+			encoding = undefined
+		}
+
+		if (chunk !== undefined && chunk !== null) {
+			this.write(chunk)
+		}
+
+		this.#ending = true
+		if (callback) this.once('finish', callback)
+
+		os.setTimeout(() => {
+			if (!this.#finished) {
+				this.#finished = true
+				this.emit('finish')
+				this.destroy()
+			}
+		}, 0)
+	}
+
+	destroy(error) {
+		if (this.#destroyed) return this
+		this.#destroyed = true
+		if (this.#fd !== null) {
+			try { os.close(this.#fd) } catch {}
+			this.#fd = null
+		}
+		if (error) this.emit('error', error)
+		this.emit('close')
+		return this
+	}
+
+	get destroyed() { return this.#destroyed }
+	get writableFinished() { return this.#finished }
+}
+
+export function createReadStream(path, options) {
+	return new ReadStream(path, options)
+}
+
+export function createWriteStream(path, options) {
+	return new WriteStream(path, options)
+}
