@@ -22,13 +22,12 @@ import * as os from 'os'
 import * as tls from 'node:tls'
 import { existsSync } from 'node:fs'
 import {
-	buildRequest, readResponseHead, readRequestHead, bodyStream,
-	requestBodyStream, chunkedRequestBodyStream, writeChunkedBody,
+	buildRequest, readResponseHead, bodyStream,
+	writeChunkedBody, readRequest, writeResponse,
 	concatChunks,
 } from 'node:http/parse'
 import { Headers } from 'node:fetch/Headers'
 import { Response } from 'node:fetch/Response'
-import { Request } from 'node:fetch/Request'
 import { SocksProxy } from './wireguard-socks.js'
 
 const SYSTEM_CA_PATHS = [
@@ -701,58 +700,12 @@ export class TunnelHttpServer {
 	async #handleConnection(conn) {
 		try {
 			const reader = tunnelReader(conn, null)
-			const head = await readRequestHead(reader)
-			if (!head) { conn.close(); return }
-
-			const host = head.headers['host'] || 'localhost'
-			const url = `http://${host}${head.url}`
-			const contentLength = parseInt(head.headers['content-length'], 10) || 0
-			const te = head.headers['transfer-encoding']
-			const isChunked = te && te.toLowerCase().includes('chunked')
-
-			let body = null
-			if (head.method !== 'GET' && head.method !== 'HEAD') {
-				if (isChunked) {
-					body = chunkedRequestBodyStream(reader, head.leftover)
-				} else if (contentLength > 0) {
-					body = requestBodyStream(reader, head.leftover, contentLength)
-				}
-			}
-
-			const request = new Request(url, {
-				method: head.method,
-				headers: head.headers,
-				body,
-			})
+			const request = await readRequest(reader)
+			if (!request) { conn.close(); return }
 
 			const response = await this.#handler(request)
 
-			const status = response.status || 200
-			const statusText = response.statusText || 'OK'
-			const hasContentLength = response.headers.has('content-length')
-
-			// If the response has a body stream and no content-length, use chunked TE
-			const useChunked = response.body && !hasContentLength
-
-			let respHead = `HTTP/1.1 ${status} ${statusText}\r\n`
-			for (const [k, v] of response.headers) {
-				respHead += `${k}: ${v}\r\n`
-			}
-			if (useChunked)
-				respHead += 'transfer-encoding: chunked\r\n'
-			respHead += 'connection: close\r\n\r\n'
-			await conn.write(new TextEncoder().encode(respHead))
-
-			if (response.body) {
-				if (useChunked) {
-					await writeChunkedBody(data => conn.write(data), response.body)
-				} else {
-					for await (const chunk of response.body) {
-						const data = typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk
-						await conn.write(data)
-					}
-				}
-			}
+			await writeResponse(data => conn.write(data), response)
 		} catch (err) {
 			if (this.#onError) this.#onError(err)
 		} finally {

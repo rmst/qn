@@ -6,6 +6,7 @@
  */
 
 import { Headers } from 'node:fetch/Headers'
+import { Request } from 'node:fetch/Request'
 
 export function concatChunks(chunks) {
 	if (chunks.length === 0) return new Uint8Array(0)
@@ -353,5 +354,71 @@ export async function* bodyStream(reader, leftover, contentLength, isChunked) {
 		}
 	} finally {
 		await reader.close()
+	}
+}
+
+/**
+ * Read an HTTP request from a reader and return a Web standard Request object.
+ * Returns null if the connection closed before headers were complete.
+ *
+ * @param {{ read(buf, off, len): Promise<number> }} reader
+ * @returns {Promise<Request|null>}
+ */
+export async function readRequest(reader) {
+	const head = await readRequestHead(reader)
+	if (!head) return null
+
+	const host = head.headers['host'] || 'localhost'
+	const url = `http://${host}${head.url}`
+	const contentLength = parseInt(head.headers['content-length'], 10) || 0
+	const te = head.headers['transfer-encoding']
+	const isChunked = te && te.toLowerCase().includes('chunked')
+
+	let body = null
+	if (head.method !== 'GET' && head.method !== 'HEAD') {
+		if (isChunked) {
+			body = chunkedRequestBodyStream(reader, head.leftover)
+		} else if (contentLength > 0) {
+			body = requestBodyStream(reader, head.leftover, contentLength)
+		}
+	}
+
+	return new Request(url, {
+		method: head.method,
+		headers: head.headers,
+		body,
+	})
+}
+
+/**
+ * Write a Web standard Response to a write function.
+ *
+ * @param {(data: Uint8Array) => Promise<void>} writeFn
+ * @param {Response} response
+ */
+export async function writeResponse(writeFn, response) {
+	const status = response.status || 200
+	const statusText = response.statusText || 'OK'
+	const hasContentLength = response.headers.has('content-length')
+	const useChunked = response.body && !hasContentLength
+
+	let head = `HTTP/1.1 ${status} ${statusText}\r\n`
+	for (const [k, v] of response.headers) {
+		head += `${k}: ${v}\r\n`
+	}
+	if (useChunked)
+		head += 'transfer-encoding: chunked\r\n'
+	head += 'connection: close\r\n\r\n'
+	await writeFn(new TextEncoder().encode(head))
+
+	if (response.body) {
+		if (useChunked) {
+			await writeChunkedBody(writeFn, response.body)
+		} else {
+			for await (const chunk of response.body) {
+				const data = typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk
+				await writeFn(data)
+			}
+		}
 	}
 }
