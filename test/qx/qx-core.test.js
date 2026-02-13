@@ -468,11 +468,15 @@ describe('qx timeout', () => {
 		const dir = mktempdir()
 		try {
 			const pidFile = `${dir}/child.pid`
-			// Start a background process, write its PID, then exit without awaiting
+			// Start a background process, write its PID, then exit via process.exit()
+			const start = Date.now()
 			runQx(`
-				const p = $.quiet\`sh -c "echo \\$\\$ > ${pidFile}; sleep 60"\`
+				const p = $.quiet\`sh -c "echo \\$\\$ > ${pidFile}; sleep 5"\`
 				await new Promise(r => setTimeout(r, 100))  // Let it start and write PID
+				process.exit(0)
 			`, dir)
+			const elapsed = Date.now() - start
+			assert.ok(elapsed < 2000, `qx should exit promptly, took ${elapsed}ms`)
 
 			// Read the PID and check if it's still running
 			const pid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10)

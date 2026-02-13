@@ -69,6 +69,10 @@ process.on('exit', () => {
 		for (const pgid of activeProcessGroups) {
 			try { os.kill(-pgid, signals.SIGKILL) } catch {}
 		}
+		// Reap killed children to avoid leaving zombies
+		for (const pgid of activeProcessGroups) {
+			try { os.waitpid(pgid, 0) } catch {}
+		}
 	}
 })
 
