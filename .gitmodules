@@ -8,6 +8,3 @@
 [submodule "vendor/lwip"]
 	path = vendor/lwip
 	url = https://github.com/lwip-tcpip/lwip.git
-[submodule "vendor/wireguard-lwip"]
-	path = vendor/wireguard-lwip
-	url = https://github.com/smartalock/wireguard-lwip.git
