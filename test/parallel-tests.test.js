@@ -163,25 +163,28 @@ describe('qn --test parallel execution', () => {
 		}
 	})
 
-	testQnOnly('preserves file order in output', async ({ bin, dir }) => {
-		for (const name of ['z', 'a', 'm']) {
-			writeFileSync(join(dir, `${name}.test.js`), `
-				import { describe, test } from 'node:test'
-				describe('suite-${name}', () => {
-					test('test-${name}', () => {})
-				})
-			`)
-		}
+	testQnOnly('prints output incrementally in completion order', async ({ bin, dir }) => {
+		// fast file should appear before slow file in output
+		writeFileSync(join(dir, 'slow.test.js'), `
+			import { describe, test } from 'node:test'
+			describe('suite-slow', () => {
+				test('slow', async () => { await new Promise(r => setTimeout(r, 200)) })
+			})
+		`)
+		writeFileSync(join(dir, 'fast.test.js'), `
+			import { describe, test } from 'node:test'
+			describe('suite-fast', () => {
+				test('fast', () => {})
+			})
+		`)
 
-		// Specify files in explicit order
+		// Slow listed first, fast second — but fast should print first
 		const output = await execAsync(bin, [
-			'--test', 'z.test.js', 'a.test.js', 'm.test.js'
+			'--test', 'slow.test.js', 'fast.test.js'
 		], { cwd: dir })
-		const zIdx = output.indexOf('suite-z')
-		const aIdx = output.indexOf('suite-a')
-		const mIdx = output.indexOf('suite-m')
-		assert.ok(zIdx < aIdx, 'z should appear before a')
-		assert.ok(aIdx < mIdx, 'a should appear before m')
+		const slowIdx = output.indexOf('suite-slow')
+		const fastIdx = output.indexOf('suite-fast')
+		assert.ok(fastIdx < slowIdx, 'fast file should appear before slow file')
 	})
 
 	testQnOnly('handles test file that crashes', async ({ bin, dir }) => {

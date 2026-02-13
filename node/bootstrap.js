@@ -63,14 +63,44 @@ const GREEN = '\x1b[32m'
 
 /**
  * Run multiple test files in parallel via child processes.
- * Each file runs in a separate qn process. Results are buffered
- * and printed in file order with a unified summary.
+ * Each file runs in a separate qn process. Output is printed
+ * incrementally in completion order, like node --test.
  */
 async function runTestsParallel(testFiles, concurrency) {
 	const { spawn } = await import('node:child_process')
 	const qnBin = scriptArgs[0]
+	const [cwd] = os.getcwd()
 
 	if (concurrency <= 0) concurrency = getCpuCount()
+
+	const totals = { tests: 0, suites: 0, pass: 0, fail: 0, skip: 0, todo: 0 }
+	const allFailures = []
+
+	function printFileResult(r) {
+		const relPath = r.file.startsWith(cwd + '/') ? r.file.substring(cwd.length + 1) : r.file
+		const fileStatus = r.code === 0 ? `${GREEN}✔${RESET}` : `${RED}✖${RESET}`
+		std.out.puts(`${fileStatus} ${BOLD}${relPath}${RESET}\n`)
+
+		if (r.stdout) std.out.puts(r.stdout + '\n')
+		if (r.stderr) std.err.puts(r.stderr + '\n')
+		std.out.flush()
+
+		if (r.result) {
+			totals.tests += r.result.tests
+			totals.suites += r.result.suites
+			totals.pass += r.result.pass
+			totals.fail += r.result.fail
+			totals.skip += r.result.skip
+			totals.todo += r.result.todo
+			if (r.result.failures) {
+				for (const f of r.result.failures) allFailures.push(f)
+			}
+		} else if (r.code !== 0) {
+			totals.fail++
+			totals.tests++
+			allFailures.push({ name: relPath, message: `Process exited with code ${r.code}` })
+		}
+	}
 
 	function runFile(filePath) {
 		return new Promise((resolve, reject) => {
@@ -86,7 +116,6 @@ async function runTestsParallel(testFiles, concurrency) {
 			child.stderr.on('data', d => stderr += d)
 			child.on('error', reject)
 			child.on('close', (code) => {
-				// Parse JSON result from stderr
 				let result = null
 				const marker = 'QN_TEST_RESULT:'
 				const stderrLines = stderr.split('\n')
@@ -98,24 +127,25 @@ async function runTestsParallel(testFiles, concurrency) {
 						cleanStderr.push(line)
 					}
 				}
-				resolve({
+				const r = {
 					stdout: stdout.trimEnd(),
 					stderr: cleanStderr.join('\n'),
 					code,
 					result,
 					file: filePath,
-				})
+				}
+				printFileResult(r)
+				resolve(r)
 			})
 		})
 	}
 
-	const fileResults = new Array(testFiles.length)
 	let nextIndex = 0
 
 	async function worker() {
 		while (nextIndex < testFiles.length) {
 			const index = nextIndex++
-			fileResults[index] = await runFile(testFiles[index])
+			await runFile(testFiles[index])
 		}
 	}
 
@@ -123,39 +153,6 @@ async function runTestsParallel(testFiles, concurrency) {
 	const workerCount = Math.min(concurrency, testFiles.length)
 	await Promise.all(Array.from({ length: workerCount }, () => worker()))
 	const totalDuration = performance.now() - startTime
-
-	// Compute relative paths from cwd for cleaner output
-	const [cwd] = os.getcwd()
-
-	// Print results in file order and aggregate totals
-	const totals = { tests: 0, suites: 0, pass: 0, fail: 0, skip: 0, todo: 0 }
-	const allFailures = []
-
-	for (const r of fileResults) {
-		const relPath = r.file.startsWith(cwd + '/') ? r.file.substring(cwd.length + 1) : r.file
-		const fileStatus = r.code === 0 ? `${GREEN}✔${RESET}` : `${RED}✖${RESET}`
-		std.out.puts(`${fileStatus} ${BOLD}${relPath}${RESET}\n`)
-
-		if (r.stdout) std.out.puts(r.stdout + '\n')
-		if (r.stderr) std.err.puts(r.stderr + '\n')
-
-		if (r.result) {
-			totals.tests += r.result.tests
-			totals.suites += r.result.suites
-			totals.pass += r.result.pass
-			totals.fail += r.result.fail
-			totals.skip += r.result.skip
-			totals.todo += r.result.todo
-			if (r.result.failures) {
-				for (const f of r.result.failures) allFailures.push(f)
-			}
-		} else if (r.code !== 0) {
-			// Process crashed without producing results
-			totals.fail++
-			totals.tests++
-			allFailures.push({ name: relPath, message: `Process exited with code ${r.code}` })
-		}
-	}
 
 	// Print aggregate summary
 	std.out.puts(`\n`)
