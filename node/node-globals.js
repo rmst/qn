@@ -35,12 +35,30 @@ globalThis.setTimeout = (fn, delay, ...args) => {
 
 globalThis.clearTimeout = os.clearTimeout
 
-globalThis.setInterval = () => {
-	throw new NodeCompatibilityError('setInterval is not supported')
+const _intervals = new Map()
+let _intervalId = 1
+
+globalThis.setInterval = (fn, delay, ...args) => {
+	if (args.length > 0)
+		throw new NodeCompatibilityError('setInterval does not support passing arguments to callback. Use an arrow function instead.')
+	const id = _intervalId++
+	const tick = () => {
+		if (!_intervals.has(id)) return
+		try { fn() } catch (e) { console.error(e) }
+		if (_intervals.has(id))
+			_intervals.set(id, os.setTimeout(tick, delay))
+	}
+	_intervals.set(id, os.setTimeout(tick, delay))
+	return { ref() {}, unref() {}, [Symbol.toPrimitive]() { return id } }
 }
 
-globalThis.clearInterval = () => {
-	throw new NodeCompatibilityError('clearInterval is not supported')
+globalThis.clearInterval = (handle) => {
+	const id = typeof handle === 'object' ? +handle : handle
+	const timer = _intervals.get(id)
+	if (timer !== undefined) {
+		os.clearTimeout(timer)
+		_intervals.delete(id)
+	}
 }
 
 // queueMicrotask (Web standard, also in Node.js)
