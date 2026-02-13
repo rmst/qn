@@ -61,6 +61,79 @@ globalThis.clearInterval = (handle) => {
 	}
 }
 
+// ReadableStream (WHATWG Streams API subset)
+globalThis.ReadableStream = class ReadableStream {
+	constructor(underlyingSource = {}) {
+		this._controller = { _queue: [], _closed: false, _errored: null, _resolve: null }
+		const controller = {
+			enqueue: (chunk) => {
+				if (this._controller._resolve) {
+					const resolve = this._controller._resolve
+					this._controller._resolve = null
+					resolve({ value: chunk, done: false })
+				} else {
+					this._controller._queue.push(chunk)
+				}
+			},
+			close: () => {
+				this._controller._closed = true
+				if (this._controller._resolve) {
+					const resolve = this._controller._resolve
+					this._controller._resolve = null
+					resolve({ value: undefined, done: true })
+				}
+			},
+			error: (err) => {
+				this._controller._errored = err
+				if (this._controller._resolve) {
+					const resolve = this._controller._resolve
+					this._controller._resolve = null
+					// reject via a stored reject
+					if (this._controller._reject) {
+						this._controller._reject(err)
+						this._controller._reject = null
+					}
+				}
+			},
+		}
+		this._cancel = underlyingSource.cancel?.bind(underlyingSource)
+		if (underlyingSource.start) underlyingSource.start(controller)
+	}
+
+	getReader() {
+		const ctrl = this._controller
+		return {
+			read() {
+				if (ctrl._queue.length > 0)
+					return Promise.resolve({ value: ctrl._queue.shift(), done: false })
+				if (ctrl._closed)
+					return Promise.resolve({ value: undefined, done: true })
+				if (ctrl._errored)
+					return Promise.reject(ctrl._errored)
+				return new Promise((resolve, reject) => {
+					ctrl._resolve = resolve
+					ctrl._reject = reject
+				})
+			},
+			releaseLock() {},
+			cancel() {},
+		}
+	}
+
+	async *[Symbol.asyncIterator]() {
+		const reader = this.getReader()
+		try {
+			for (;;) {
+				const { value, done } = await reader.read()
+				if (done) return
+				yield value
+			}
+		} finally {
+			reader.releaseLock()
+		}
+	}
+}
+
 // queueMicrotask (Web standard, also in Node.js)
 // QuickJS doesn't have a separate microtask queue, but setTimeout(fn, 0)
 // integrates with the event loop and fires before the next I/O poll.
