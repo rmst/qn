@@ -79,7 +79,7 @@ export function serve(optionsOrHandler, handlerOrOptions) {
 		throw new TypeError('serve: handler must be a function')
 
 	const port = options.port ?? 0
-	const hostname = options.hostname ?? '0.0.0.0'
+	const hostname = options.hostname ?? '127.0.0.1'
 	const onError = options.onError || null
 	const headerTimeout = options.headerTimeout ?? DEFAULT_HEADER_TIMEOUT
 
