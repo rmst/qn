@@ -6,6 +6,18 @@ import { chmod as native_chmod, chown as native_chown, lchown as native_lchown }
 // Re-export glob functions from separate module
 export { globSync, glob } from './glob.js';
 
+const ERRNO_CODES = { 1: 'EPERM', 2: 'ENOENT', 13: 'EACCES', 17: 'EEXIST', 20: 'ENOTDIR', 21: 'EISDIR', 28: 'ENOSPC' }
+
+function throwFileError(path, syscall) {
+	const [, errno] = os.stat(path)
+	const code = ERRNO_CODES[errno] || 'EIO'
+	const err = new Error(`${code}: ${syscall} '${path}'`)
+	err.code = code
+	err.path = path
+	err.syscall = syscall
+	throw err
+}
+
 
 /**
  * Dirent class for directory entries (used by readdirSync with withFileTypes)
@@ -60,9 +72,7 @@ export const writeFileSync = (path, data, options) => {
   const isBinary = data instanceof ArrayBuffer || ArrayBuffer.isView(data);
 
   const file = std.open(path, flag + (isBinary ? 'b' : ''));
-  if (!file) {
-    throw new Error(`Failed to open file: ${path}`);
-  }
+  if (!file) throwFileError(path, 'open')
   try {
     if (isBinary) {
       const buffer = data instanceof ArrayBuffer ? data : data.buffer;
@@ -90,9 +100,7 @@ export const appendFileSync = (path, data, options) => {
   const isBinary = data instanceof ArrayBuffer || ArrayBuffer.isView(data);
 
   const file = std.open(path, 'a' + (isBinary ? 'b' : ''));
-  if (!file) {
-    throw new Error(`Failed to open file: ${path}`);
-  }
+  if (!file) throwFileError(path, 'open')
   try {
     if (isBinary) {
       const buffer = data instanceof ArrayBuffer ? data : data.buffer;
@@ -122,7 +130,7 @@ export const readFileSync = (path, options) => {
 
   const file = std.open(path, flag + 'b');
   if (!file) {
-    throw new Error(`Failed to open file: ${path}`);
+    throwFileError(path, 'open')
   }
 
   try {
