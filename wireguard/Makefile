@@ -1,9 +1,9 @@
 # wireguard/Makefile - builds libwireguard.a (lwIP + wireguard-lwip + glue + bindings)
 #
-# Usage from parent: $(MAKE) -C wireguard QUICKJS_INC=... BIN_DIR=...
+# Usage from parent: $(MAKE) -C wireguard QUICKJS_INC=... BUILD=...
 
 QUICKJS_INC ?= ../bin/linux/quickjs
-BIN_DIR ?= build
+BUILD ?= build
 
 LWIP_INC = -I. -I../vendor/lwip/src/include
 WG_INC = $(LWIP_INC) -I../vendor/wireguard-lwip/src
@@ -13,9 +13,9 @@ CC ?= gcc
 
 # lwIP core
 LWIP_CORE_SRCS = $(wildcard ../vendor/lwip/src/core/*.c) $(wildcard ../vendor/lwip/src/core/ipv4/*.c)
-LWIP_CORE_OBJS = $(patsubst ../vendor/lwip/src/%.c,$(BIN_DIR)/lwip/%.o,$(LWIP_CORE_SRCS))
+LWIP_CORE_OBJS = $(patsubst ../vendor/lwip/src/%.c,$(BUILD)/lwip/%.o,$(LWIP_CORE_SRCS))
 
-$(BIN_DIR)/lwip/%.o: ../vendor/lwip/src/%.c
+$(BUILD)/lwip/%.o: ../vendor/lwip/src/%.c
 	@mkdir -p $(dir $@)
 	$(CC) -O2 -w $(LWIP_INC) -c -o $@ $<
 
@@ -23,37 +23,37 @@ $(BIN_DIR)/lwip/%.o: ../vendor/lwip/src/%.c
 WG_VENDOR_SRCS = ../vendor/wireguard-lwip/src/wireguard.c \
                  ../vendor/wireguard-lwip/src/crypto.c \
                  $(wildcard ../vendor/wireguard-lwip/src/crypto/refc/*.c)
-WG_VENDOR_OBJS = $(patsubst ../vendor/wireguard-lwip/src/%.c,$(BIN_DIR)/wg/%.o,$(WG_VENDOR_SRCS))
+WG_VENDOR_OBJS = $(patsubst ../vendor/wireguard-lwip/src/%.c,$(BUILD)/wg/%.o,$(WG_VENDOR_SRCS))
 
-$(BIN_DIR)/wg/%.o: ../vendor/wireguard-lwip/src/%.c
+$(BUILD)/wg/%.o: ../vendor/wireguard-lwip/src/%.c
 	@mkdir -p $(dir $@)
 	$(CC) -O2 -w $(WG_INC) $(WG_DEFINES) -c -o $@ $<
 
 # Our glue code
-$(BIN_DIR)/wg-platform.o: wireguard-platform.c
-	@mkdir -p $(BIN_DIR)
+$(BUILD)/wg-platform.o: wireguard-platform.c
+	@mkdir -p $(BUILD)
 	$(CC) -O2 -w $(WG_INC) $(WG_DEFINES) -c -o $@ $<
 
-$(BIN_DIR)/wg-netif.o: wg-netif.c wg-netif.h
-	@mkdir -p $(BIN_DIR)
+$(BUILD)/wg-netif.o: wg-netif.c wg-netif.h
+	@mkdir -p $(BUILD)
 	$(CC) -O2 -Wall $(WG_INC) $(WG_DEFINES) -c -o $@ $<
 
 # QuickJS bindings
-$(BIN_DIR)/qn-wireguard.o: qn-wireguard.c wg-netif.h
-	@mkdir -p $(BIN_DIR)
+$(BUILD)/qn-wireguard.o: qn-wireguard.c wg-netif.h
+	@mkdir -p $(BUILD)
 	$(CC) -O2 -Wall -I.. -I$(QUICKJS_INC) $(WG_INC) $(WG_DEFINES) -c -o $@ $<
 
 # All objects -> static library
 ALL_OBJS = $(LWIP_CORE_OBJS) $(WG_VENDOR_OBJS) \
-           $(BIN_DIR)/wg-platform.o $(BIN_DIR)/wg-netif.o $(BIN_DIR)/qn-wireguard.o
+           $(BUILD)/wg-platform.o $(BUILD)/wg-netif.o $(BUILD)/qn-wireguard.o
 
-$(BIN_DIR)/libwireguard.a: $(ALL_OBJS)
+$(BUILD)/libwireguard.a: $(ALL_OBJS)
 	ar rcs $@ $^
 
-lib: $(BIN_DIR)/libwireguard.a
+lib: $(BUILD)/libwireguard.a
 
 clean:
-	rm -rf $(BIN_DIR)
+	rm -rf $(BUILD)
 
 .PHONY: lib clean
 .DEFAULT_GOAL := lib

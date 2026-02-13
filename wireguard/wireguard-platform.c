@@ -1,12 +1,16 @@
 /*
- * wireguard-platform.c - Platform functions for wireguard-lwip on Linux
+ * wireguard-platform.c - Platform functions for wireguard-lwip
  */
 
 #include "wireguard-platform.h"
 
 #include <time.h>
 #include <string.h>
+#ifdef __APPLE__
+#include <stdlib.h>
+#else
 #include <sys/random.h>
+#endif
 
 uint32_t wireguard_sys_now(void) {
 	struct timespec ts;
@@ -15,7 +19,11 @@ uint32_t wireguard_sys_now(void) {
 }
 
 void wireguard_random_bytes(void *bytes, size_t size) {
+#ifdef __APPLE__
+	arc4random_buf(bytes, size);
+#else
 	getrandom(bytes, size, 0);
+#endif
 }
 
 void wireguard_tai64n_now(uint8_t *output) {

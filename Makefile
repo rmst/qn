@@ -14,6 +14,9 @@ BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 # Install prefix (override with: make install PREFIX=~/.local)
 PREFIX ?= /usr/local
 
+# Platform detection (used for build dirs and conditional flags)
+PLATFORM := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+
 # Compiler settings
 CC = gcc
 CFLAGS = -Wall -Wno-array-bounds -fwrapv \
@@ -28,7 +31,10 @@ endif
 CFLAGS += -DUSE_SANDBOX
 
 CFLAGS_OPT = $(CFLAGS) -O2
-LDFLAGS = -rdynamic -s
+LDFLAGS = -rdynamic
+ifneq ($(PLATFORM),darwin)
+LDFLAGS += -s
+endif
 
 # Debug build: make DEBUG=1
 ifdef DEBUG
@@ -38,7 +44,6 @@ endif
 LIBS = -lm -ldl -lpthread
 
 # Build directories (can be overridden: make BIN_DIR=/tmp/build)
-PLATFORM := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 BIN_DIR ?= bin/$(PLATFORM)
 
 # Program names
@@ -140,9 +145,10 @@ $(BIN_DIR)/obj/qn-socket.o: socket/qn-socket.c quickjs-deps | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
 # Build BearSSL static library
-BEARSSL_LIB = vendor/bearssl/build/libbearssl.a
+BEARSSL_LIB = $(BIN_DIR)/bearssl/libbearssl.a
 $(BEARSSL_LIB):
-	$(MAKE) -C vendor/bearssl lib
+	@echo "Building BearSSL..."
+	@$(MAKE) -s -C vendor/bearssl BUILD=$(abspath $(BIN_DIR)/bearssl) lib
 
 # Build qn-tls (TLS client bindings using BearSSL)
 $(BIN_DIR)/obj/qn-tls.o: tls/qn-tls.c $(BEARSSL_LIB) quickjs-deps | $(BIN_DIR)/obj
@@ -158,9 +164,10 @@ WG_MODULE_FLAGS =
 
 ifeq ($(USE_WIREGUARD),1)
 
-WG_LIB = wireguard/build/libwireguard.a
+WG_LIB = $(BIN_DIR)/wireguard/libwireguard.a
 $(WG_LIB): FORCE quickjs-deps
-	$(MAKE) -C wireguard QUICKJS_INC=$(abspath $(BIN_DIR)/quickjs)
+	@echo "Building WireGuard..."
+	@$(MAKE) -s -C wireguard BUILD=$(abspath $(BIN_DIR)/wireguard) QUICKJS_INC=$(abspath $(BIN_DIR)/quickjs)
 
 WG_LIBS = $(WG_LIB)
 WG_MODULE_FLAGS = -M qn_wireguard,qn_wireguard -D qn:wireguard
@@ -212,7 +219,7 @@ $(BIN_DIR)/quickjs/.patched: quickjs.patch $(wildcard quickjs/*.c quickjs/*.h) |
 	@touch $@
 
 quickjs-deps: $(BIN_DIR)/quickjs/.patched
-	$(MAKE) -C $(BIN_DIR)/quickjs .obj/quickjs.o .obj/libregexp.o .obj/libunicode.o .obj/cutils.o .obj/dtoa.o .obj/repl.o libquickjs.a
+	@$(MAKE) -s -C $(BIN_DIR)/quickjs .obj/quickjs.o .obj/libregexp.o .obj/libunicode.o .obj/cutils.o .obj/dtoa.o .obj/repl.o libquickjs.a
 
 # Objects using -I$(BIN_DIR)/quickjs need quickjs-deps to exist first
 $(BIN_DIR)/obj/qjsx.o $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/qjs-sqlite.o: quickjs-deps
@@ -220,12 +227,10 @@ $(BIN_DIR)/obj/qjsx.o $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN
 # Clean build artifacts
 clean:
 	rm -rf $(BIN_DIR)
-	$(MAKE) -C wireguard clean
 
 # Clean all platforms
 clean-all:
 	rm -rf bin/
-	$(MAKE) -C wireguard clean
 
 # Build everything (QuickJS + qjsx)
 build: quickjs-deps all

@@ -71,6 +71,7 @@
 #define LWIP_DEBUG					0
 
 /* Avoid name conflicts with system headers */
+#define LWIP_DONT_PROVIDE_BYTEORDER_FUNCTIONS 1
 #define LWIP_ERRNO_INCLUDE			<errno.h>
 #define LWIP_ERRNO_STDINCLUDE		1
 
