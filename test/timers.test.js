@@ -43,30 +43,36 @@ describe('timer globals', () => {
 		}
 	})
 
-	nodetest('setInterval throws NodeCompatibilityError [qn]', () => {
-		const dir = mktempdir()
-		try {
-			writeFileSync(`${dir}/test.js`, `
-				try {
-					setInterval(() => {}, 10)
-					console.log('no error')
-				} catch (e) {
-					console.log(e.name)
-				}
-			`)
-			const output = $`${QN()} ${dir}/test.js`
-			assert.strictEqual(output, 'NodeCompatibilityError')
-		} finally {
-			rmSync(dir, { recursive: true })
-		}
+	test('setInterval fires repeatedly and clearInterval stops it', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			let n = 0
+			const iv = setInterval(() => {
+				n++
+				console.log('tick', n)
+				if (n >= 3) clearInterval(iv)
+			}, 10)
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.strictEqual(output, 'tick 1\ntick 2\ntick 3')
 	})
 
-	nodetest('clearInterval throws NodeCompatibilityError [qn]', () => {
+	test('clearInterval with non-existent handle is a no-op', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			clearInterval(999)
+			console.log('ok')
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.strictEqual(output, 'ok')
+	})
+
+	nodetest('setInterval with extra args throws NodeCompatibilityError [qn]', () => {
 		const dir = mktempdir()
 		try {
 			writeFileSync(`${dir}/test.js`, `
 				try {
-					clearInterval(123)
+					setInterval(console.log, 10, 'arg1')
 					console.log('no error')
 				} catch (e) {
 					console.log(e.name)

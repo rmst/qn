@@ -75,6 +75,87 @@ describe('globals', () => {
 		assert.deepStrictEqual(JSON.parse(output), { empty: true })
 	})
 
+	test('ReadableStream with getReader', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			const rs = new ReadableStream({
+				start(controller) {
+					controller.enqueue("hello ")
+					controller.enqueue("world")
+					controller.close()
+				}
+			})
+			const reader = rs.getReader()
+			let result = ""
+			for (;;) {
+				const { value, done } = await reader.read()
+				if (done) break
+				result += value
+			}
+			console.log(result)
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.strictEqual(output, 'hello world')
+	})
+
+	test('ReadableStream async iteration', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			const rs = new ReadableStream({
+				start(controller) {
+					controller.enqueue("a")
+					controller.enqueue("b")
+					controller.enqueue("c")
+					controller.close()
+				}
+			})
+			const chunks = []
+			for await (const chunk of rs) chunks.push(chunk)
+			console.log(chunks.join(","))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.strictEqual(output, 'a,b,c')
+	})
+
+	test('ReadableStream empty stream', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			const rs = new ReadableStream({
+				start(controller) {
+					controller.close()
+				}
+			})
+			const chunks = []
+			for await (const chunk of rs) chunks.push(chunk)
+			console.log(chunks.length)
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.strictEqual(output, '0')
+	})
+
+	testQnOnly('ReadableStream error propagation', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			const rs = new ReadableStream({
+				start(controller) {
+					controller.enqueue("ok")
+					controller.error(new Error("boom"))
+				}
+			})
+			const reader = rs.getReader()
+			const first = await reader.read()
+			console.log(first.value)
+			try {
+				await reader.read()
+				console.log("no error")
+			} catch (e) {
+				console.log(e.message)
+			}
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.strictEqual(output, 'ok\nboom')
+	})
+
 	testQnOnly('console.time and timeEnd output timing', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			console.time('test')
