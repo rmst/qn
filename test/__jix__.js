@@ -43,15 +43,13 @@ export const run = {
 	default: jix.script`
 		cd ${import.meta.dirname}/..
 		make build
-		export HONO_PATH="${hono}"
-		node --test --experimental-test-isolation=none test/*.test.js test/**/*.test.js
-		# qn --test test/*.test.js test/**/*.test.js
+		# node --test --experimental-test-isolation=none test/*.test.js test/**/*.test.js
+		qn --test test/*.test.js test/**/*.test.js
 	`,
 
 	nonode: jix.script`
 		cd ${import.meta.dirname}/..
-		make build
-		export HONO_PATH="${hono}"
+		# make build
 		export NO_NODEJS_TESTS=1
 		# node --test --experimental-test-isolation=none test/*.test.js test/**/*.test.js
 		qn --test './test/*.test.js' './test/**/*.test.js'

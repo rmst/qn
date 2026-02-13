@@ -132,26 +132,57 @@ async function runTest(test, indentLevel = 0) {
 }
 
 /**
+ * Run tasks with bounded concurrency.
+ * @param {Array<() => Promise>} tasks
+ * @param {number} limit
+ */
+async function runWithPool(tasks, limit) {
+	if (limit >= tasks.length) {
+		return Promise.all(tasks.map(t => t()))
+	}
+	const executing = new Set()
+	for (const task of tasks) {
+		const p = task().then(() => executing.delete(p))
+		executing.add(p)
+		if (executing.size >= limit) {
+			await Promise.race(executing)
+		}
+	}
+	await Promise.all(executing)
+}
+
+/**
  * Run a suite (describe block)
  */
 async function runSuite(suite, indentLevel = 0) {
 	const pad = indent(indentLevel)
 	const startTime = performance.now()
 	const failsBefore = results.fail
+	const concurrency = suite.options?.concurrency
 
 	if (suite.name) {
 		console.log(`${pad}${BOLD}▶${RESET} ${suite.name}`)
 		results.suites++
 	}
 
-	// Run all tests in the suite
-	for (const test of suite.tests) {
-		await runTest(test, suite.name ? indentLevel + 1 : indentLevel)
-	}
+	const childIndent = suite.name ? indentLevel + 1 : indentLevel
 
-	// Run nested suites
-	for (const nested of suite.suites) {
-		await runSuite(nested, suite.name ? indentLevel + 1 : indentLevel)
+	if (concurrency) {
+		// Run tests and nested suites concurrently
+		const allTasks = [
+			...suite.tests.map(test => () => runTest(test, childIndent)),
+			...suite.suites.map(nested => () => runSuite(nested, childIndent)),
+		]
+		const limit = concurrency === true ? Infinity : concurrency
+		await runWithPool(allTasks, limit)
+	} else {
+		// Run sequentially (default)
+		for (const test of suite.tests) {
+			await runTest(test, childIndent)
+		}
+		for (const nested of suite.suites) {
+			await runSuite(nested, childIndent)
+		}
 	}
 
 	if (suite.name) {
@@ -242,8 +273,11 @@ function scheduleRun() {
 /**
  * Create a test suite (describe block)
  */
-export function describe(name, fn) {
-	const suite = { name, tests: [], suites: [], parent: currentSuite }
+export function describe(name, optionsOrFn, maybeFn) {
+	const fn = typeof optionsOrFn === 'function' ? optionsOrFn : maybeFn
+	const options = typeof optionsOrFn === 'object' ? optionsOrFn : {}
+
+	const suite = { name, options, tests: [], suites: [], parent: currentSuite }
 	currentSuite.suites.push(suite)
 
 	const previousSuite = currentSuite

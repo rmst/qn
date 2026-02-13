@@ -133,7 +133,7 @@ describe('qn_tls native module', () => {
 })
 
 // These suites need a Node.js HTTPS server as a fixture
-if (!NO_NODE) describe('HTTPS fetch (local server)', () => {
+if (!NO_NODE) describe('HTTPS fetch (local server)', { concurrency: true }, () => {
 	testQnOnly('HTTPS GET', async ({ bin, dir }) => {
 		const { port, close } = await startHttpsServer()
 		try {
@@ -268,7 +268,7 @@ function startQnTlsServer(serverScript) {
 	})
 }
 
-describe('TLS server', () => {
+describe('TLS server', { concurrency: true }, () => {
 	testQnOnly('Server credentials can be loaded', async ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { tlsLoadServerCert } from 'qn_tls'
@@ -502,7 +502,7 @@ function startSlowHttpsServer() {
 	})
 }
 
-if (!NO_NODE) describe('Fetch timeout and AbortSignal', () => {
+if (!NO_NODE) describe('Fetch timeout and AbortSignal', { concurrency: true }, () => {
 	testQnOnly('AbortSignal.timeout aborts slow HTTPS request', async ({ bin, dir }) => {
 		const { port, close } = await startSlowHttpsServer()
 		try {
@@ -572,7 +572,7 @@ if (!NO_NODE) describe('Fetch timeout and AbortSignal', () => {
 	})
 })
 
-if (!NO_NODE) describe('Streaming response body', () => {
+if (!NO_NODE) describe('Streaming response body', { concurrency: true }, () => {
 	testQnOnly('response.body async iteration', async ({ bin, dir }) => {
 		const { port, close } = await startHttpsServer()
 		try {
@@ -698,7 +698,7 @@ function writeRawServer(dir, rawResponseExpr) {
 	return `${dir}/server.js`
 }
 
-describe('Adversarial: malformed responses', () => {
+describe('Adversarial: malformed responses', { concurrency: true }, () => {
 	testQnOnly('server sends garbage (not HTTP)', async ({ bin, dir }) => {
 		writeRawServer(dir, `'this is not http at all\\r\\n'`)
 		const { port, close } = await startQnTlsServer(`${dir}/server.js`)

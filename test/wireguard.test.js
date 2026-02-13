@@ -8,7 +8,7 @@ const testDir = path.dirname(new URL(import.meta.url).pathname)
 const tunnelCertFile = path.join(testDir, 'fixtures', 'tunnel-cert.pem')
 const tunnelKeyFile = path.join(testDir, 'fixtures', 'tunnel-key.pem')
 
-describe('qn:wireguard', () => {
+describe('qn:wireguard', { concurrency: true }, () => {
 	testQnOnly('exports state constants', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { WG_TCP_NONE, WG_TCP_CONNECTING, WG_TCP_CONNECTED, WG_TCP_CLOSING, WG_TCP_CLOSED, WG_TCP_ERROR } from 'qn:wireguard'
@@ -433,9 +433,9 @@ describe('qn:wireguard', () => {
 		const clientOutput = await execAsync(bin, [`${dir}/client.js`])
 		const result = JSON.parse(clientOutput)
 		assert.strictEqual(result.echo, "socks hello")
-		// Clean up: server should exit on its own, proxy will timeout
 		await serverP
-		proxyP.then(() => {}, () => {}) // ignore proxy exit
+		proxyP.child.kill()
+		proxyP.catch(() => {})
 	})
 
 	testQnOnly('tunnel.serve() and tunnel.fetch()', async ({ bin, dir }) => {
@@ -541,7 +541,8 @@ describe('qn:wireguard', () => {
 		assert.strictEqual(result.path, "/hello")
 		assert.strictEqual(result.status2, 200)
 		assert.strictEqual(result.echo, "echo:test body")
-		serverP.then(() => {}, () => {})
+		serverP.child.kill()
+		serverP.catch(() => {})
 	})
 
 	testQnOnly('streaming: chunked response and async iterable request body', async ({ bin, dir }) => {
@@ -653,7 +654,8 @@ describe('qn:wireguard', () => {
 		const result = JSON.parse(clientOutput)
 		assert.strictEqual(result.streamed, "chunk1,chunk2,chunk3")
 		assert.strictEqual(result.echo, "got:part1-part2-part3")
-		serverP.then(() => {}, () => {})
+		serverP.child.kill()
+		serverP.catch(() => {})
 	})
 
 	testQnOnly('connection slot recycling: 20 sequential TCP connections', async ({ bin, dir }) => {
@@ -886,7 +888,8 @@ describe('qn:wireguard', () => {
 		assert.strictEqual(result.r3_checksum, result.expectedSum)
 		assert.strictEqual(result.r4_path, "/final")
 		assert.deepStrictEqual(result.sequential, [1, 2, 3, 4])
-		serverP.then(() => {}, () => {})
+		serverP.child.kill()
+		serverP.catch(() => {})
 	})
 
 	testQnOnly('tunnel.fetch() HTTPS through WireGuard', async ({ bin, dir }) => {

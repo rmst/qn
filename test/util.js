@@ -52,18 +52,18 @@ export const $ = (strings, ...values) => {
  * @returns {Promise<string>} - stdout trimmed
  */
 export const execAsync = (cmd, args, opts = {}) => {
-	return new Promise((resolve, reject) => {
-		// Remove vars that interfere with nested test runners or output
-		const { FORCE_COLOR, NODE_OPTIONS, NODE_TEST_CONTEXT, ...env } = process.env
-		const child = spawn(cmd, args, {
-			stdio: ['ignore', 'pipe', 'pipe'],
-			env: { ...env, NO_COLOR: '1', ...opts.env },
-			cwd: opts.cwd,
-		})
-		let stdout = ''
-		let stderr = ''
-		child.stdout.on('data', d => stdout += d)
-		child.stderr.on('data', d => stderr += d)
+	// Remove vars that interfere with nested test runners or output
+	const { FORCE_COLOR, NODE_OPTIONS, NODE_TEST_CONTEXT, ...env } = process.env
+	const child = spawn(cmd, args, {
+		stdio: ['ignore', 'pipe', 'pipe'],
+		env: { ...env, NO_COLOR: '1', ...opts.env },
+		cwd: opts.cwd,
+	})
+	let stdout = ''
+	let stderr = ''
+	child.stdout.on('data', d => stdout += d)
+	child.stderr.on('data', d => stderr += d)
+	const promise = new Promise((resolve, reject) => {
 		child.on('error', reject)
 		child.on('close', code => {
 			if (code !== 0) {
@@ -76,6 +76,8 @@ export const execAsync = (cmd, args, opts = {}) => {
 			}
 		})
 	})
+	promise.child = child
+	return promise
 }
 
 /**
