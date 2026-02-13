@@ -313,7 +313,7 @@ export async function fetch(input, init = {}) {
 		}
 
 		try {
-			const head = await readResponseHead(reader)
+			const head = await readResponseHead(reader, 64 * 1024)
 			if (!head) throw new TypeError('fetch failed: invalid HTTP response')
 
 			if (isRedirectStatus(head.status)) {

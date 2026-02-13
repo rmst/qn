@@ -367,7 +367,7 @@ export class WireGuardTunnel {
 			reader = tunnelReader(sock, signal)
 		}
 
-		const head = await readResponseHead(reader)
+		const head = await readResponseHead(reader, 64 * 1024)
 		if (!head) {
 			await reader.close()
 			throw new TypeError('tunnel.fetch: invalid HTTP response')

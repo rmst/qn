@@ -6,72 +6,48 @@
  */
 
 import { createServer as createTcpServer } from 'node:net'
-import { readRequest, writeResponse } from 'node:http/parse'
+import { socketReader, readRequest, writeResponse } from 'node:http/parse'
 
-/**
- * Wrap a node:net Socket into the async reader interface used by HTTP parsing.
- */
-function socketReader(socket) {
-	const pending = []
-	let waiter = null
-	let ended = false
-
-	socket.on('data', (chunk) => {
-		if (waiter) {
-			const resolve = waiter
-			waiter = null
-			resolve(chunk)
-		} else {
-			pending.push(chunk)
-		}
-	})
-	socket.on('end', () => {
-		ended = true
-		if (waiter) { const r = waiter; waiter = null; r(null) }
-	})
-	socket.on('error', () => {
-		ended = true
-		if (waiter) { const r = waiter; waiter = null; r(null) }
-	})
-
-	return {
-		async read(buf, off, len) {
-			let chunk
-			if (pending.length > 0) {
-				chunk = pending.shift()
-			} else if (ended) {
-				return 0
-			} else {
-				chunk = await new Promise(r => { waiter = r })
-				if (!chunk) return 0
-			}
-			const n = Math.min(chunk.length, len)
-			new Uint8Array(buf, off, n).set(chunk.subarray(0, n))
-			if (chunk.length > n) pending.unshift(chunk.subarray(n))
-			return n
-		},
-		close() {
-			socket.destroy()
-		},
-	}
-}
+const DEFAULT_HEADER_TIMEOUT = 60_000  // 60 seconds
 
 /**
  * Handle a single HTTP connection: parse request, call handler, write response.
  */
-async function handleConnection(socket, handler, onError) {
+async function handleConnection(socket, handler, onError, headerTimeout) {
 	const reader = socketReader(socket)
+	const abort = new AbortController()
+	socket.on('close', () => abort.abort())
+
+	const timer = setTimeout(() => socket.destroy(), headerTimeout)
+
 	try {
-		const request = await readRequest(reader)
+		const request = await readRequest(reader, { signal: abort.signal })
+		clearTimeout(timer)
 		if (!request) { socket.destroy(); return }
 
 		const response = await handler(request)
 
 		await writeResponse(data => {
-			socket.write(data)
-			return Promise.resolve()
+			return new Promise((resolve, reject) => {
+				if (socket.destroyed) { reject(new Error('socket closed')); return }
+				const ok = socket.write(data)
+				if (ok) resolve()
+				else {
+					const onDrain = () => { socket.removeListener('close', onClose); resolve() }
+					const onClose = () => { socket.removeListener('drain', onDrain); reject(new Error('socket closed')) }
+					socket.once('drain', onDrain)
+					socket.once('close', onClose)
+				}
+			})
 		}, response)
 	} catch (err) {
+		clearTimeout(timer)
+		if (err?.name === 'AbortError') return
+		if (!socket.destroyed) {
+			try {
+				socket.write('HTTP/1.1 500 Internal Server Error\r\nconnection: close\r\ncontent-length: 21\r\n\r\nInternal Server Error')
+			} catch {}
+		}
 		if (onError) onError(err)
 	} finally {
 		socket.end()
@@ -105,11 +81,13 @@ export function serve(optionsOrHandler, handlerOrOptions) {
 	const port = options.port ?? 0
 	const hostname = options.hostname ?? '0.0.0.0'
 	const onError = options.onError || null
+	const headerTimeout = options.headerTimeout ?? DEFAULT_HEADER_TIMEOUT
 
 	const tcpServer = createTcpServer()
 
 	tcpServer.on('connection', (socket) => {
-		handleConnection(socket, handler, onError)
+		socket.on('error', () => {})
+		handleConnection(socket, handler, onError, headerTimeout)
 	})
 
 	return new Promise((resolve, reject) => {

@@ -17,7 +17,7 @@ describe('node:http Server', () => {
 			server.listen(0, '127.0.0.1', () => {
 				const addr = server.address()
 				const client = createConnection(addr.port, '127.0.0.1', () => {
-					client.write('GET / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n')
+					client.write('GET / HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n')
 				})
 				let data = ''
 				client.on('data', (chunk) => {
@@ -49,7 +49,7 @@ describe('node:http Server', () => {
 			server.listen(0, '127.0.0.1', () => {
 				const addr = server.address()
 				const client = createConnection(addr.port, '127.0.0.1', () => {
-					client.write('POST /api/test?q=1 HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n')
+					client.write('POST /api/test?q=1 HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n')
 				})
 				let data = ''
 				client.on('data', (chunk) => {
@@ -86,7 +86,7 @@ describe('node:http Server', () => {
 			server.listen(0, '127.0.0.1', () => {
 				const addr = server.address()
 				const client = createConnection(addr.port, '127.0.0.1', () => {
-					client.write('GET / HTTP/1.1\\r\\nHost: example.com\\r\\nX-Custom: test-value\\r\\n\\r\\n')
+					client.write('GET / HTTP/1.1\\r\\nHost: example.com\\r\\nX-Custom: test-value\\r\\nConnection: close\\r\\n\\r\\n')
 				})
 				let data = ''
 				client.on('data', (chunk) => {
@@ -130,6 +130,7 @@ describe('node:http Server', () => {
 						'POST /data HTTP/1.1\\r\\n' +
 						'Host: localhost\\r\\n' +
 						'Content-Length: ' + bodyStr.length + '\\r\\n' +
+						'Connection: close\\r\\n' +
 						'\\r\\n' +
 						bodyStr
 					)
@@ -173,7 +174,7 @@ describe('node:http Server', () => {
 
 				const doReq = (path) => new Promise((resolve) => {
 					const client = createConnection(addr.port, '127.0.0.1', () => {
-						client.write('GET ' + path + ' HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n')
+						client.write('GET ' + path + ' HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n')
 					})
 					let data = ''
 					client.on('data', (chunk) => { data += new TextDecoder().decode(chunk) })
@@ -218,7 +219,7 @@ describe('node:http Server', () => {
 			server.listen(0, '127.0.0.1', () => {
 				const addr = server.address()
 				const client = createConnection(addr.port, '127.0.0.1', () => {
-					client.write('GET / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n')
+					client.write('GET / HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n')
 				})
 				let data = ''
 				client.on('data', (chunk) => { data += new TextDecoder().decode(chunk) })
@@ -254,7 +255,7 @@ describe('node:http Server', () => {
 			server.listen(0, '127.0.0.1', () => {
 				const addr = server.address()
 				const client = createConnection(addr.port, '127.0.0.1', () => {
-					client.write('GET / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n')
+					client.write('GET / HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n')
 				})
 				let data = ''
 				client.on('data', (chunk) => {
@@ -320,6 +321,277 @@ describe('node:http Server', () => {
 		return execAsync(bin, [`${dir}/test.js`]).then(output => {
 			const data = JSON.parse(output)
 			assert.equal(data.msg, 'from qn server')
+		})
+	})
+
+	testQnOnly('keep-alive: multiple requests on one connection', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import http from 'node:http'
+			import { createConnection } from 'node:net'
+
+			let count = 0
+			const server = http.createServer((req, res) => {
+				count++
+				res.writeHead(200, { 'Content-Type': 'text/plain' })
+				res.end('request ' + count)
+			})
+
+			server.listen(0, '127.0.0.1', () => {
+				const addr = server.address()
+				const client = createConnection(addr.port, '127.0.0.1', () => {
+					// First request (keep-alive by default in HTTP/1.1)
+					client.write('GET /a HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n')
+				})
+				let data = ''
+				let gotFirst = false
+				client.on('data', (chunk) => {
+					data += new TextDecoder().decode(chunk)
+					// After first response arrives, send second request with Connection: close
+					if (!gotFirst && data.includes('request 1')) {
+						gotFirst = true
+						client.write('GET /b HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n')
+					}
+				})
+				client.on('end', () => {
+					const responses = data.split('HTTP/1.1').filter(Boolean)
+					console.log('count:' + responses.length)
+					console.log('has1:' + data.includes('request 1'))
+					console.log('has2:' + data.includes('request 2'))
+					server.close()
+				})
+			})
+		`)
+		return execAsync(bin, [`${dir}/test.js`]).then(output => {
+			const lines = output.split('\n')
+			assert.equal(lines[0], 'count:2')
+			assert.equal(lines[1], 'has1:true')
+			assert.equal(lines[2], 'has2:true')
+		})
+	})
+
+	testQnOnly('keep-alive: POST with body then GET on same connection', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import http from 'node:http'
+			import { createConnection } from 'node:net'
+
+			const server = http.createServer((req, res) => {
+				if (req.method === 'POST') {
+					let body = ''
+					req.on('data', (c) => body += new TextDecoder().decode(c))
+					req.on('end', () => {
+						res.writeHead(200)
+						res.end('post:' + body)
+					})
+				} else {
+					res.writeHead(200)
+					res.end('get')
+				}
+			})
+
+			server.listen(0, '127.0.0.1', () => {
+				const addr = server.address()
+				const bodyStr = 'hello'
+				const client = createConnection(addr.port, '127.0.0.1', () => {
+					client.write(
+						'POST /a HTTP/1.1\\r\\n' +
+						'Host: localhost\\r\\n' +
+						'Content-Length: ' + bodyStr.length + '\\r\\n' +
+						'\\r\\n' +
+						bodyStr
+					)
+				})
+				let data = ''
+				let sentSecond = false
+				client.on('data', (chunk) => {
+					data += new TextDecoder().decode(chunk)
+					if (!sentSecond && data.includes('post:hello')) {
+						sentSecond = true
+						client.write('GET /b HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n')
+					}
+				})
+				client.on('end', () => {
+					console.log('hasPost:' + data.includes('post:hello'))
+					console.log('hasGet:' + data.includes('get'))
+					server.close()
+				})
+			})
+		`)
+		return execAsync(bin, [`${dir}/test.js`]).then(output => {
+			const lines = output.split('\n')
+			assert.equal(lines[0], 'hasPost:true')
+			assert.equal(lines[1], 'hasGet:true')
+		})
+	})
+
+	testQnOnly('header timeout: slow client gets disconnected', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import http from 'node:http'
+			import { createConnection } from 'node:net'
+
+			const server = http.createServer((req, res) => {
+				res.end('should not reach')
+			})
+			server.headerTimeout = 100  // 100ms
+
+			server.listen(0, '127.0.0.1', () => {
+				const addr = server.address()
+				const client = createConnection(addr.port, '127.0.0.1', () => {
+					// Send partial headers, never finish
+					client.write('GET / HTTP/1.1\\r\\nHost: ')
+				})
+				let ended = false
+				client.on('end', () => { ended = true })
+				client.on('close', () => {
+					console.log('disconnected:' + ended)
+					server.close()
+				})
+			})
+		`)
+		return execAsync(bin, [`${dir}/test.js`]).then(output => {
+			assert.ok(output.includes('disconnected:'))
+		})
+	})
+
+	testQnOnly('keep-alive timeout: idle connection gets closed', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import http from 'node:http'
+			import { createConnection } from 'node:net'
+
+			const server = http.createServer((req, res) => {
+				res.writeHead(200)
+				res.end('ok')
+			})
+			server.keepAliveTimeout = 100  // 100ms
+
+			server.listen(0, '127.0.0.1', () => {
+				const addr = server.address()
+				const client = createConnection(addr.port, '127.0.0.1', () => {
+					client.write('GET / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n')
+				})
+				let data = ''
+				client.on('data', (chunk) => {
+					data += new TextDecoder().decode(chunk)
+				})
+				client.on('close', () => {
+					// Connection should close after keepAliveTimeout since we didn't send another request
+					console.log('hasOk:' + data.includes('ok'))
+					console.log('closed')
+					server.close()
+				})
+			})
+		`)
+		return execAsync(bin, [`${dir}/test.js`]).then(output => {
+			const lines = output.split('\n')
+			assert.equal(lines[0], 'hasOk:true')
+			assert.equal(lines[1], 'closed')
+		})
+	})
+
+	testQnOnly('rejects Content-Length + Transfer-Encoding (smuggling prevention)', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import http from 'node:http'
+			import { createConnection } from 'node:net'
+
+			const server = http.createServer((req, res) => {
+				res.end('should not reach')
+			})
+
+			server.listen(0, '127.0.0.1', () => {
+				const addr = server.address()
+				const client = createConnection(addr.port, '127.0.0.1', () => {
+					client.write(
+						'POST / HTTP/1.1\\r\\n' +
+						'Host: localhost\\r\\n' +
+						'Content-Length: 5\\r\\n' +
+						'Transfer-Encoding: chunked\\r\\n' +
+						'Connection: close\\r\\n' +
+						'\\r\\n' +
+						'hello'
+					)
+				})
+				let data = ''
+				client.on('data', (chunk) => {
+					data += new TextDecoder().decode(chunk)
+				})
+				client.on('end', () => {
+					console.log('status400:' + data.includes('400 Bad Request'))
+					server.close()
+				})
+			})
+		`)
+		return execAsync(bin, [`${dir}/test.js`]).then(output => {
+			assert.equal(output, 'status400:true')
+		})
+	})
+
+	testQnOnly('rejects invalid Content-Length value', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import http from 'node:http'
+			import { createConnection } from 'node:net'
+
+			const server = http.createServer((req, res) => {
+				res.end('should not reach')
+			})
+
+			server.listen(0, '127.0.0.1', () => {
+				const addr = server.address()
+				const client = createConnection(addr.port, '127.0.0.1', () => {
+					client.write(
+						'POST / HTTP/1.1\\r\\n' +
+						'Host: localhost\\r\\n' +
+						'Content-Length: -1\\r\\n' +
+						'Connection: close\\r\\n' +
+						'\\r\\n'
+					)
+				})
+				let data = ''
+				client.on('data', (chunk) => {
+					data += new TextDecoder().decode(chunk)
+				})
+				client.on('end', () => {
+					console.log('status400:' + data.includes('400 Bad Request'))
+					server.close()
+				})
+			})
+		`)
+		return execAsync(bin, [`${dir}/test.js`]).then(output => {
+			assert.equal(output, 'status400:true')
+		})
+	})
+
+	testQnOnly('rejects too many headers', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import http from 'node:http'
+			import { createConnection } from 'node:net'
+
+			const server = http.createServer({ maxHeaderCount: 2 }, (req, res) => {
+				res.end('should not reach')
+			})
+
+			server.listen(0, '127.0.0.1', () => {
+				const addr = server.address()
+				const client = createConnection(addr.port, '127.0.0.1', () => {
+					client.write(
+						'GET / HTTP/1.1\\r\\n' +
+						'Host: localhost\\r\\n' +
+						'X-A: 1\\r\\n' +
+						'X-B: 2\\r\\n' +
+						'Connection: close\\r\\n' +
+						'\\r\\n'
+					)
+				})
+				let data = ''
+				client.on('data', (chunk) => {
+					data += new TextDecoder().decode(chunk)
+				})
+				client.on('end', () => {
+					console.log('status431:' + data.includes('431'))
+					server.close()
+				})
+			})
+		`)
+		return execAsync(bin, [`${dir}/test.js`]).then(output => {
+			assert.equal(output, 'status431:true')
 		})
 	})
 })

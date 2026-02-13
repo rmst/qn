@@ -8,6 +8,59 @@
 import { Headers } from 'node:fetch/Headers'
 import { Request } from 'node:fetch/Request'
 
+let decoder, encoder
+const decode = (data) => (decoder ??= new TextDecoder()).decode(data)
+const encode = (str) => (encoder ??= new TextEncoder()).encode(str)
+
+/**
+ * Wrap a node:net Socket into the async reader interface used by HTTP parsing.
+ * Buffers incoming chunks and serves them to callers of read().
+ */
+export function socketReader(socket) {
+	const pending = []
+	let waiter = null
+	let ended = false
+
+	socket.on('data', (chunk) => {
+		if (waiter) {
+			const resolve = waiter
+			waiter = null
+			resolve(chunk)
+		} else {
+			pending.push(chunk)
+		}
+	})
+	socket.on('end', () => {
+		ended = true
+		if (waiter) { const r = waiter; waiter = null; r(null) }
+	})
+	socket.on('error', () => {
+		ended = true
+		if (waiter) { const r = waiter; waiter = null; r(null) }
+	})
+
+	return {
+		async read(buf, off, len) {
+			let chunk
+			if (pending.length > 0) {
+				chunk = pending.shift()
+			} else if (ended) {
+				return 0
+			} else {
+				chunk = await new Promise(r => { waiter = r })
+				if (!chunk) return 0
+			}
+			const n = Math.min(chunk.length, len)
+			new Uint8Array(buf, off, n).set(chunk.subarray(0, n))
+			if (chunk.length > n) pending.unshift(chunk.subarray(n))
+			return n
+		},
+		close() {
+			socket.destroy()
+		},
+	}
+}
+
 export function concatChunks(chunks) {
 	if (chunks.length === 0) return new Uint8Array(0)
 	if (chunks.length === 1) return chunks[0]
@@ -36,7 +89,7 @@ export function isChunkedComplete(data) {
 		}
 		if (lineEnd === -1) return false
 
-		const sizeLine = new TextDecoder().decode(data.subarray(pos, lineEnd))
+		const sizeLine = decode(data.subarray(pos, lineEnd))
 		const chunkSize = parseInt(sizeLine.split(';')[0].trim(), 16)
 		if (isNaN(chunkSize)) return false
 		if (chunkSize === 0) return true
@@ -64,7 +117,7 @@ export function decodeChunked(data) {
 		}
 		if (lineEnd === -1) break
 
-		const sizeLine = new TextDecoder().decode(data.subarray(pos, lineEnd))
+		const sizeLine = decode(data.subarray(pos, lineEnd))
 		const chunkSize = parseInt(sizeLine.split(';')[0].trim(), 16)
 		if (isNaN(chunkSize)) break
 		if (chunkSize === 0) break
@@ -94,7 +147,7 @@ export function parseResponseHead(data) {
 	}
 	if (headerEnd === -1) return null
 
-	const headerText = new TextDecoder().decode(data.subarray(0, headerEnd))
+	const headerText = decode(data.subarray(0, headerEnd))
 	const lines = headerText.split('\r\n')
 
 	const statusLine = lines[0] || ''
@@ -130,7 +183,7 @@ export function parseRequestHead(data) {
 	}
 	if (headerEnd === -1) return null
 
-	const headerText = new TextDecoder().decode(data.subarray(0, headerEnd))
+	const headerText = decode(data.subarray(0, headerEnd))
 	const lines = headerText.split('\r\n')
 
 	const requestLine = lines[0]
@@ -178,23 +231,25 @@ export function buildRequest(method, path, host, port, headers, isDefaultPort) {
 	return req
 }
 
+const DEFAULT_MAX_HEADER_SIZE = 64 * 1024
+
 /**
- * Read HTTP response headers from a reader ({ read(buf, off, len) }).
- * Returns { status, statusText, headers, leftover } or null on error.
+ * Shared read loop for HTTP head parsing. Accumulates data from the reader,
+ * calls parseFn on each iteration until headers are complete or maxSize is
+ * exceeded. Returns { parsed, accumulated } or null on connection close.
  */
-export async function readResponseHead(reader) {
+async function readHead(reader, parseFn, maxSize) {
 	const buf = new ArrayBuffer(65536)
 	let accumulated = new Uint8Array(0)
 
 	while (true) {
-		const parsed = parseResponseHead(accumulated)
-		if (parsed) {
-			return {
-				status: parsed.status,
-				statusText: parsed.statusText,
-				headers: parsed.headers,
-				leftover: accumulated.subarray(parsed.bodyStart),
-			}
+		const parsed = parseFn(accumulated)
+		if (parsed) return { parsed, accumulated }
+
+		if (accumulated.length > maxSize) {
+			const err = new Error('Header fields too large')
+			err.code = 'ERR_HTTP_HEADER_TOO_LARGE'
+			throw err
 		}
 
 		const n = await reader.read(buf, 0, 65536)
@@ -209,42 +264,37 @@ export async function readResponseHead(reader) {
 }
 
 /**
+ * Read HTTP response headers from a reader ({ read(buf, off, len) }).
+ * Returns { status, statusText, headers, leftover } or null on error.
+ */
+export async function readResponseHead(reader, maxSize = DEFAULT_MAX_HEADER_SIZE) {
+	const result = await readHead(reader, parseResponseHead, maxSize)
+	if (!result) return null
+	const { parsed, accumulated } = result
+	return {
+		status: parsed.status,
+		statusText: parsed.statusText,
+		headers: parsed.headers,
+		leftover: accumulated.subarray(parsed.bodyStart),
+	}
+}
+
+/**
  * Read HTTP request headers from a reader ({ read(buf, off, len) }).
  * Returns { method, url, httpVersion, headers, rawHeaders, leftover } or null.
- * Throws with code 'ERR_HTTP_HEADER_TOO_LARGE' if maxSize is exceeded.
  */
-export async function readRequestHead(reader, maxSize) {
-	const buf = new ArrayBuffer(65536)
-	let accumulated = new Uint8Array(0)
-
-	while (true) {
-		const parsed = parseRequestHead(accumulated)
-		if (parsed) {
-			return {
-				method: parsed.method,
-				url: parsed.url,
-				httpVersion: parsed.httpVersion,
-				headers: parsed.headers,
-				rawHeaders: parsed.rawHeaders,
-				leftover: accumulated.subarray(parsed.headerEnd),
-			}
-		}
-
-		if (maxSize && accumulated.length > maxSize) {
-			const err = new Error('Request header fields too large')
-			err.code = 'ERR_HTTP_HEADER_TOO_LARGE'
-			throw err
-		}
-
-		const n = await reader.read(buf, 0, 65536)
-		if (n <= 0) break
-		const prev = accumulated
-		accumulated = new Uint8Array(prev.length + n)
-		accumulated.set(prev, 0)
-		accumulated.set(new Uint8Array(buf, 0, n), prev.length)
+export async function readRequestHead(reader, maxSize = DEFAULT_MAX_HEADER_SIZE) {
+	const result = await readHead(reader, parseRequestHead, maxSize)
+	if (!result) return null
+	const { parsed, accumulated } = result
+	return {
+		method: parsed.method,
+		url: parsed.url,
+		httpVersion: parsed.httpVersion,
+		headers: parsed.headers,
+		rawHeaders: parsed.rawHeaders,
+		leftover: accumulated.subarray(parsed.headerEnd),
 	}
-
-	return null
 }
 
 /**
@@ -302,7 +352,7 @@ async function* readChunkedBody(reader, buffer) {
 			buffer.set(new Uint8Array(readBuf, 0, n), prev.length)
 			continue
 		}
-		const sizeLine = new TextDecoder().decode(buffer.subarray(0, lineEnd))
+		const sizeLine = decode(buffer.subarray(0, lineEnd))
 		const chunkSize = parseInt(sizeLine.split(';')[0].trim(), 16)
 		if (isNaN(chunkSize) || chunkSize < 0) return
 		if (chunkSize === 0) return
@@ -339,14 +389,13 @@ export function chunkedRequestBodyStream(reader, leftover) {
  * @param {AsyncIterable<Uint8Array|string>} iterable - Body chunks
  */
 export async function writeChunkedBody(writeFn, iterable) {
-	const encoder = new TextEncoder()
 	for await (const chunk of iterable) {
-		const data = typeof chunk === 'string' ? encoder.encode(chunk) : chunk
-		await writeFn(encoder.encode(data.byteLength.toString(16) + '\r\n'))
+		const data = typeof chunk === 'string' ? encode(chunk) : chunk
+		await writeFn(encode(data.byteLength.toString(16) + '\r\n'))
 		await writeFn(data)
-		await writeFn(encoder.encode('\r\n'))
+		await writeFn(encode('\r\n'))
 	}
-	await writeFn(encoder.encode('0\r\n\r\n'))
+	await writeFn(encode('0\r\n\r\n'))
 }
 
 /**
@@ -393,7 +442,7 @@ export async function* bodyStream(reader, leftover, contentLength, isChunked) {
  * @param {{ read(buf, off, len): Promise<number> }} reader
  * @returns {Promise<Request|null>}
  */
-export async function readRequest(reader) {
+export async function readRequest(reader, extraInit) {
 	const head = await readRequestHead(reader)
 	if (!head) return null
 
@@ -416,6 +465,7 @@ export async function readRequest(reader) {
 		method: head.method,
 		headers: head.headers,
 		body,
+		...extraInit,
 	})
 }
 
@@ -438,14 +488,14 @@ export async function writeResponse(writeFn, response) {
 	if (useChunked)
 		head += 'transfer-encoding: chunked\r\n'
 	head += 'connection: close\r\n\r\n'
-	await writeFn(new TextEncoder().encode(head))
+	await writeFn(encode(head))
 
 	if (response.body) {
 		if (useChunked) {
 			await writeChunkedBody(writeFn, response.body)
 		} else {
 			for await (const chunk of response.body) {
-				const data = typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk
+				const data = typeof chunk === 'string' ? encode(chunk) : chunk
 				await writeFn(data)
 			}
 		}

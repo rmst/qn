@@ -5,60 +5,23 @@
 
 import { EventEmitter } from 'node:events'
 import { createServer as createTcpServer, Socket } from 'node:net'
-import { readRequestHead, requestBodyStream, chunkedRequestBodyStream } from 'node:http/parse'
+import { socketReader, readRequestHead, requestBodyStream, chunkedRequestBodyStream } from 'node:http/parse'
 
 const CRLF = '\r\n'
 
-/**
- * Wrap a node:net Socket into the async reader interface used by HTTP parsing.
- * Does NOT own the socket — caller manages lifecycle.
- */
-function socketReader(socket) {
-	const pending = []
-	let waiter = null
-	let ended = false
-
-	socket.on('data', (chunk) => {
-		if (waiter) {
-			const resolve = waiter
-			waiter = null
-			resolve(chunk)
-		} else {
-			pending.push(chunk)
-		}
-	})
-	socket.on('end', () => {
-		ended = true
-		if (waiter) { const r = waiter; waiter = null; r(null) }
-	})
-	socket.on('error', () => {
-		ended = true
-		if (waiter) { const r = waiter; waiter = null; r(null) }
-	})
-
-	return {
-		async read(buf, off, len) {
-			let chunk
-			if (pending.length > 0) {
-				chunk = pending.shift()
-			} else if (ended) {
-				return 0
-			} else {
-				chunk = await new Promise(r => { waiter = r })
-				if (!chunk) return 0
-			}
-			const n = Math.min(chunk.length, len)
-			new Uint8Array(buf, off, n).set(chunk.subarray(0, n))
-			if (chunk.length > n) pending.unshift(chunk.subarray(n))
-			return n
-		},
-	}
-}
+const DEFAULT_HEADER_TIMEOUT = 60_000  // 60 seconds
+const DEFAULT_KEEP_ALIVE_TIMEOUT = 5_000  // 5 seconds
 
 /**
  * Incoming HTTP message (request on server, response on client)
+ *
+ * Body is read lazily: the body iterator is only consumed when the handler
+ * attaches a 'data' listener (flowing mode, matching Node.js behavior).
  */
 export class IncomingMessage extends EventEmitter {
+	#bodyIter = null
+	#pumping = false
+
 	constructor(socket) {
 		super()
 		this.socket = socket
@@ -70,6 +33,44 @@ export class IncomingMessage extends EventEmitter {
 		this.statusCode = null
 		this.statusMessage = null
 		this.complete = false
+	}
+
+	/** @internal called by HTTPServer to provide the body iterator */
+	_setBody(bodyIter) {
+		this.#bodyIter = bodyIter
+	}
+
+	on(event, fn) {
+		super.on(event, fn)
+		if (event === 'data' && this.#bodyIter && !this.#pumping) {
+			this.#pumping = true
+			this.#pump()
+		}
+		return this
+	}
+
+	async #pump() {
+		try {
+			for await (const chunk of this.#bodyIter) {
+				this.emit('data', chunk)
+			}
+		} catch {}
+		this.complete = true
+		this.emit('end')
+	}
+
+	/**
+	 * @internal Drain any unconsumed body data so the connection can be
+	 * reused for the next request (keep-alive).
+	 */
+	async _drain() {
+		if (this.complete) return
+		if (!this.#pumping && this.#bodyIter) {
+			try { for await (const _ of this.#bodyIter) {} } catch {}
+			this.complete = true
+		} else if (this.#pumping) {
+			await new Promise(r => this.once('end', r))
+		}
 	}
 }
 
@@ -83,11 +84,13 @@ export class ServerResponse extends EventEmitter {
 	#statusCode = 200
 	#statusMessage = 'OK'
 	#finished = false
-	#chunks = []
+	#keepAlive = false
+	#onFinished = null
 
-	constructor(socket) {
+	constructor(socket, keepAlive) {
 		super()
 		this.#socket = socket
+		this.#keepAlive = keepAlive
 	}
 
 	get headersSent() { return this.#headersSent }
@@ -95,6 +98,12 @@ export class ServerResponse extends EventEmitter {
 	set statusCode(code) { this.#statusCode = code }
 	get statusMessage() { return this.#statusMessage }
 	set statusMessage(msg) { this.#statusMessage = msg }
+
+	/** @internal resolve when response is fully written */
+	_awaitFinish() {
+		if (this.#finished) return Promise.resolve()
+		return new Promise(r => { this.#onFinished = r })
+	}
 
 	setHeader(name, value) {
 		if (/[\r\n]/.test(name) || /[\r\n]/.test(String(value))) {
@@ -161,7 +170,6 @@ export class ServerResponse extends EventEmitter {
 			encoding = undefined
 		}
 		if (!this.#headersSent) {
-			// If no content-length and no transfer-encoding, use chunked
 			if (!this.#headers['content-length'] && !this.#headers['transfer-encoding']) {
 				this.#headers['transfer-encoding'] = 'chunked'
 			}
@@ -219,9 +227,12 @@ export class ServerResponse extends EventEmitter {
 		}
 
 		this.#finished = true
-		this.#socket.end()
+		if (!this.#keepAlive) {
+			this.#socket.end()
+		}
 		if (callback) queueMicrotask(callback)
 		this.emit('finish')
+		if (this.#onFinished) this.#onFinished()
 		return this
 	}
 }
@@ -232,14 +243,14 @@ export class ServerResponse extends EventEmitter {
  * Events: 'request', 'listening', 'close', 'error'
  */
 const DEFAULT_MAX_HEADER_SIZE = 64 * 1024  // 64 KB
-const DEFAULT_MAX_BODY_SIZE = 1024 * 1024  // 1 MB
 const DEFAULT_MAX_HEADER_COUNT = 128
 
 export class HTTPServer extends EventEmitter {
 	#server
 	#maxHeaderSize
-	#maxBodySize
 	#maxHeaderCount
+	#headerTimeout
+	#keepAliveTimeout
 
 	constructor(options, requestListener) {
 		super()
@@ -248,8 +259,9 @@ export class HTTPServer extends EventEmitter {
 			options = {}
 		}
 		this.#maxHeaderSize = options?.maxHeaderSize ?? DEFAULT_MAX_HEADER_SIZE
-		this.#maxBodySize = options?.maxBodySize ?? DEFAULT_MAX_BODY_SIZE
 		this.#maxHeaderCount = options?.maxHeaderCount ?? DEFAULT_MAX_HEADER_COUNT
+		this.#headerTimeout = options?.headerTimeout ?? DEFAULT_HEADER_TIMEOUT
+		this.#keepAliveTimeout = options?.keepAliveTimeout ?? DEFAULT_KEEP_ALIVE_TIMEOUT
 		if (requestListener) {
 			this.on('request', requestListener)
 		}
@@ -263,101 +275,106 @@ export class HTTPServer extends EventEmitter {
 		})
 	}
 
+	get headerTimeout() { return this.#headerTimeout }
+	set headerTimeout(ms) { this.#headerTimeout = ms }
+	get keepAliveTimeout() { return this.#keepAliveTimeout }
+	set keepAliveTimeout(ms) { this.#keepAliveTimeout = ms }
+
 	async #handleConnection(socket) {
 		const reader = socketReader(socket)
+		let firstRequest = true
 
-		let head
-		try {
-			head = await readRequestHead(reader, this.#maxHeaderSize)
-		} catch (err) {
-			if (err.code === 'ERR_HTTP_HEADER_TOO_LARGE') {
-				const res = new ServerResponse(socket)
-				res.writeHead(431, { 'Connection': 'close' })
-				res.end('Request Header Fields Too Large')
+		while (!socket.destroyed) {
+			const timeout = firstRequest ? this.#headerTimeout : this.#keepAliveTimeout
+			const timer = setTimeout(() => socket.destroy(), timeout)
+
+			let head
+			try {
+				head = await readRequestHead(reader, this.#maxHeaderSize)
+			} catch (err) {
+				clearTimeout(timer)
+				if (err.code === 'ERR_HTTP_HEADER_TOO_LARGE') {
+					const res = new ServerResponse(socket, false)
+					res.writeHead(431, { 'Connection': 'close' })
+					res.end('Request Header Fields Too Large')
+				}
+				socket.destroy()
+				return
 			}
-			socket.destroy()
-			return
-		}
-		if (!head) { socket.destroy(); return }
+			clearTimeout(timer)
 
-		// Header count limit
-		if (head.rawHeaders.length > this.#maxHeaderCount * 2) {
-			const res = new ServerResponse(socket)
-			res.writeHead(431, { 'Connection': 'close' })
-			res.end('Too Many Headers')
-			socket.destroy()
-			return
-		}
+			if (!head) { socket.destroy(); return }
+			firstRequest = false
 
-		const req = new IncomingMessage(socket)
-		req.method = head.method
-		req.url = head.url
-		req.httpVersion = head.httpVersion
-		req.headers = head.headers
-		req.rawHeaders = head.rawHeaders
+			if (head.rawHeaders.length > this.#maxHeaderCount * 2) {
+				const res = new ServerResponse(socket, false)
+				res.writeHead(431, { 'Connection': 'close' })
+				res.end('Too Many Headers')
+				socket.destroy()
+				return
+			}
 
-		const res = new ServerResponse(socket)
+			const connectionHeader = (head.headers['connection'] || '').toLowerCase()
+			const isHttp11 = head.httpVersion === '1.1'
+			const keepAlive = connectionHeader === 'close' ? false :
+				connectionHeader === 'keep-alive' ? true : isHttp11
 
-		const hasContentLength = 'content-length' in head.headers
-		const hasTransferEncoding = 'transfer-encoding' in head.headers
-		const isChunked = hasTransferEncoding &&
-			head.headers['transfer-encoding'].toLowerCase().includes('chunked')
+			const req = new IncomingMessage(socket)
+			req.method = head.method
+			req.url = head.url
+			req.httpVersion = head.httpVersion
+			req.headers = head.headers
+			req.rawHeaders = head.rawHeaders
 
-		// Reject conflicting framing headers (request smuggling prevention)
-		if (hasContentLength && hasTransferEncoding) {
-			res.writeHead(400, { 'Connection': 'close' })
-			res.end('Bad Request')
-			socket.destroy()
-			return
-		}
+			const res = new ServerResponse(socket, keepAlive)
+			if (!keepAlive) {
+				res.setHeader('connection', 'close')
+			}
 
-		// Validate and parse Content-Length
-		let contentLength = 0
-		if (hasContentLength) {
-			const clValue = head.headers['content-length'].trim()
-			if (!/^\d+$/.test(clValue)) {
+			const hasContentLength = 'content-length' in head.headers
+			const hasTransferEncoding = 'transfer-encoding' in head.headers
+			const isChunked = hasTransferEncoding &&
+				head.headers['transfer-encoding'].toLowerCase().includes('chunked')
+
+			if (hasContentLength && hasTransferEncoding) {
 				res.writeHead(400, { 'Connection': 'close' })
 				res.end('Bad Request')
 				socket.destroy()
 				return
 			}
-			contentLength = parseInt(clValue, 10)
-		}
 
-		if (!isChunked && contentLength > this.#maxBodySize) {
-			res.writeHead(413, { 'Connection': 'close' })
-			res.end('Payload Too Large')
-			socket.destroy()
-			return
-		}
-
-		const hasBody = isChunked ||
-			(contentLength > 0 && head.method !== 'GET' && head.method !== 'HEAD')
-
-		this.emit('request', req, res)
-
-		if (hasBody) {
-			const bodyIter = isChunked
-				? chunkedRequestBodyStream(reader, head.leftover)
-				: requestBodyStream(reader, head.leftover, contentLength)
-
-			// Pump body stream into EventEmitter data/end events
-			try {
-				let total = 0
-				for await (const chunk of bodyIter) {
-					total += chunk.length
-					if (total > this.#maxBodySize) {
-						socket.destroy()
-						return
-					}
-					req.emit('data', chunk)
+			let contentLength = 0
+			if (hasContentLength) {
+				const clValue = head.headers['content-length'].trim()
+				if (!/^\d+$/.test(clValue)) {
+					res.writeHead(400, { 'Connection': 'close' })
+					res.end('Bad Request')
+					socket.destroy()
+					return
 				}
-			} catch {}
-			req.complete = true
-			req.emit('end')
-		} else {
-			req.complete = true
-			queueMicrotask(() => req.emit('end'))
+				contentLength = parseInt(clValue, 10)
+			}
+
+			const hasBody = isChunked || contentLength > 0
+
+			if (hasBody) {
+				const bodyIter = isChunked
+					? chunkedRequestBodyStream(reader, head.leftover)
+					: requestBodyStream(reader, head.leftover, contentLength)
+				req._setBody(bodyIter)
+			} else {
+				req.complete = true
+				queueMicrotask(() => req.emit('end'))
+			}
+
+			this.emit('request', req, res)
+
+			await res._awaitFinish()
+
+			// Drain unconsumed body so the socket is clean for the next request
+			if (hasBody) await req._drain()
+
+			if (!keepAlive) return
 		}
 	}
 

@@ -195,4 +195,109 @@ describe('qn:http serve()', () => {
 		assert.strictEqual(result.length, 64 * 1024)
 		assert.strictEqual(result.checksum, result.expected)
 	})
+
+	testQnOnly('handler error returns 500 to client', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { serve } from 'qn:http'
+			const errors = []
+			const server = await serve({
+				port: 0,
+				onError: (err) => errors.push(err.message),
+			}, (req) => {
+				throw new Error('handler boom')
+			})
+			const addr = server.address()
+			const res = await fetch(\`http://127.0.0.1:\${addr.port}/\`)
+			console.log(JSON.stringify({
+				status: res.status,
+				body: await res.text(),
+				errorCaught: errors[0],
+			}))
+			server.close()
+		`)
+		const output = $({ timeout: 5000 })`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.status, 500)
+		assert.strictEqual(result.body, 'Internal Server Error')
+		assert.strictEqual(result.errorCaught, 'handler boom')
+	})
+
+	testQnOnly('handler async error returns 500 to client', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { serve } from 'qn:http'
+			const errors = []
+			const server = await serve({
+				port: 0,
+				onError: (err) => errors.push(err.message),
+			}, async (req) => {
+				await new Promise(r => setTimeout(r, 10))
+				throw new Error('async boom')
+			})
+			const addr = server.address()
+			const res = await fetch(\`http://127.0.0.1:\${addr.port}/\`)
+			console.log(JSON.stringify({
+				status: res.status,
+				body: await res.text(),
+				errorCaught: errors[0],
+			}))
+			server.close()
+		`)
+		const output = $({ timeout: 5000 })`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.status, 500)
+		assert.strictEqual(result.body, 'Internal Server Error')
+		assert.strictEqual(result.errorCaught, 'async boom')
+	})
+
+	testQnOnly('request has abort signal', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { serve } from 'qn:http'
+			const server = await serve({ port: 0 }, (req) => {
+				return Response.json({
+					hasSignal: req.signal !== undefined,
+					aborted: req.signal.aborted,
+				})
+			})
+			const addr = server.address()
+			const res = await fetch(\`http://127.0.0.1:\${addr.port}/\`)
+			const data = await res.json()
+			server.close()
+			console.log(JSON.stringify(data))
+		`)
+		const output = $({ timeout: 5000 })`${bin} ${dir}/test.js`
+		const data = JSON.parse(output)
+		assert.strictEqual(data.hasSignal, true)
+		assert.strictEqual(data.aborted, false)
+	})
+
+	testQnOnly('error after first request does not crash server', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { serve } from 'qn:http'
+			let callCount = 0
+			const server = await serve({ port: 0, onError: () => {} }, (req) => {
+				callCount++
+				if (callCount === 1) throw new Error('first fails')
+				return new Response('ok:' + callCount)
+			})
+			const addr = server.address()
+			const base = \`http://127.0.0.1:\${addr.port}\`
+
+			// First request: should get 500
+			const r1 = await fetch(base + '/a')
+			const t1 = await r1.text()
+
+			// Second request: should succeed (server still alive)
+			const r2 = await fetch(base + '/b')
+			const t2 = await r2.text()
+
+			server.close()
+			console.log(JSON.stringify({ s1: r1.status, t1, s2: r2.status, t2 }))
+		`)
+		const output = $({ timeout: 5000 })`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.s1, 500)
+		assert.strictEqual(result.t1, 'Internal Server Error')
+		assert.strictEqual(result.s2, 200)
+		assert.strictEqual(result.t2, 'ok:2')
+	})
 })
