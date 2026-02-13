@@ -1,84 +1,91 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { test, testQnOnly, $, execAsync } from './util.js'
+import { join } from 'node:path'
+import { test, testQnOnly, $, execAsync, QN, mktempdir } from './util.js'
 
-// TODO: Add HTTPS tests (requires creating self-signed certs or using curl --insecure)
-
-// HTTP server code to run in a Node subprocess
+// HTTP server code (ESM, runs under qn)
 const SERVER_CODE = `
-const http = require('http');
-const server = http.createServer((req, res) => {
-	res.setHeader('Connection', 'close');
-	const url = new URL(req.url, 'http://localhost');
-	let body = '';
-	req.on('data', chunk => body += chunk);
+import { createServer } from 'node:http'
+const server = createServer((req, res) => {
+	res.setHeader('Connection', 'close')
+	const url = new URL(req.url, 'http://localhost')
+	let body = ''
+	req.on('data', chunk => body += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk))
 	req.on('end', () => {
 		if (url.pathname === '/get') {
-			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.writeHead(200, { 'Content-Type': 'application/json' })
 			res.end(JSON.stringify({
 				args: Object.fromEntries(url.searchParams),
 				headers: req.headers,
 				url: req.url
-			}));
+			}))
 		} else if (url.pathname === '/post' && req.method === 'POST') {
-			res.writeHead(200, { 'Content-Type': 'application/json' });
-			let json = null;
-			try { json = JSON.parse(body); } catch {}
-			res.end(JSON.stringify({ data: body, json, headers: req.headers }));
+			res.writeHead(200, { 'Content-Type': 'application/json' })
+			let json = null
+			try { json = JSON.parse(body) } catch {}
+			res.end(JSON.stringify({ data: body, json, headers: req.headers }))
 		} else if (url.pathname === '/put' && req.method === 'PUT') {
-			res.writeHead(200, { 'Content-Type': 'application/json' });
-			res.end(JSON.stringify({ data: body, headers: req.headers }));
+			res.writeHead(200, { 'Content-Type': 'application/json' })
+			res.end(JSON.stringify({ data: body, headers: req.headers }))
 		} else if (url.pathname === '/delete' && req.method === 'DELETE') {
-			res.writeHead(200, { 'Content-Type': 'application/json' });
-			res.end(JSON.stringify({ deleted: true }));
+			res.writeHead(200, { 'Content-Type': 'application/json' })
+			res.end(JSON.stringify({ deleted: true }))
 		} else if (url.pathname === '/headers') {
-			res.writeHead(200, { 'Content-Type': 'application/json' });
-			res.end(JSON.stringify({ headers: req.headers }));
+			res.writeHead(200, { 'Content-Type': 'application/json' })
+			res.end(JSON.stringify({ headers: req.headers }))
 		} else if (url.pathname === '/status/404') {
-			res.writeHead(404, { 'Content-Type': 'text/plain' });
-			res.end('Not Found');
+			res.writeHead(404, { 'Content-Type': 'text/plain' })
+			res.end('Not Found')
 		} else if (url.pathname === '/status/500') {
-			res.writeHead(500, { 'Content-Type': 'text/plain' });
-			res.end('Internal Server Error');
+			res.writeHead(500, { 'Content-Type': 'text/plain' })
+			res.end('Internal Server Error')
 		} else if (url.pathname === '/redirect') {
-			res.writeHead(302, { 'Location': '/get' });
-			res.end();
+			res.writeHead(302, { 'Location': '/get' })
+			res.end()
 		} else if (url.pathname === '/redirect-chain') {
-			res.writeHead(302, { 'Location': '/redirect' });
-			res.end();
+			res.writeHead(302, { 'Location': '/redirect' })
+			res.end()
 		} else if (url.pathname === '/text') {
-			res.writeHead(200, { 'Content-Type': 'text/plain' });
-			res.end('Hello, World!');
+			res.writeHead(200, { 'Content-Type': 'text/plain' })
+			res.end('Hello, World!')
 		} else if (url.pathname === '/echo-method') {
-			res.writeHead(200, { 'Content-Type': 'text/plain' });
-			res.end(req.method);
+			res.writeHead(200, { 'Content-Type': 'text/plain' })
+			res.end(req.method)
 		} else if (url.pathname === '/delay') {
 			setTimeout(() => {
-				res.writeHead(200, { 'Content-Type': 'text/plain' });
-				res.end('delayed');
-			}, 2000);
+				res.writeHead(200, { 'Content-Type': 'text/plain' })
+				res.end('delayed')
+			}, 2000)
 		} else {
-			res.writeHead(404);
-			res.end('Not Found');
+			res.writeHead(404)
+			res.end('Not Found')
 		}
-	});
-});
+	})
+})
 server.listen(0, '127.0.0.1', () => {
-	console.log(server.address().port);
-});
+	console.log(server.address().port)
+})
 `
 
 /**
- * Start a test HTTP server as a Node subprocess
+ * Start a test HTTP server as a qn subprocess
  * @returns {Promise<{port: number, close: () => void}>}
  */
 function startServer() {
+	const serverDir = mktempdir()
+	const serverFile = join(serverDir, 'server.js')
+	writeFileSync(serverFile, SERVER_CODE)
 	return new Promise((resolve, reject) => {
-		const child = spawn('node', ['-e', SERVER_CODE], {
+		const child = spawn(QN(), [serverFile], {
 			stdio: ['ignore', 'pipe', 'inherit']
 		})
+
+		const cleanup = () => {
+			child.kill()
+			try { rmSync(serverDir, { recursive: true }) } catch {}
+		}
 
 		let output = ''
 		child.stdout.on('data', (data) => {
@@ -89,7 +96,7 @@ function startServer() {
 				setTimeout(() => {
 					resolve({
 						port,
-						close: () => child.kill()
+						close: cleanup
 					})
 				}, 50)
 			}

@@ -217,9 +217,10 @@ describe('qx streaming pipe', () => {
 		try {
 			// Source produces lines with delays, destination timestamps each line
 			// If streaming works, timestamps will be spread out; if batch, they'd be the same
+			// Uses perl -MTime::HiRes for portable millisecond timestamps (date +%3N is GNU-only)
 			const output = runQx(`
 				const result = await $.quiet\`sh -c 'echo A; sleep 0.05; echo B; sleep 0.05; echo C'\`
-					.pipe($.quiet\`sh -c 'while read line; do echo "$(date +%s%3N)"; done'\`)
+					.pipe($.quiet\`perl -MTime::HiRes=time -ne 'BEGIN{$$|=1} printf "%.0f\\n", time()*1000'\`)
 				const times = result.stdout.trim().split('\\n').map(Number)
 				// Check that timestamps are spread out (streaming), not clustered (batch)
 				const spread1 = times[1] - times[0]
@@ -315,9 +316,9 @@ describe('qx binary data', () => {
 	test('buffer() returns binary data', () => {
 		const dir = mktempdir()
 		try {
-			// Use $(which printf) to find printf in PATH (not all systems have /usr/bin/printf)
+			// Use octal escapes (not \xNN) for portability — macOS printf doesn't support \x
 			const output = runQx(`
-				const buf = await $.quiet\`$(which printf) '\\\\x00\\\\x01\\\\x02\\\\xff'\`.buffer()
+				const buf = await $.quiet\`printf '\\\\000\\\\001\\\\002\\\\377'\`.buffer()
 				console.log(JSON.stringify({
 					isBuffer: buf instanceof Buffer,
 					length: buf.length,
@@ -337,9 +338,9 @@ describe('qx binary data', () => {
 	test('binary data survives piping', () => {
 		const dir = mktempdir()
 		try {
-			// Use $(which printf) to find printf in PATH (not all systems have /usr/bin/printf)
+			// Use octal escapes (not \xNN) for portability — macOS printf doesn't support \x
 			const output = runQx(`
-				const buf = await $.quiet\`$(which printf) '\\\\x00\\\\x01\\\\x02\\\\xff'\`
+				const buf = await $.quiet\`printf '\\\\000\\\\001\\\\002\\\\377'\`
 					.pipe($.quiet\`cat\`)
 					.buffer()
 				console.log(JSON.stringify({

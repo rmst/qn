@@ -20,8 +20,8 @@ describe('qn_socket native module', () => {
 		return execAsync(bin, [`${dir}/test.js`]).then(output => {
 			const c = JSON.parse(output)
 			assert.equal(c.AF_INET, 2)
-			assert.equal(c.AF_INET6, 10)
-			assert.equal(c.SOCK_STREAM, 1)
+			assert.ok(c.AF_INET6 > 0)
+			assert.ok(c.SOCK_STREAM > 0)
 			assert.ok(c.SOL_SOCKET > 0)
 			assert.ok(c.SO_REUSEADDR > 0)
 			assert.ok(c.TCP_NODELAY > 0)

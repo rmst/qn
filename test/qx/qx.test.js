@@ -148,7 +148,7 @@ describe('qx helpers', () => {
 				console.log(JSON.stringify({ after, original, restored }))
 			`, dir)
 			const result = JSON.parse(output)
-			assert.strictEqual(result.after, '/tmp')
+			assert.strictEqual(result.after, realpathSync('/tmp'))
 			assert.strictEqual(result.restored, result.original)
 		} finally {
 			rmSync(dir, { recursive: true })

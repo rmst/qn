@@ -5,6 +5,8 @@ import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { testQnOnly, execAsync, QN } from './util.js'
 
+const NO_NODE = process.env.NO_NODEJS_TESTS
+
 const testDir = path.dirname(new URL(import.meta.url).pathname)
 const certFile = path.join(testDir, 'fixtures', 'test-cert.pem')
 const keyFile = path.join(testDir, 'fixtures', 'test-key.pem')
@@ -88,7 +90,7 @@ describe('qn_tls native module', () => {
 		assert.strictEqual(output, 'ok')
 	})
 
-	testQnOnly('TLS connect, handshake, and read from local HTTPS server', async ({ bin, dir }) => {
+	if (!NO_NODE) testQnOnly('TLS connect, handshake, and read from local HTTPS server', async ({ bin, dir }) => {
 		const { port, close } = await startHttpsServer()
 		try {
 			writeFileSync(`${dir}/test.js`, `
@@ -130,7 +132,8 @@ describe('qn_tls native module', () => {
 	})
 })
 
-describe('HTTPS fetch (local server)', () => {
+// These suites need a Node.js HTTPS server as a fixture
+if (!NO_NODE) describe('HTTPS fetch (local server)', () => {
 	testQnOnly('HTTPS GET', async ({ bin, dir }) => {
 		const { port, close } = await startHttpsServer()
 		try {
@@ -499,7 +502,7 @@ function startSlowHttpsServer() {
 	})
 }
 
-describe('Fetch timeout and AbortSignal', () => {
+if (!NO_NODE) describe('Fetch timeout and AbortSignal', () => {
 	testQnOnly('AbortSignal.timeout aborts slow HTTPS request', async ({ bin, dir }) => {
 		const { port, close } = await startSlowHttpsServer()
 		try {
@@ -569,7 +572,7 @@ describe('Fetch timeout and AbortSignal', () => {
 	})
 })
 
-describe('Streaming response body', () => {
+if (!NO_NODE) describe('Streaming response body', () => {
 	testQnOnly('response.body async iteration', async ({ bin, dir }) => {
 		const { port, close } = await startHttpsServer()
 		try {

@@ -19,7 +19,8 @@ const $ = (strings, ...values) => {
  * Both runs must produce identical output.
  */
 const test = (name, fn) => {
-	for (const runtime of ['node', 'qjsx']) {
+	const runtimes = process.env.NO_NODEJS_TESTS ? ['qjsx'] : ['node', 'qjsx']
+	for (const runtime of runtimes) {
 		const bin = runtime === 'node' ? 'node' : QJSX()
 		const env = runtime === 'qjsx' ? 'QJSX_MODULE_RESOLUTION=node' : ''
 		nodetest(`${name} [${runtime}]`, () => {
