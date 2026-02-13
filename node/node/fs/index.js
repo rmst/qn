@@ -454,17 +454,27 @@ export function rmSync(path, options = {}) {
 }
 
 export function mkdtempSync(prefix) {
-	const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-	let suffix = '';
+	const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+	for (let attempt = 0; attempt < 3; attempt++) {
+		let suffix = ''
+		for (let i = 0; i < 6; i++) {
+			suffix += chars[Math.floor(Math.random() * chars.length)]
+		}
+		const path = prefix + suffix
+		const result = os.mkdir(path, 0o700)
+		if (result === 0) return path
+	}
+	// Final attempt with PID to guarantee uniqueness across parallel processes
+	let suffix = ''
 	for (let i = 0; i < 6; i++) {
-		suffix += chars[Math.floor(Math.random() * chars.length)];
+		suffix += chars[Math.floor(Math.random() * chars.length)]
 	}
-	const path = prefix + suffix;
-	const result = os.mkdir(path, 0o700);
+	const path = prefix + os.getpid() + '_' + suffix
+	const result = os.mkdir(path, 0o700)
 	if (result !== 0) {
-		throw new Error(`Failed to create temp directory: ${path}`);
+		throw new Error(`Failed to create temp directory: ${path}`)
 	}
-	return path;
+	return path
 }
 
 export function accessSync(path, mode) {

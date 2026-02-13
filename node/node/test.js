@@ -16,6 +16,10 @@ const YELLOW = '\x1b[33m'
 const BLUE = '\x1b[34m'
 const CYAN = '\x1b[36m'
 
+// Consume and clear QN_TEST_CHILD so it doesn't propagate to nested child processes
+const isChildProcess = !!process.env.QN_TEST_CHILD
+delete process.env.QN_TEST_CHILD
+
 // Test state
 const rootSuite = { name: null, tests: [], suites: [], parent: null }
 let currentSuite = rootSuite
@@ -199,7 +203,27 @@ async function runAllTests() {
 	await runSuite(rootSuite)
 
 	const totalDuration = performance.now() - startTime
-	printSummary(totalDuration)
+
+	if (isChildProcess) {
+		// Child process mode: emit machine-readable results for the parent
+		const json = JSON.stringify({
+			tests: results.tests,
+			suites: results.suites,
+			pass: results.pass,
+			fail: results.fail,
+			skip: results.skip,
+			todo: results.todo,
+			duration_ms: totalDuration,
+			failures: results.failures.map(f => ({
+				name: f.name,
+				message: f.error?.message,
+				stack: f.error?.stack,
+			})),
+		})
+		process.stderr.write(`QN_TEST_RESULT:${json}\n`)
+	} else {
+		printSummary(totalDuration)
+	}
 
 	process.exitCode = results.fail > 0 ? 1 : 0
 }

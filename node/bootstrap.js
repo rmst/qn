@@ -41,6 +41,152 @@ function resolveScriptPath(path) {
 	return path
 }
 
+/** Detect number of available CPU cores */
+function getCpuCount() {
+	try {
+		const f = std.popen('nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null', 'r')
+		const line = f.getline()
+		f.close()
+		const n = parseInt(line, 10)
+		return n > 0 ? n : 4
+	} catch {
+		return 4
+	}
+}
+
+// ANSI codes for parallel test output
+const RESET = '\x1b[0m'
+const BOLD = '\x1b[1m'
+const DIM = '\x1b[2m'
+const RED = '\x1b[31m'
+const GREEN = '\x1b[32m'
+
+/**
+ * Run multiple test files in parallel via child processes.
+ * Each file runs in a separate qn process. Results are buffered
+ * and printed in file order with a unified summary.
+ */
+async function runTestsParallel(testFiles, concurrency) {
+	const { spawn } = await import('node:child_process')
+	const qnBin = scriptArgs[0]
+
+	if (concurrency <= 0) concurrency = getCpuCount()
+
+	function runFile(filePath) {
+		return new Promise((resolve, reject) => {
+			const env = std.getenviron()
+			env.QN_TEST_CHILD = '1'
+			const child = spawn(qnBin, ['--test', filePath], {
+				stdio: ['ignore', 'pipe', 'pipe'],
+				env,
+			})
+			let stdout = ''
+			let stderr = ''
+			child.stdout.on('data', d => stdout += d)
+			child.stderr.on('data', d => stderr += d)
+			child.on('error', reject)
+			child.on('close', (code) => {
+				// Parse JSON result from stderr
+				let result = null
+				const marker = 'QN_TEST_RESULT:'
+				const stderrLines = stderr.split('\n')
+				const cleanStderr = []
+				for (const line of stderrLines) {
+					if (line.startsWith(marker)) {
+						try { result = JSON.parse(line.substring(marker.length)) } catch {}
+					} else if (line) {
+						cleanStderr.push(line)
+					}
+				}
+				resolve({
+					stdout: stdout.trimEnd(),
+					stderr: cleanStderr.join('\n'),
+					code,
+					result,
+					file: filePath,
+				})
+			})
+		})
+	}
+
+	const fileResults = new Array(testFiles.length)
+	let nextIndex = 0
+
+	async function worker() {
+		while (nextIndex < testFiles.length) {
+			const index = nextIndex++
+			fileResults[index] = await runFile(testFiles[index])
+		}
+	}
+
+	const startTime = performance.now()
+	const workerCount = Math.min(concurrency, testFiles.length)
+	await Promise.all(Array.from({ length: workerCount }, () => worker()))
+	const totalDuration = performance.now() - startTime
+
+	// Compute relative paths from cwd for cleaner output
+	const [cwd] = os.getcwd()
+
+	// Print results in file order and aggregate totals
+	const totals = { tests: 0, suites: 0, pass: 0, fail: 0, skip: 0, todo: 0 }
+	const allFailures = []
+
+	for (const r of fileResults) {
+		const relPath = r.file.startsWith(cwd + '/') ? r.file.substring(cwd.length + 1) : r.file
+		const fileStatus = r.code === 0 ? `${GREEN}✔${RESET}` : `${RED}✖${RESET}`
+		std.out.puts(`${fileStatus} ${BOLD}${relPath}${RESET}\n`)
+
+		if (r.stdout) std.out.puts(r.stdout + '\n')
+		if (r.stderr) std.err.puts(r.stderr + '\n')
+
+		if (r.result) {
+			totals.tests += r.result.tests
+			totals.suites += r.result.suites
+			totals.pass += r.result.pass
+			totals.fail += r.result.fail
+			totals.skip += r.result.skip
+			totals.todo += r.result.todo
+			if (r.result.failures) {
+				for (const f of r.result.failures) allFailures.push(f)
+			}
+		} else if (r.code !== 0) {
+			// Process crashed without producing results
+			totals.fail++
+			totals.tests++
+			allFailures.push({ name: relPath, message: `Process exited with code ${r.code}` })
+		}
+	}
+
+	// Print aggregate summary
+	std.out.puts(`\n`)
+	std.out.puts(`${DIM}ℹ${RESET} files ${testFiles.length}\n`)
+	std.out.puts(`${DIM}ℹ${RESET} tests ${totals.tests}\n`)
+	std.out.puts(`${DIM}ℹ${RESET} suites ${totals.suites}\n`)
+	std.out.puts(`${DIM}ℹ${RESET} pass ${totals.pass}\n`)
+	std.out.puts(`${DIM}ℹ${RESET} fail ${totals.fail}\n`)
+	if (totals.skip > 0) std.out.puts(`${DIM}ℹ${RESET} skipped ${totals.skip}\n`)
+	if (totals.todo > 0) std.out.puts(`${DIM}ℹ${RESET} todo ${totals.todo}\n`)
+	std.out.puts(`${DIM}ℹ${RESET} duration_ms ${totalDuration.toFixed(3)}\n`)
+
+	if (allFailures.length > 0) {
+		std.out.puts(`\n${RED}✖ failing tests:${RESET}\n\n`)
+		for (const f of allFailures) {
+			std.out.puts(`${RED}✖${RESET} ${f.name}\n`)
+			if (f.message) std.out.puts(`  ${f.message}\n`)
+			if (f.stack) {
+				const stackLines = f.stack.split('\n').slice(1, 5)
+				for (const line of stackLines) {
+					std.out.puts(`  ${DIM}${line.trim()}${RESET}\n`)
+				}
+			}
+			std.out.puts('\n')
+		}
+	}
+
+	std.out.flush()
+	process.exitCode = totals.fail > 0 ? 1 : 0
+}
+
 // Handle --version flag
 if (scriptArgs[1] === '--version' || scriptArgs[1] === '-V') {
 	let version = `qn ${commit}`
@@ -70,13 +216,29 @@ if (scriptArgs.length < 2) {
 	await import("repl")
 } else if (scriptArgs[1] === '--test') {
 	// Run test files with glob expansion (like Node.js)
-	await import('node:test')
+
+	// Parse --test-concurrency flag and separate from file args
+	let concurrency = 0
+	const fileArgs = []
+	for (let i = 2; i < scriptArgs.length; i++) {
+		const arg = scriptArgs[i]
+		const match = arg.match(/^--test-concurrency(?:=(\d+))?$/)
+		if (match) {
+			const val = match[1] || scriptArgs[++i]
+			concurrency = parseInt(val, 10)
+			if (!(concurrency > 0)) {
+				std.err.puts(`Error: --test-concurrency requires a positive integer, got '${val}'\n`)
+				std.exit(1)
+			}
+		} else {
+			fileArgs.push(arg)
+		}
+	}
 
 	// Separate explicit files from glob patterns (including negative patterns)
 	const explicitFiles = []
 	const patterns = []
-	for (let i = 2; i < scriptArgs.length; i++) {
-		const arg = scriptArgs[i]
+	for (const arg of fileArgs) {
 		// Negative patterns and glob patterns go to glob, explicit files are added directly
 		if (arg.startsWith('!') || isGlobPattern(arg) || !fileExists(arg)) {
 			patterns.push(arg)
@@ -104,8 +266,13 @@ if (scriptArgs.length < 2) {
 		std.exit(1)
 	}
 
-	for (const testPath of testFiles) {
-		await import(testPath)
+	if (testFiles.length === 1) {
+		// Single file: run in-process (fast path, no child process overhead)
+		await import('node:test')
+		await import(testFiles[0])
+	} else {
+		// Multiple files: run in parallel via child processes
+		await runTestsParallel(testFiles, concurrency)
 	}
 } else {
 	const scriptPath = resolveScriptPath(scriptArgs[1])
