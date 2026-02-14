@@ -97,7 +97,11 @@ export class ServerResponse extends EventEmitter {
 	get statusCode() { return this.#statusCode }
 	set statusCode(code) { this.#statusCode = code }
 	get statusMessage() { return this.#statusMessage }
-	set statusMessage(msg) { this.#statusMessage = msg }
+	set statusMessage(msg) {
+		if (/[\r\n]/.test(msg))
+			throw new TypeError('Invalid status message: contains CR or LF')
+		this.#statusMessage = msg
+	}
 
 	/** @internal resolve when response is fully written */
 	_awaitFinish() {
@@ -134,7 +138,10 @@ export class ServerResponse extends EventEmitter {
 			statusMessage = undefined
 		}
 		this.#statusCode = statusCode
-		this.#statusMessage = statusMessage || STATUS_CODES[statusCode] || 'Unknown'
+		const msg = statusMessage || STATUS_CODES[statusCode] || 'Unknown'
+		if (/[\r\n]/.test(msg))
+			throw new TypeError('Invalid status message: contains CR or LF')
+		this.#statusMessage = msg
 		if (headers) {
 			for (const [k, v] of Object.entries(headers)) {
 				if (/[\r\n]/.test(k) || /[\r\n]/.test(String(v))) {
