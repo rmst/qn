@@ -8,6 +8,7 @@
 
 #include <errno.h>
 #include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/types.h>
@@ -16,6 +17,8 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <pthread.h>
+#include <signal.h>
 #include "quickjs.h"
 
 #define countof(x) (sizeof(x) / sizeof((x)[0]))
@@ -459,6 +462,199 @@ static JSValue js_getaddrinfo(JSContext *ctx, JSValueConst this_val,
 	return arr;
 }
 
+/* Args struct for async getaddrinfo thread */
+struct gai_async_args {
+	char *host;
+	char *service;
+	struct addrinfo hints;
+	int write_fd;
+};
+
+/*
+ * Thread function: calls blocking getaddrinfo and writes serialized
+ * result to the pipe write end.
+ *
+ * Wire format:
+ *   [1 byte status: 0=success, nonzero=error]
+ *   On success: [1 byte count] then per address: [1 byte family] [null-terminated address string]
+ *   On error: [null-terminated error string]
+ */
+static void *gai_async_thread(void *arg)
+{
+	struct gai_async_args *args = (struct gai_async_args *)arg;
+	struct addrinfo *res, *rp;
+	uint8_t buf[1024];
+	int pos = 0;
+	int ret;
+
+	ret = getaddrinfo(args->host, args->service, &args->hints, &res);
+
+	if (ret != 0) {
+		const char *errstr = gai_strerror(ret);
+		size_t len = strlen(errstr);
+		buf[pos++] = 1;
+		if (len > sizeof(buf) - pos - 1)
+			len = sizeof(buf) - pos - 1;
+		memcpy(buf + pos, errstr, len);
+		pos += len;
+		buf[pos++] = '\0';
+	} else {
+		buf[pos++] = 0;
+		int count_pos = pos++;
+		int count = 0;
+
+		for (rp = res; rp != NULL; rp = rp->ai_next) {
+			char addr_str[INET6_ADDRSTRLEN];
+			const char *p = NULL;
+
+			if (rp->ai_family == AF_INET) {
+				struct sockaddr_in *a4 = (struct sockaddr_in *)rp->ai_addr;
+				p = inet_ntop(AF_INET, &a4->sin_addr, addr_str, sizeof(addr_str));
+			} else if (rp->ai_family == AF_INET6) {
+				struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)rp->ai_addr;
+				p = inet_ntop(AF_INET6, &a6->sin6_addr, addr_str, sizeof(addr_str));
+			}
+
+			if (p) {
+				size_t slen = strlen(addr_str);
+				if (pos + 1 + slen + 1 > sizeof(buf))
+					break;
+				buf[pos++] = (uint8_t)rp->ai_family;
+				memcpy(buf + pos, addr_str, slen + 1);
+				pos += slen + 1;
+				count++;
+			}
+		}
+
+		buf[count_pos] = (uint8_t)count;
+		freeaddrinfo(res);
+	}
+
+	/* Write is atomic for < PIPE_BUF bytes. Ignore EPIPE (JS closed read end). */
+	write(args->write_fd, buf, pos);
+	close(args->write_fd);
+	free(args->host);
+	free(args->service);
+	free(args);
+	return NULL;
+}
+
+/*
+ * getaddrinfoAsync(host, port, hints) -> fd
+ *
+ * Like getaddrinfo but non-blocking. Spawns a detached thread to do
+ * the lookup and returns a pipe read fd. When the fd becomes readable,
+ * the serialized result can be read with os.read().
+ */
+static JSValue js_getaddrinfo_async(JSContext *ctx, JSValueConst this_val,
+                                    int argc, JSValueConst *argv)
+{
+	const char *host_js;
+	char *host = NULL, *service = NULL;
+	char port_str[16];
+	struct gai_async_args *args = NULL;
+	int pipefd[2];
+	pthread_t thread;
+	pthread_attr_t attr;
+	int ret;
+
+	host_js = JS_ToCString(ctx, argv[0]);
+	if (!host_js)
+		return JS_EXCEPTION;
+	host = strdup(host_js);
+	JS_FreeCString(ctx, host_js);
+	if (!host)
+		return JS_ThrowOutOfMemory(ctx);
+
+	if (argc >= 2 && !JS_IsUndefined(argv[1])) {
+		int port;
+		if (JS_IsNumber(argv[1])) {
+			if (JS_ToInt32(ctx, &port, argv[1])) {
+				free(host);
+				return JS_EXCEPTION;
+			}
+			snprintf(port_str, sizeof(port_str), "%d", port);
+			service = strdup(port_str);
+		} else {
+			const char *svc_js = JS_ToCString(ctx, argv[1]);
+			if (!svc_js) {
+				free(host);
+				return JS_EXCEPTION;
+			}
+			service = strdup(svc_js);
+			JS_FreeCString(ctx, svc_js);
+		}
+		if (!service) {
+			free(host);
+			return JS_ThrowOutOfMemory(ctx);
+		}
+	}
+
+	struct addrinfo hints;
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+
+	if (argc >= 3 && !JS_IsUndefined(argv[2])) {
+		JSValue val;
+		val = JS_GetPropertyStr(ctx, argv[2], "family");
+		if (!JS_IsUndefined(val)) {
+			JS_ToInt32(ctx, &hints.ai_family, val);
+		}
+		JS_FreeValue(ctx, val);
+
+		val = JS_GetPropertyStr(ctx, argv[2], "socktype");
+		if (!JS_IsUndefined(val)) {
+			JS_ToInt32(ctx, &hints.ai_socktype, val);
+		}
+		JS_FreeValue(ctx, val);
+	}
+
+	if (pipe(pipefd) < 0) {
+		free(host);
+		free(service);
+		return JS_ThrowTypeError(ctx, "pipe error: %s", strerror(errno));
+	}
+
+	if (set_nonblock(pipefd[0]) < 0) {
+		close(pipefd[0]);
+		close(pipefd[1]);
+		free(host);
+		free(service);
+		return JS_ThrowTypeError(ctx, "fcntl error: %s", strerror(errno));
+	}
+
+	args = malloc(sizeof(*args));
+	if (!args) {
+		close(pipefd[0]);
+		close(pipefd[1]);
+		free(host);
+		free(service);
+		return JS_ThrowOutOfMemory(ctx);
+	}
+
+	args->host = host;
+	args->service = service;
+	args->hints = hints;
+	args->write_fd = pipefd[1];
+
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	ret = pthread_create(&thread, &attr, gai_async_thread, args);
+	pthread_attr_destroy(&attr);
+
+	if (ret != 0) {
+		close(pipefd[0]);
+		close(pipefd[1]);
+		free(args->host);
+		free(args->service);
+		free(args);
+		return JS_ThrowTypeError(ctx, "pthread_create error: %s", strerror(ret));
+	}
+
+	return JS_NewInt32(ctx, pipefd[0]);
+}
+
 /*
  * send(fd, buffer, offset, length) -> bytes sent or -EAGAIN
  *
@@ -547,6 +743,7 @@ static const JSCFunctionListEntry js_socket_funcs[] = {
 	JS_CFUNC_DEF("getpeername", 1, js_getpeername),
 	JS_CFUNC_DEF("shutdown", 2, js_shutdown),
 	JS_CFUNC_DEF("getaddrinfo", 3, js_getaddrinfo),
+	JS_CFUNC_DEF("getaddrinfoAsync", 3, js_getaddrinfo_async),
 	JS_CFUNC_DEF("send", 4, js_send),
 	JS_CFUNC_DEF("recv", 4, js_recv),
 
@@ -572,6 +769,9 @@ static const JSCFunctionListEntry js_socket_funcs[] = {
 
 static int js_socket_init(JSContext *ctx, JSModuleDef *m)
 {
+	/* Ignore SIGPIPE so the async DNS thread doesn't die if JS closes
+	   the read end of the pipe before the thread writes to it. */
+	signal(SIGPIPE, SIG_IGN);
 	return JS_SetModuleExportList(ctx, m, js_socket_funcs,
 	                              countof(js_socket_funcs));
 }

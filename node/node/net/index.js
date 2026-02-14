@@ -13,12 +13,52 @@ import {
 	accept as _accept, connect as _connect, connectFinish as _connectFinish,
 	setsockopt as _setsockopt, getsockname as _getsockname,
 	getpeername as _getpeername, shutdown as _shutdown,
-	getaddrinfo as _getaddrinfo, send as _send, recv as _recv,
+	getaddrinfoAsync as _getaddrinfoAsync, send as _send, recv as _recv,
 	AF_INET, AF_INET6, SOCK_STREAM, SOL_SOCKET, IPPROTO_TCP,
 	SO_REUSEADDR, TCP_NODELAY, SHUT_WR, SHUT_RDWR, EAGAIN, EINPROGRESS,
 } from 'qn_socket'
 
 export { AF_INET, AF_INET6, SOCK_STREAM }
+
+/**
+ * Read the serialized result from an async getaddrinfo pipe fd.
+ * Returns a promise that resolves to [{ family, address }].
+ */
+function readAddrinfoPipe(fd) {
+	return new Promise((resolve, reject) => {
+		os.setReadHandler(fd, () => {
+			const buf = new ArrayBuffer(4096)
+			const n = os.read(fd, buf, 0, 4096)
+			if (n === -EAGAIN) return
+			os.setReadHandler(fd, null)
+			os.close(fd)
+			if (n <= 0) {
+				reject(new TypeError('getaddrinfo failed: no data'))
+				return
+			}
+			const view = new Uint8Array(buf, 0, n)
+			if (view[0] !== 0) {
+				let end = 1
+				while (end < n && view[end] !== 0) end++
+				const errMsg = new TextDecoder().decode(view.subarray(1, end))
+				reject(new TypeError(`getaddrinfo error: ${errMsg}`))
+				return
+			}
+			const count = view[1]
+			const addresses = []
+			let pos = 2
+			for (let i = 0; i < count && pos < n; i++) {
+				const family = view[pos++]
+				let end = pos
+				while (end < n && view[end] !== 0) end++
+				const address = new TextDecoder().decode(view.subarray(pos, end))
+				pos = end + 1
+				addresses.push({ family, address })
+			}
+			resolve(addresses)
+		})
+	})
+}
 
 const BUFFER_SIZE = 65536
 
@@ -114,25 +154,33 @@ export class Socket extends EventEmitter {
 		if (callback) this.once('connect', callback)
 
 		this.#connecting = true
+		this.#doConnect(host, port)
 
-		// Resolve hostname, then connect
+		return this
+	}
+
+	async #doConnect(host, port) {
 		let addresses
 		try {
-			addresses = _getaddrinfo(host, port, { family: AF_INET })
+			addresses = await readAddrinfoPipe(_getaddrinfoAsync(host, port, { family: AF_INET }))
+			if (this.#destroyed) return
 			if (addresses.length === 0) {
-				addresses = _getaddrinfo(host, port)
+				addresses = await readAddrinfoPipe(_getaddrinfoAsync(host, port))
 			}
 		} catch (e) {
-			queueMicrotask(() => this.#emitError(e))
-			return this
+			if (this.#destroyed) return
+			this.#emitError(e)
+			return
 		}
+
+		if (this.#destroyed) return
 
 		const addr = addresses[0]
 		try {
 			this.#fd = _socket(addr.family, SOCK_STREAM)
 		} catch (e) {
-			queueMicrotask(() => this.#emitError(e))
-			return this
+			this.#emitError(e)
+			return
 		}
 
 		try {
@@ -157,16 +205,12 @@ export class Socket extends EventEmitter {
 				this.#connecting = false
 				this.#connected = true
 				this.#setupRemoteInfo()
-				queueMicrotask(() => {
-					this.#startReading()
-					this.emit('connect')
-				})
+				this.#startReading()
+				this.emit('connect')
 			}
 		} catch (e) {
-			queueMicrotask(() => this.#emitError(e))
+			this.#emitError(e)
 		}
-
-		return this
 	}
 
 	write(data, encoding, callback) {
