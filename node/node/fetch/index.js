@@ -290,6 +290,8 @@ export async function fetch(input, init = {}) {
 	}
 
 	const method = (init.method || 'GET').toUpperCase()
+	if (!/^[!#$%&'*+\-.^_`|~\w]+$/.test(method))
+		throw new TypeError(`Invalid HTTP method: ${JSON.stringify(init.method)}`)
 	const headers = init.headers instanceof Headers
 		? new Headers(init.headers)
 		: new Headers(init.headers || {})
@@ -380,7 +382,13 @@ export async function fetch(input, init = {}) {
 				if (!location) {
 					throw new TypeError('fetch failed: redirect without Location header')
 				}
+				const prevOrigin = url.origin
 				url = new URL(location, url)
+				if (url.origin !== prevOrigin) {
+					headers.delete('authorization')
+					headers.delete('cookie')
+					headers.delete('proxy-authorization')
+				}
 				redirected = true
 				continue
 			}

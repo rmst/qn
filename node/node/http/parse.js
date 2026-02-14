@@ -219,6 +219,12 @@ export function parseRequestHead(data) {
  * Build an HTTP/1.1 request string.
  */
 export function buildRequest(method, path, host, port, headers, isDefaultPort) {
+	if (/[\r\n]/.test(method))
+		throw new TypeError(`Invalid HTTP method: ${JSON.stringify(method)}`)
+	if (/[\r\n]/.test(path))
+		throw new TypeError('Invalid request path: contains CR or LF')
+	if (/[\r\n]/.test(host))
+		throw new TypeError('Invalid host: contains CR or LF')
 	const hostHeader = isDefaultPort ? host : `${host}:${port}`
 	let req = `${method} ${path} HTTP/1.1\r\nHost: ${hostHeader}\r\nConnection: close\r\n`
 	for (const [key, value] of headers) {
@@ -481,8 +487,12 @@ export async function writeResponse(writeFn, response) {
 	const hasContentLength = response.headers.has('content-length')
 	const useChunked = response.body && !hasContentLength
 
+	if (/[\r\n]/.test(statusText))
+		throw new TypeError('Invalid status text: contains CR or LF')
 	let head = `HTTP/1.1 ${status} ${statusText}\r\n`
 	for (const [k, v] of response.headers) {
+		if (/[\r\n]/.test(k) || /[\r\n]/.test(v))
+			throw new TypeError(`Invalid header: ${k}`)
 		head += `${k}: ${v}\r\n`
 	}
 	if (useChunked)

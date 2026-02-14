@@ -3,6 +3,21 @@
  * https://fetch.spec.whatwg.org/#headers-class
  */
 
+/** RFC 7230 token: only visible ASCII minus delimiters */
+const TOKEN_RE = /^[!#$%&'*+\-.^_`|~\w]+$/
+
+function validateHeaderName(name) {
+	if (typeof name !== 'string' || !TOKEN_RE.test(name))
+		throw new TypeError(`Invalid header name: ${JSON.stringify(name)}`)
+}
+
+function validateHeaderValue(name, value) {
+	if (typeof value !== 'string') value = String(value)
+	if (value.includes('\0') || value.includes('\r') || value.includes('\n'))
+		throw new TypeError(`Invalid header value for ${JSON.stringify(name)}`)
+	return value
+}
+
 export class Headers {
 	constructor(init) {
 		this._headers = new Map()
@@ -27,16 +42,18 @@ export class Headers {
 	}
 
 	append(name, value) {
+		validateHeaderName(name)
+		value = validateHeaderValue(name, value)
 		const key = name.toLowerCase()
 		if (key === 'set-cookie') {
-			this._cookies.push(String(value))
+			this._cookies.push(value)
 			return
 		}
 		const existing = this._headers.get(key)
 		if (existing !== undefined) {
 			this._headers.set(key, existing + ', ' + value)
 		} else {
-			this._headers.set(key, String(value))
+			this._headers.set(key, value)
 		}
 	}
 
@@ -69,12 +86,14 @@ export class Headers {
 	}
 
 	set(name, value) {
+		validateHeaderName(name)
+		value = validateHeaderValue(name, value)
 		const key = name.toLowerCase()
 		if (key === 'set-cookie') {
-			this._cookies = [String(value)]
+			this._cookies = [value]
 			return
 		}
-		this._headers.set(key, String(value))
+		this._headers.set(key, value)
 	}
 
 	*entries() {
