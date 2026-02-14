@@ -7,7 +7,17 @@ const createStream = (fd) => {
     fd,
     get isTTY() {
       return os.isatty(fd);
-    }
+    },
+    get columns() {
+      if (!os.isatty(fd)) return undefined
+      const size = os.ttyGetWinSize?.(fd)
+      return size ? size[0] : undefined
+    },
+    get rows() {
+      if (!os.isatty(fd)) return undefined
+      const size = os.ttyGetWinSize?.(fd)
+      return size ? size[1] : undefined
+    },
   };
 
   // Add write method for stdout and stderr
