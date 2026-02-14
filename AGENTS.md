@@ -3,6 +3,7 @@
 	- @Readme.md
 	- @quickjs/doc/quickjs.texi
 	- @Makefile
+- Read @architecture.md for an overview of the codebase structure and vendored dependencies.
 - Check the last few git commits to get a feeling for what has been worked on recently.
 
 ### Code comments
@@ -10,6 +11,9 @@ Never write comments describing what changed in a code edit. Comments should des
 
 ### Patch files
 Never edit a patch file directly. Instead update the resulting code file and then regenerate the patch file from that.
+
+### Architecture docs
+When committing changes that affect the project structure (new modules, dependencies, etc.), check if `architecture.md` needs updating.
 
 ### Git commits
 Never commit without being explicitly asked to. When making a commit, always add `Co-Authored-By: ai <noreply@ai.simonramstedt.com>` as the last line of the commit message. Before making a commit check if the commit fixed a bug or implemented a feature listed in Issues.md and if so remove it as part of the commit. Don't include trivial details. All commit messages should start with a tag (e.g. "feat" or "fix"). Be careful not to include \n characters instead of proper newlines.

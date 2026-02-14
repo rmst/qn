@@ -81,6 +81,9 @@ NODE_PATH=./libs ./bin/qjsxc -D utils -D config -o runtime bootstrap.js
 This is how `qn` is built - it compiles a minimal bootstrap with all node modules embedded using `-D` flags, creating a single native executable that can run any script with Node.js compatibility.
 
 ### Architecture
+
+See [architecture.md](architecture.md) for an overview of own code and vendored dependencies (QuickJS, SQLite, BearSSL, lwIP, WireGuard).
+
 The following files are used to compile the `qjsx` binary:
 
 - `quickjs.patch` is applied to `quickjs/quickjs.c` (import error locations)
