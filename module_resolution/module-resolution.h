@@ -780,38 +780,30 @@ static char *qjsx_module_normalizer(JSContext *ctx, const char *base_name,
     // real_base no longer needed for filesystem path handling
     if (real_base) js_free(ctx, real_base);
 
-    // Step 4: For filesystem paths, resolve the result via realpath
-    // Skip for embedded modules or if file doesn't exist yet
-    if (!embedded_modules) {
-        // First probe for extensions in bundler mode
-        char *probed = NULL;
-        if (!is_node_resolution()) {
-            probed = probe_module_with_extensions(ctx, resolved, NULL);
-            if (probed) {
-                MODULE_DEBUG("extension probe: '%s' -> '%s'", resolved, probed);
-                js_free(ctx, resolved);
-                resolved = probed;
+    // Step 4: For filesystem paths, probe extensions and resolve via realpath
+    if (!is_node_resolution()) {
+        char *probed = probe_module_with_extensions(
+            ctx, resolved, embedded_modules);
+        if (probed) {
+            MODULE_DEBUG("extension probe: '%s' -> '%s'", resolved, probed);
+            js_free(ctx, resolved);
+            // Embedded module matched — return directly (no realpath needed)
+            if (embedded_modules) {
+                MODULE_DEBUG("result (embedded): '%s'", probed);
+                return probed;
             }
+            resolved = probed;
         }
+    }
 
-        // Now realpath the result
+    // Resolve non-embedded paths via realpath for symlink canonicalization
+    if (!embedded_modules || !embedded_module_exists(embedded_modules, resolved)) {
         char *real_result = resolve_realpath(ctx, resolved);
         if (real_result) {
             MODULE_DEBUG("realpath result: '%s' -> '%s'", resolved, real_result);
             js_free(ctx, resolved);
             MODULE_DEBUG("result (filesystem): '%s'", real_result);
             return real_result;
-        }
-    } else {
-        // For embedded modules, just probe for extensions in bundler mode
-        if (!is_node_resolution()) {
-            char *probed = probe_module_with_extensions(ctx, resolved, embedded_modules);
-            if (probed) {
-                MODULE_DEBUG("extension probe (embedded): '%s' -> '%s'", resolved, probed);
-                js_free(ctx, resolved);
-                MODULE_DEBUG("result (embedded): '%s'", probed);
-                return probed;
-            }
         }
     }
 

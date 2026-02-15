@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync, realpathSync } from 'node:fs'
-import { QJSX, QJSXC } from '../util.js'
+import { QJSX, QN, QJSXC } from '../util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), 'symlink-test-')))
 
@@ -117,6 +117,47 @@ describe('Symlink Resolution', () => {
 		assert.strictEqual(output, '1 2')
 	})
 
+	test('circular import through symlinked directory resolves correctly', ({ dir }) => {
+		// Two modules import each other through a symlink
+		mkdirSync(`${dir}/pkg`)
+		writeFileSync(`${dir}/pkg/a.js`, `
+			import { getB } from '../link/b.js'
+			export const a = 'a-value'
+			export function getA() { return 'a got b: ' + getB() }
+		`)
+		writeFileSync(`${dir}/pkg/b.js`, `
+			import { a } from '../link/a.js'
+			export function getB() { return 'b (a=' + a + ')' }
+		`)
+		symlinkSync(`${dir}/pkg`, `${dir}/link`)
+
+		writeFileSync(`${dir}/main.js`, `
+			import { getA } from './pkg/a.js'
+			console.log(getA())
+		`)
+		const output = $`${QJSX()} ${dir}/main.js`
+		assert.strictEqual(output, 'a got b: b (a=a-value)')
+	})
+
+	test('module identity preserved through symlinked circular imports', ({ dir }) => {
+		// Same module reached via different paths (real and symlink) should be one module
+		mkdirSync(`${dir}/pkg`)
+		writeFileSync(`${dir}/pkg/counter.js`, `
+			let n = 0
+			export const inc = () => ++n
+		`)
+		writeFileSync(`${dir}/pkg/a.js`, `
+			import { inc as incViaLink } from '../link/counter.js'
+			import { inc as incDirect } from './counter.js'
+			console.log(incViaLink(), incDirect())
+		`)
+		symlinkSync(`${dir}/pkg`, `${dir}/link`)
+
+		const output = $`${QJSX()} ${dir}/pkg/a.js`
+		// Same module identity → shared counter: "1 2"
+		assert.strictEqual(output, '1 2')
+	})
+
 	test('extension probing works through symlinks', ({ dir }) => {
 		// Create real file
 		mkdirSync(`${dir}/real`)
@@ -149,6 +190,72 @@ describe('Symlink Resolution', () => {
 		`)
 		const output = $`${QJSX()} ${dir}/main.js`
 		assert.strictEqual(output, 'package')
+	})
+})
+
+describe('Symlink Resolution with qn (embedded modules)', () => {
+	// qn has embedded modules which changes the module normalizer path.
+	// These tests verify symlink resolution works correctly when
+	// embedded_modules is non-NULL.
+
+	test('module identity preserved through symlinks with qn', ({ dir }) => {
+		mkdirSync(`${dir}/real`)
+		writeFileSync(`${dir}/real/singleton.js`, `
+			let count = 0;
+			export const getCount = () => ++count;
+		`)
+		symlinkSync(`${dir}/real/singleton.js`, `${dir}/link-singleton.js`)
+
+		writeFileSync(`${dir}/main.js`, `
+			import { getCount as c1 } from '${dir}/real/singleton.js';
+			import { getCount as c2 } from '${dir}/link-singleton.js';
+			console.log(c1(), c2());
+		`)
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, '1 2')
+	})
+
+	test('circular import through symlinked directory with qn', ({ dir }) => {
+		mkdirSync(`${dir}/pkg`)
+		writeFileSync(`${dir}/pkg/a.js`, `
+			import { getB } from '../link/b.js'
+			export const a = 'a-value'
+			export function getA() { return 'a got b: ' + getB() }
+		`)
+		writeFileSync(`${dir}/pkg/b.js`, `
+			import { a } from '../link/a.js'
+			export function getB() { return 'b (a=' + a + ')' }
+		`)
+		symlinkSync(`${dir}/pkg`, `${dir}/link`)
+
+		writeFileSync(`${dir}/main.js`, `
+			import { getA } from './pkg/a.js'
+			console.log(getA())
+		`)
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, 'a got b: b (a=a-value)')
+	})
+
+	test('module loaded only once through symlink with qn', ({ dir }) => {
+		mkdirSync(`${dir}/pkg`)
+		writeFileSync(`${dir}/pkg/mod.js`, `
+			import { getB } from '../link/b.js'
+			globalThis.__loadCount = (globalThis.__loadCount || 0) + 1
+			export const loadCount = () => globalThis.__loadCount
+		`)
+		writeFileSync(`${dir}/pkg/b.js`, `
+			import { loadCount } from '../link/mod.js'
+			export function getB() { return 'count=' + loadCount() }
+		`)
+		symlinkSync(`${dir}/pkg`, `${dir}/link`)
+
+		writeFileSync(`${dir}/main.js`, `
+			import { loadCount } from './pkg/mod.js'
+			console.log(loadCount())
+		`)
+		// Module should be loaded exactly once
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, '1')
 	})
 })
 
