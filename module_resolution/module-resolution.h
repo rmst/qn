@@ -855,6 +855,22 @@ static char *compile_mode_normalize(JSContext *ctx, const char *base_name,
                 found_on_disk = 1;
             }
         }
+        /* Try resolve_with_index as fallback (matches loader behavior).
+           Handles bare imports like "qx/core" → "qx/core.js". */
+        if (!result && !is_node_resolution()) {
+            char *with_ext = resolve_with_index(ctx, resolved);
+            if (with_ext) {
+                char *real = resolve_realpath(ctx, with_ext);
+                if (real) {
+                    result = make_embedded_name(ctx, real);
+                    js_free(ctx, real);
+                } else {
+                    result = make_embedded_name(ctx, with_ext);
+                }
+                js_free(ctx, with_ext);
+                found_on_disk = 1;
+            }
+        }
         if (!result) {
             /* Not found on disk — likely a C module (std, os, etc.).
                Don't prefix with embedded:// so it keeps its original name. */
