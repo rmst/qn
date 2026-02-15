@@ -109,9 +109,9 @@ static const char *get_search_paths(void) {
  *
  * Example:
  *   NODE_PATH="./my_modules:./lib"
- *   resolve_qjsxpath(ctx, "utils") might return "./my_modules/utils.js"
+ *   resolve_node_path(ctx, "utils") might return "./my_modules/utils.js"
  */
-static char *resolve_qjsxpath(JSContext *ctx, const char *name) {
+static char *resolve_node_path(JSContext *ctx, const char *name) {
     const char *paths = get_search_paths();
     if (!paths) return NULL;
 
@@ -237,13 +237,59 @@ static int is_node_resolution(void) {
     return mode && strcmp(mode, "node") == 0;
 }
 
+/* ========================================================================
+ * EMBEDDED MODULE PREFIX
+ * ========================================================================
+ *
+ * All embedded modules use an "embedded://" prefix in cache keys.
+ * Disk modules use plain absolute paths (starting with '/').
+ * These two namespaces can never collide in QuickJS's single module cache.
+ *
+ * The "file://" protocol is a one-shot signal in import specifiers
+ * to force disk loading, even from embedded code.
+ */
+
+#define EMBEDDED_PREFIX "embedded://"
+#define EMBEDDED_PREFIX_LEN 11
+#define FILE_PREFIX "file://"
+#define FILE_PREFIX_LEN 7
+
+static int has_embedded_prefix(const char *name) {
+    return strncmp(name, EMBEDDED_PREFIX, EMBEDDED_PREFIX_LEN) == 0;
+}
+
+static int has_file_prefix(const char *name) {
+    return strncmp(name, FILE_PREFIX, FILE_PREFIX_LEN) == 0;
+}
+
+/**
+ * Import map entry: records how a (base_name, specifier) pair resolves.
+ * Built at compile time, used at runtime for standalone binaries.
+ */
+typedef struct {
+    const char *base_name;   /* importing module (embedded:// prefixed) */
+    const char *specifier;   /* original import specifier */
+    const char *resolved;    /* resolved name (embedded:// prefixed) */
+} QJSXImportMapEntry;
+
+/**
+ * Callback for recording import map entries at compile time.
+ */
+typedef void (*QJSXImportRecordFn)(const char *base, const char *specifier, const char *resolved);
+
 /**
  * Context for module resolution, passed via opaque parameter.
- * For interpreter: embedded_modules is NULL (uses filesystem)
- * For compiled binary: embedded_modules contains list of embedded module names
+ *
+ * Interpreter (qjsx):     embedded_modules=NULL, compile_mode=0
+ * Compiler (qjsxc):       compile_mode=1, record_import set
+ * Runtime standalone:      embedded_modules set, import_map set
  */
 typedef struct {
     const char **embedded_modules;
+    const QJSXImportMapEntry *import_map;
+    int import_map_count;
+    int compile_mode;           /* 1 = compiler, prefix all with embedded:// */
+    QJSXImportRecordFn record_import;  /* compile-time: record (base, spec, resolved) */
 } QJSXModuleResolverContext;
 
 /**
@@ -258,6 +304,22 @@ static int embedded_module_exists(const char **modules, const char *name) {
 }
 
 /**
+ * Look up a (base_name, specifier) pair in the import map.
+ * Returns the resolved name (embedded:// prefixed) or NULL.
+ */
+static const char *import_map_lookup(const QJSXImportMapEntry *map, int count,
+                                     const char *base_name, const char *specifier) {
+    if (!map) return NULL;
+    for (int i = 0; i < count; i++) {
+        if (strcmp(map[i].base_name, base_name) == 0 &&
+            strcmp(map[i].specifier, specifier) == 0) {
+            return map[i].resolved;
+        }
+    }
+    return NULL;
+}
+
+/**
  * Resolve a bare module name to its canonical internal path via NODE_PATH.
  *
  * Returns the canonical name with extension (e.g., "node/child_process/index.js")
@@ -266,15 +328,15 @@ static int embedded_module_exists(const char **modules, const char *name) {
  * For embedded modules, probes the embedded list.
  * For filesystem, probes NODE_PATH directories.
  */
-static char *resolve_qjsxpath_canonical(JSContext *ctx, const char *name,
+static char *resolve_node_path_canonical(JSContext *ctx, const char *name,
                                         const char **embedded_modules) {
     size_t name_len = strlen(name);
     size_t buflen = name_len + 20;
     char *buf = js_malloc(ctx, buflen);
     if (!buf) return NULL;
 
+    // Check embedded list first (early return for embedded modules)
     if (embedded_modules) {
-        // For embedded modules: probe the list with extensions
         if (embedded_module_exists(embedded_modules, name)) {
             js_free(ctx, buf);
             return js_strdup(ctx, name);
@@ -287,7 +349,10 @@ static char *resolve_qjsxpath_canonical(JSContext *ctx, const char *name,
         if (embedded_module_exists(embedded_modules, buf)) {
             return buf;
         }
-    } else {
+    }
+
+    // Probe filesystem via NODE_PATH
+    {
         const char *paths = get_search_paths();
         if (!paths) {
             js_free(ctx, buf);
@@ -688,48 +753,211 @@ static char *resolve_node_modules(JSContext *ctx, const char *base_name, const c
 }
 
 /**
+ * Helper: prepend embedded:// prefix to a name.
+ */
+static char *make_embedded_name(JSContext *ctx, const char *name) {
+    size_t len = EMBEDDED_PREFIX_LEN + strlen(name) + 1;
+    char *result = js_malloc(ctx, len);
+    if (result) {
+        memcpy(result, EMBEDDED_PREFIX, EMBEDDED_PREFIX_LEN);
+        strcpy(result + EMBEDDED_PREFIX_LEN, name);
+    }
+    return result;
+}
+
+/**
+ * Resolve a bare import for embedded modules.
+ * Checks NODE_PATH canonical resolution first, then node_modules walking.
+ * Returns the resolved disk path or NULL.
+ */
+static char *resolve_bare_to_disk(JSContext *ctx, const char *resolved,
+                                  const char *effective_base) {
+    if (!is_node_resolution()) {
+        char *canonical = resolve_node_path_canonical(ctx, resolved, NULL);
+        if (canonical) {
+            char *full_path = resolve_node_path(ctx, resolved);
+            if (full_path) {
+                char *real = resolve_realpath(ctx, full_path);
+                js_free(ctx, full_path);
+                if (real) {
+                    js_free(ctx, canonical);
+                    return real;
+                }
+            }
+            js_free(ctx, canonical);
+        }
+    }
+
+    if (is_filesystem_path(effective_base)) {
+        char *nm_resolved = resolve_node_modules(ctx, effective_base, resolved);
+        if (nm_resolved) {
+            char *real = resolve_realpath(ctx, nm_resolved);
+            if (real) {
+                js_free(ctx, nm_resolved);
+                return real;
+            }
+            return nm_resolved;
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * Compile-mode normalizer: resolve everything on the filesystem,
+ * then prefix the result with embedded://.
+ * Records import map entries for runtime replay.
+ */
+static char *compile_mode_normalize(JSContext *ctx, const char *base_name,
+                                    const char *name,
+                                    QJSXModuleResolverContext *resolver_ctx) {
+    const char *raw_base = has_embedded_prefix(base_name)
+        ? base_name + EMBEDDED_PREFIX_LEN : base_name;
+
+    char *translated = translate_colons_to_slashes(ctx, name);
+    const char *work_name = translated ? translated : name;
+
+    char *real_base = NULL;
+    const char *effective_base = raw_base;
+    if (is_filesystem_path(raw_base)) {
+        real_base = resolve_realpath(ctx, raw_base);
+        if (real_base) effective_base = real_base;
+    }
+
+    char *resolved = normalize_module_name(ctx, effective_base, work_name);
+    if (translated) js_free(ctx, translated);
+    if (!resolved) { if (real_base) js_free(ctx, real_base); return NULL; }
+
+    char *result = NULL;
+    int found_on_disk = 0;
+
+    if (!is_filesystem_path(name)) {
+        /* Bare import: try NODE_PATH (returns canonical name), then node_modules */
+        if (!is_node_resolution()) {
+            char *canonical = resolve_node_path_canonical(ctx, resolved, NULL);
+            if (canonical) {
+                result = make_embedded_name(ctx, canonical);
+                js_free(ctx, canonical);
+                found_on_disk = 1;
+            }
+        }
+        if (!result && is_filesystem_path(effective_base)) {
+            char *nm_resolved = resolve_node_modules(ctx, effective_base, resolved);
+            if (nm_resolved) {
+                char *real = resolve_realpath(ctx, nm_resolved);
+                if (real) {
+                    result = make_embedded_name(ctx, real);
+                    js_free(ctx, real);
+                } else {
+                    result = make_embedded_name(ctx, nm_resolved);
+                }
+                js_free(ctx, nm_resolved);
+                found_on_disk = 1;
+            }
+        }
+        if (!result) {
+            /* Not found on disk — likely a C module (std, os, etc.).
+               Don't prefix with embedded:// so it keeps its original name. */
+            result = js_strdup(ctx, resolved);
+        }
+    } else {
+        /* Relative/absolute path: probe extensions, resolve realpath */
+        if (!is_node_resolution()) {
+            char *probed = probe_module_with_extensions(ctx, resolved, NULL);
+            if (probed) {
+                js_free(ctx, resolved);
+                resolved = probed;
+            }
+        }
+        char *real = resolve_realpath(ctx, resolved);
+        if (real) {
+            result = make_embedded_name(ctx, real);
+            js_free(ctx, real);
+        } else {
+            result = make_embedded_name(ctx, resolved);
+        }
+        found_on_disk = 1;
+    }
+
+    if (found_on_disk && !is_filesystem_path(name) &&
+        resolver_ctx->record_import && result) {
+        resolver_ctx->record_import(base_name, name, result);
+    }
+
+    if (real_base) js_free(ctx, real_base);
+    js_free(ctx, resolved);
+    MODULE_DEBUG("compile: (%s, %s) -> %s", base_name, name, result);
+    return result;
+}
+
+/**
  * QJSX module normalizer - produces canonical module names.
  *
- * This normalizer is used by both qjsx (interpreter) and compiled binaries.
- * It ensures that different import specifiers for the same logical module
- * produce the same canonical name, enabling embedded module lookup.
+ * Three modes of operation:
+ *   1. Interpreter (qjsx): filesystem-only resolution
+ *   2. Compiler (qjsxc): filesystem resolution + embedded:// prefix
+ *   3. Runtime standalone: import map + embedded list + disk fallback
  *
- * Processing steps:
- *   1. Colon-to-slash translation (e.g., "node:fs" -> "node/fs")
- *   2. Resolve base_name via realpath for symlink handling
- *   3. Resolve relative paths (handle "./" and "../")
- *   4. For bare imports: try NODE_PATH, then node_modules walking
- *   5. For filesystem paths: resolve result via realpath
- *   6. In bundler mode: probe for existence to find full path with extension
+ * Embedded modules are prefixed with "embedded://" to separate them from disk
+ * modules in QuickJS's single module cache.
+ *
+ * The "file://" protocol forces disk loading from embedded code.
  */
 static char *qjsx_module_normalizer(JSContext *ctx, const char *base_name,
                                     const char *name, void *opaque) {
     QJSXModuleResolverContext *resolver_ctx = (QJSXModuleResolverContext *)opaque;
     const char **embedded_modules = resolver_ctx ? resolver_ctx->embedded_modules : NULL;
+    int base_is_embedded = has_embedded_prefix(base_name);
 
     MODULE_DEBUG("normalize: base='%s' name='%s'", base_name, name);
 
-    // Step 1: Colon-to-slash translation
-    char *translated = translate_colons_to_slashes(ctx, name);
-    const char *work_name = translated ? translated : name;
+    /* file:// protocol: strip prefix and force disk resolution */
+    if (has_file_prefix(name)) {
+        const char *disk_path = name + FILE_PREFIX_LEN;
+        MODULE_DEBUG("file:// protocol, disk path: '%s'", disk_path);
+        char *real = resolve_realpath(ctx, disk_path);
+        if (real) return real;
+        return js_strdup(ctx, disk_path);
+    }
 
-    // Step 2: Resolve base_name via realpath for symlink handling and
-    // node_modules walking. Skip for embedded modules (files don't exist on disk).
-    char *real_base = NULL;
-    const char *effective_base = base_name;
+    /* Compile mode: resolve on filesystem, prefix with embedded:// */
+    if (resolver_ctx && resolver_ctx->compile_mode) {
+        return compile_mode_normalize(ctx, base_name, name, resolver_ctx);
+    }
 
-    if (is_filesystem_path(base_name)) {
-        int base_is_embedded = embedded_modules && embedded_module_exists(embedded_modules, base_name);
-        if (!base_is_embedded) {
-            real_base = resolve_realpath(ctx, base_name);
-            if (real_base) {
-                MODULE_DEBUG("realpath base: '%s' -> '%s'", base_name, real_base);
-                effective_base = real_base;
-            }
+    /* Runtime import map lookup (standalone binaries):
+       if base is embedded and we have a map, check for a recorded resolution */
+    if (base_is_embedded && resolver_ctx && resolver_ctx->import_map) {
+        const char *mapped = import_map_lookup(
+            resolver_ctx->import_map, resolver_ctx->import_map_count,
+            base_name, name);
+        if (mapped) {
+            MODULE_DEBUG("import map hit: (%s, %s) -> %s", base_name, name, mapped);
+            return js_strdup(ctx, mapped);
         }
     }
 
-    // Step 3: Resolve relative paths (handle "./" and "../")
+    /* Colon-to-slash translation (e.g., "node:fs" -> "node/fs") */
+    char *translated = translate_colons_to_slashes(ctx, name);
+    const char *work_name = translated ? translated : name;
+
+    /* For embedded base: strip the prefix for path resolution */
+    const char *raw_base = base_is_embedded ? base_name + EMBEDDED_PREFIX_LEN : base_name;
+
+    /* Resolve base_name via realpath for symlink handling.
+       Skip for embedded modules (files may not exist on disk at runtime). */
+    char *real_base = NULL;
+    const char *effective_base = raw_base;
+
+    if (!base_is_embedded && is_filesystem_path(raw_base)) {
+        real_base = resolve_realpath(ctx, raw_base);
+        if (real_base) {
+            MODULE_DEBUG("realpath base: '%s' -> '%s'", raw_base, real_base);
+            effective_base = real_base;
+        }
+    }
+
+    /* Resolve relative paths (handle "./" and "../") */
     char *resolved = normalize_module_name(ctx, effective_base, work_name);
 
     if (translated)
@@ -742,12 +970,76 @@ static char *qjsx_module_normalizer(JSContext *ctx, const char *base_name,
 
     MODULE_DEBUG("after normalize: '%s'", resolved);
 
-    // Bare imports (no leading dot or slash)
+    /* ---- BARE IMPORTS (no leading dot or slash) ---- */
     if (!is_filesystem_path(name)) {
-        // Try NODE_PATH search directories
-        if (!is_node_resolution()) {
-            char *canonical = resolve_qjsxpath_canonical(ctx, resolved, embedded_modules);
+        if (base_is_embedded) {
+            /* Embedded importer: check embedded modules via NODE_PATH canonical,
+               then fall back to disk */
+            if (embedded_modules && !is_node_resolution()) {
+                char *canonical = resolve_node_path_canonical(ctx, resolved, embedded_modules);
+                if (canonical) {
+                    if (embedded_module_exists(embedded_modules, canonical)) {
+                        char *result = make_embedded_name(ctx, canonical);
+                        js_free(ctx, canonical);
+                        if (real_base) js_free(ctx, real_base);
+                        js_free(ctx, resolved);
+                        MODULE_DEBUG("result (embedded bare): '%s'", result);
+                        return result;
+                    }
+                    js_free(ctx, canonical);
+                }
+            }
+
+            /* Bare import not found in embedded — try disk */
+            char *disk = resolve_bare_to_disk(ctx, resolved, effective_base);
+            if (disk) {
+                if (real_base) js_free(ctx, real_base);
+                js_free(ctx, resolved);
+                MODULE_DEBUG("result (embedded->disk bare): '%s'", disk);
+                return disk;
+            }
+
+            /* Not found anywhere — return as-is.
+               This handles C modules (std, os) which are registered
+               at runtime with their plain names. */
+            if (real_base) js_free(ctx, real_base);
+            MODULE_DEBUG("result (bare, not found): '%s'", resolved);
+            return resolved;
+        }
+
+        /* Non-embedded importer: check embedded first, then disk */
+        if (embedded_modules && !is_node_resolution()) {
+            char *canonical = resolve_node_path_canonical(ctx, resolved, embedded_modules);
             if (canonical) {
+                if (embedded_module_exists(embedded_modules, canonical)) {
+                    char *result = make_embedded_name(ctx, canonical);
+                    js_free(ctx, canonical);
+                    if (real_base) js_free(ctx, real_base);
+                    js_free(ctx, resolved);
+                    MODULE_DEBUG("result (disk->embedded bare): '%s'", result);
+                    return result;
+                }
+                js_free(ctx, canonical);
+            }
+        }
+
+        /* Disk resolution for bare imports */
+        if (!is_node_resolution()) {
+            char *canonical = resolve_node_path_canonical(ctx, resolved, NULL);
+            if (canonical) {
+                char *full_path = resolve_node_path(ctx, resolved);
+                if (full_path) {
+                    char *real = resolve_realpath(ctx, full_path);
+                    if (real) {
+                        MODULE_DEBUG("NODE_PATH resolved: '%s' -> '%s'", resolved, real);
+                        js_free(ctx, full_path);
+                        js_free(ctx, canonical);
+                        if (real_base) js_free(ctx, real_base);
+                        js_free(ctx, resolved);
+                        return real;
+                    }
+                    js_free(ctx, full_path);
+                }
                 MODULE_DEBUG("NODE_PATH resolved: '%s' -> '%s'", resolved, canonical);
                 if (real_base) js_free(ctx, real_base);
                 js_free(ctx, resolved);
@@ -755,14 +1047,13 @@ static char *qjsx_module_normalizer(JSContext *ctx, const char *base_name,
             }
         }
 
-        // Try node_modules walking (needs a filesystem base path to walk from)
+        /* Try node_modules walking */
         if (is_filesystem_path(effective_base)) {
             char *nm_resolved = resolve_node_modules(ctx, effective_base, resolved);
             if (nm_resolved) {
                 MODULE_DEBUG("node_modules resolved: '%s' -> '%s'", resolved, nm_resolved);
                 if (real_base) js_free(ctx, real_base);
                 js_free(ctx, resolved);
-                // Canonicalize via realpath
                 char *real = resolve_realpath(ctx, nm_resolved);
                 if (real) {
                     js_free(ctx, nm_resolved);
@@ -772,42 +1063,62 @@ static char *qjsx_module_normalizer(JSContext *ctx, const char *base_name,
             }
         }
 
+        /* Bare import not found — try realpath if it exists on disk */
+        if (resolver_ctx && file_exists(resolved)) {
+            char *real = resolve_realpath(ctx, resolved);
+            if (real) {
+                if (real_base) js_free(ctx, real_base);
+                js_free(ctx, resolved);
+                MODULE_DEBUG("result (bare, realpath): '%s'", real);
+                return real;
+            }
+        }
+
         if (real_base) js_free(ctx, real_base);
         MODULE_DEBUG("result (bare): '%s'", resolved);
         return resolved;
     }
 
-    // real_base no longer needed for filesystem path handling
+    /* ---- FILESYSTEM PATHS (relative or absolute) ---- */
     if (real_base) js_free(ctx, real_base);
 
-    // Step 4: For filesystem paths, probe extensions and resolve via realpath
+    if (base_is_embedded) {
+        /* Embedded importer with relative/absolute path: check embedded namespace */
+        if (!is_node_resolution()) {
+            char *probed = probe_module_with_extensions(ctx, resolved, embedded_modules);
+            if (probed) {
+                MODULE_DEBUG("extension probe (embedded): '%s' -> '%s'", resolved, probed);
+                js_free(ctx, resolved);
+                resolved = probed;
+            }
+        }
+        if (embedded_modules && embedded_module_exists(embedded_modules, resolved)) {
+            char *result = make_embedded_name(ctx, resolved);
+            js_free(ctx, resolved);
+            MODULE_DEBUG("result (embedded path): '%s'", result);
+            return result;
+        }
+        /* Not found in embedded — fall through to disk resolution */
+    }
+
+    /* Disk resolution: probe extensions and resolve via realpath */
     if (!is_node_resolution()) {
-        char *probed = probe_module_with_extensions(
-            ctx, resolved, embedded_modules);
+        char *probed = probe_module_with_extensions(ctx, resolved, NULL);
         if (probed) {
             MODULE_DEBUG("extension probe: '%s' -> '%s'", resolved, probed);
             js_free(ctx, resolved);
-            // Embedded module matched — return directly (no realpath needed)
-            if (embedded_modules) {
-                MODULE_DEBUG("result (embedded): '%s'", probed);
-                return probed;
-            }
             resolved = probed;
         }
     }
 
-    // Resolve non-embedded paths via realpath for symlink canonicalization
-    if (!embedded_modules || !embedded_module_exists(embedded_modules, resolved)) {
-        char *real_result = resolve_realpath(ctx, resolved);
-        if (real_result) {
-            MODULE_DEBUG("realpath result: '%s' -> '%s'", resolved, real_result);
-            js_free(ctx, resolved);
-            MODULE_DEBUG("result (filesystem): '%s'", real_result);
-            return real_result;
-        }
+    char *real_result = resolve_realpath(ctx, resolved);
+    if (real_result) {
+        MODULE_DEBUG("realpath result: '%s' -> '%s'", resolved, real_result);
+        js_free(ctx, resolved);
+        MODULE_DEBUG("result (filesystem): '%s'", real_result);
+        return real_result;
     }
 
-    // Return resolved path (node mode or probe/realpath failed - let loader handle it)
     MODULE_DEBUG("result: '%s'", resolved);
     return resolved;
 }

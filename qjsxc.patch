@@ -1,4 +1,4 @@
-# qjsxc.patch - Patches to QuickJS compiler for NODE_PATH module resolution
+# qjsxc.patch - Patches to QuickJS compiler for module resolution
 #
 # Target file: quickjs/qjsc.c
 # Output: bin/<platform>/obj/qjsxc.c -> compiled to qjsxc binary
@@ -11,19 +11,25 @@
 #      - Supports .js extension and /index.js fallbacks
 #      - Tracks embedded module names for runtime probing
 #
-#   2. Generated executable enhancements
+#   2. Embedded module namespace (embedded:// prefix)
+#      - All compiled modules get embedded:// prefix in bytecode
+#      - Import map records compile-time resolutions for runtime replay
+#      - Namespace separation prevents collisions with disk modules
+#
+#   3. Generated executable enhancements
 #      The compiled output includes:
 #      - qjsx_loader() function for runtime module loading
-#      - Embedded module names array for probing
+#      - Embedded module names array and import map for probing
 #      - Exit handler support (process.exitCode, process.on('exit'))
 #
-#   3. Module normalizer integration
+#   4. Module normalizer integration
 #      Uses qjsx_module_normalizer for consistent handling of:
 #      - Colon-to-slash translation (node:fs -> node/fs)
 #      - -D flag module embedding
+#      - embedded:// and file:// protocols
 #
---- quickjs/qjsc.c	2026-02-12 11:07:12.787606997 +0000
-+++ bin/linux/obj/qjsxc.c	2026-02-12 13:14:29.960155579 +0000
+--- quickjs/qjsc.c	2026-01-16 11:05:44.122659087 +0000
++++ bin/linux/obj/qjsxc.c	2026-02-15 18:35:24.048511297 +0000
 @@ -1,5 +1,8 @@
  /*
 - * QuickJS command line compiler
@@ -42,24 +48,63 @@
  
  typedef struct {
      char *name;
-@@ -56,6 +60,7 @@
+@@ -56,10 +60,42 @@
  static namelist_t cname_list;
  static namelist_t cmodule_list;
  static namelist_t init_module_list;
-+static namelist_t embedded_module_names;  /* tracks actual module names for probing */
++static namelist_t embedded_module_names;  /* tracks actual module names for probing (unprefixed) */
  static uint64_t feature_bitmap;
  static FILE *outfile;
  static BOOL byte_swap;
-@@ -243,17 +248,20 @@
+ static BOOL dynamic_export;
++
++/* Import map recording for compile-time resolution replay at runtime */
++typedef struct {
++    char *base;
++    char *specifier;
++    char *resolved;
++} ImportMapRecord;
++
++static ImportMapRecord *import_map_records = NULL;
++static int import_map_count = 0;
++static int import_map_cap = 0;
++
++static void record_import(const char *base, const char *specifier, const char *resolved) {
++    if (import_map_count >= import_map_cap) {
++        import_map_cap = import_map_cap ? import_map_cap * 2 : 64;
++        import_map_records = realloc(import_map_records,
++                                     sizeof(ImportMapRecord) * import_map_cap);
++    }
++    import_map_records[import_map_count].base = strdup(base);
++    import_map_records[import_map_count].specifier = strdup(specifier);
++    import_map_records[import_map_count].resolved = strdup(resolved);
++    import_map_count++;
++}
++
++static QJSXModuleResolverContext compile_resolver_ctx = {
++    .embedded_modules = NULL,
++    .import_map = NULL,
++    .import_map_count = 0,
++    .compile_mode = 1,
++    .record_import = record_import,
++};
+ static const char *c_ident_prefix = "qjsc_";
+ 
+ #define FE_ALL (-1)
+@@ -243,17 +279,24 @@
      JSModuleDef *m;
      namelist_entry_t *e;
  
-+    /* module_name is already normalized by qjsx_module_normalizer (called by QuickJS) */
++    /* module_name is already normalized by qjsx_module_normalizer (called by QuickJS).
++       In compile mode, it will have an embedded:// prefix for file modules. */
 +    const char *reg_name = module_name;
++    /* Strip embedded:// for disk file loading; keep prefix for module registration */
++    const char *disk_name = has_embedded_prefix(reg_name)
++        ? reg_name + EMBEDDED_PREFIX_LEN : reg_name;
 +
      /* check if it is a declared C or system module */
 -    e = namelist_find(&cmodule_list, module_name);
-+    e = namelist_find(&cmodule_list, reg_name);
++    e = namelist_find(&cmodule_list, disk_name);
      if (e) {
          /* add in the static init module list */
          namelist_add(&init_module_list, e->name, e->short_name, 0);
@@ -68,36 +113,34 @@
 -    } else if (has_suffix(module_name, ".so")) {
 -        fprintf(stderr, "Warning: binary module '%s' will be dynamically loaded\n", module_name);
 +        m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);
-+    } else if (has_suffix(reg_name, ".so")) {
-+        fprintf(stderr, "Warning: binary module '%s' will be dynamically loaded\n", reg_name);
++    } else if (has_suffix(disk_name, ".so")) {
++        fprintf(stderr, "Warning: binary module '%s' will be dynamically loaded\n", disk_name);
          /* create a dummy module */
 -        m = JS_NewCModule(ctx, module_name, js_module_dummy_init);
 +        m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);
          /* the resulting executable will export its symbols for the
             dynamic library */
          dynamic_export = TRUE;
-@@ -262,16 +270,38 @@
+@@ -262,16 +305,36 @@
          uint8_t *buf;
          char cname[1024];
          int res;
 -        
 -        buf = js_load_file(ctx, &buf_len, module_name);
-+        const char *resolved_name = reg_name;
++        /* Use disk_name (no embedded:// prefix) for file loading */
++        const char *resolved_name = disk_name;
 +        char *qjsxpath_resolved = NULL;
 +        char *index_resolved = NULL;
 +
-+        /* reg_name already has colon-to-slash translation applied by normalizer */
-+        const char *lookup_name = reg_name;
-+
-+        if (lookup_name[0] != '.' && lookup_name[0] != '/') {
-+            qjsxpath_resolved = resolve_qjsxpath(ctx, lookup_name);
++        if (disk_name[0] != '.' && disk_name[0] != '/') {
++            qjsxpath_resolved = resolve_node_path(ctx, disk_name);
 +            if (qjsxpath_resolved) {
 +                resolved_name = qjsxpath_resolved;
 +            }
 +        }
 +
 +        if (!qjsxpath_resolved) {
-+            index_resolved = resolve_with_index(ctx, lookup_name);
++            index_resolved = resolve_with_index(ctx, disk_name);
 +            if (index_resolved) {
 +                resolved_name = index_resolved;
 +            }
@@ -114,11 +157,11 @@
  
          res = js_module_test_json(ctx, attributes);
 -        if (has_suffix(module_name, ".json") || res > 0) {
-+        if (has_suffix(reg_name, ".json") || res > 0) {
++        if (has_suffix(disk_name, ".json") || res > 0) {
              /* compile as JSON or JSON5 depending on "type" */
              JSValue val;
              int flags;
-@@ -280,18 +310,23 @@
+@@ -280,18 +343,22 @@
                  flags = JS_PARSE_JSON_EXT;
              else
                  flags = 0;
@@ -130,9 +173,9 @@
 +                if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
 +                if (index_resolved) js_free(ctx, index_resolved);
                  return NULL;
-+            }
-             /* create a dummy module */
+-            /* create a dummy module */
 -            m = JS_NewCModule(ctx, module_name, js_module_dummy_init);
++            }
 +            m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);
              if (!m) {
                  JS_FreeValue(ctx, val);
@@ -142,11 +185,11 @@
              }
  
 -            get_c_name(cname, sizeof(cname), module_name);
-+            get_c_name(cname, sizeof(cname), reg_name);
++            get_c_name(cname, sizeof(cname), disk_name);
              if (namelist_find(&cname_list, cname)) {
                  find_unique_cname(cname, sizeof(cname));
              }
-@@ -299,30 +334,43 @@
+@@ -299,30 +366,43 @@
              /* output the module name */
              fprintf(outfile, "static const uint8_t %s_module_name[] = {\n",
                      cname);
@@ -155,16 +198,18 @@
              fprintf(outfile, "};\n\n");
  
              output_object_code(ctx, outfile, val, cname, CNAME_TYPE_JSON_MODULE);
-+            /* Track the module name for runtime probing */
-+            if (!namelist_find(&embedded_module_names, reg_name)) {
-+                namelist_add(&embedded_module_names, reg_name, NULL, 0);
++            /* Track module name WITHOUT prefix (for runtime embedded list) */
++            if (!namelist_find(&embedded_module_names, disk_name)) {
++                namelist_add(&embedded_module_names, disk_name, NULL, 0);
 +            }
              JS_FreeValue(ctx, val);
          } else {
              JSValue func_val;
  
-             /* compile the module */
+-            /* compile the module */
 -            func_val = JS_Eval(ctx, (char *)buf, buf_len, module_name,
++            /* Compile the module. reg_name (with embedded:// prefix) becomes
++               the module name stored in bytecode. */
 +            func_val = JS_Eval(ctx, (char *)buf, buf_len, reg_name,
                                 JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
              js_free(ctx, buf);
@@ -175,18 +220,18 @@
                  return NULL;
 -            get_c_name(cname, sizeof(cname), module_name);
 +            }
-+            get_c_name(cname, sizeof(cname), reg_name);
++            get_c_name(cname, sizeof(cname), disk_name);
              if (namelist_find(&cname_list, cname)) {
                  find_unique_cname(cname, sizeof(cname));
              }
              output_object_code(ctx, outfile, func_val, cname, CNAME_TYPE_MODULE);
 -            
-+            /* Track the module name for runtime probing */
-+            if (!namelist_find(&embedded_module_names, reg_name)) {
-+                namelist_add(&embedded_module_names, reg_name, NULL, 0);
+-            /* the module is already referenced, so we must free it */
++            /* Track module name WITHOUT prefix (for runtime embedded list) */
++            if (!namelist_find(&embedded_module_names, disk_name)) {
++                namelist_add(&embedded_module_names, disk_name, NULL, 0);
 +            }
 +
-             /* the module is already referenced, so we must free it */
              m = JS_VALUE_GET_PTR(func_val);
              JS_FreeValue(ctx, func_val);
          }
@@ -195,7 +240,26 @@
      }
      return m;
  }
-@@ -380,14 +428,6 @@
+@@ -352,7 +432,17 @@
+         eval_flags |= JS_EVAL_TYPE_MODULE;
+     else
+         eval_flags |= JS_EVAL_TYPE_GLOBAL;
+-    obj = JS_Eval(ctx, (const char *)buf, buf_len, filename, eval_flags);
++    /* For modules, prefix filename with embedded:// so the module name in
++       bytecode will be in the embedded namespace. */
++    char embedded_filename[PATH_MAX + EMBEDDED_PREFIX_LEN + 1];
++    const char *eval_name = filename;
++    if (module) {
++        snprintf(embedded_filename, sizeof(embedded_filename),
++                 EMBEDDED_PREFIX "%s", filename);
++        eval_name = embedded_filename;
++    }
++
++    obj = JS_Eval(ctx, (const char *)buf, buf_len, eval_name, eval_flags);
+     if (JS_IsException(obj)) {
+         js_std_dump_error(ctx);
+         exit(1);
+@@ -380,14 +470,6 @@
      "  js_std_init_handlers(rt);\n"
      ;
  
@@ -210,16 +274,18 @@
  #define PROG_NAME "qjsc"
  
  void help(void)
-@@ -761,7 +801,7 @@
+@@ -760,8 +842,8 @@
+ 
      JS_SetStripInfo(rt, strip_flags);
  
-     /* loader for ES6 modules */
+-    /* loader for ES6 modules */
 -    JS_SetModuleLoaderFunc2(rt, NULL, jsc_module_loader, NULL, NULL);
-+    JS_SetModuleLoaderFunc2(rt, qjsx_module_normalizer, jsc_module_loader, NULL, NULL);
++    /* loader for ES6 modules (compile_mode context for embedded:// prefixing) */
++    JS_SetModuleLoaderFunc2(rt, qjsx_module_normalizer, jsc_module_loader, NULL, &compile_resolver_ctx);
  
      fprintf(fo, "/* File generated automatically by the QuickJS compiler. */\n"
              "\n"
-@@ -769,8 +809,40 @@
+@@ -769,8 +851,45 @@
  
      if (output_type != OUTPUT_C) {
          fprintf(fo, "#include \"quickjs-libc.h\"\n"
@@ -234,10 +300,15 @@
 +
 +        fprintf(fo,
 +                "static JSModuleDef *qjsx_loader(JSContext *ctx, const char *name, void *opaque, JSValueConst attributes) {\n"
-+                "    // Note: 'name' is already normalized by qjsx_module_normalizer\n"
-+                "    // Bare imports: try NODE_PATH resolution\n"
++                "    // embedded:// modules are preloaded by js_std_eval_binary.\n"
++                "    // If the loader is called, the module wasn't found in cache.\n"
++                "    if (has_embedded_prefix(name)) {\n"
++                "        JS_ThrowReferenceError(ctx, \"could not load embedded module '%%s'\", name + EMBEDDED_PREFIX_LEN);\n"
++                "        return NULL;\n"
++                "    }\n"
++                "    // Disk loading: bare imports via NODE_PATH\n"
 +                "    if (name[0] != '.' && name[0] != '/') {\n"
-+                "        char *path = resolve_qjsxpath(ctx, name);\n"
++                "        char *path = resolve_node_path(ctx, name);\n"
 +                "        if (path) {\n"
 +                "            JSModuleDef *mod = js_module_loader(ctx, path, opaque, attributes);\n"
 +                "            js_free(ctx, path);\n"
@@ -260,7 +331,7 @@
      } else {
          fprintf(fo, "#include <inttypes.h>\n"
                  "\n"
-@@ -784,14 +856,35 @@
+@@ -784,14 +903,50 @@
      }
  
      for(i = 0; i < dynamic_module_list.count; i++) {
@@ -268,8 +339,8 @@
 -            fprintf(stderr, "Could not load dynamic module '%s'\n",
 -                    dynamic_module_list.array[i].name);
 +        const char *dyn_name = dynamic_module_list.array[i].name;
-+        /* Normalize the -D module name (handles colon-to-slash, NODE_PATH resolution) */
-+        char *normalized = qjsx_module_normalizer(ctx, "<input>", dyn_name, NULL);
++        /* Normalize the -D module name with compile context (adds embedded:// prefix) */
++        char *normalized = qjsx_module_normalizer(ctx, EMBEDDED_PREFIX "<input>", dyn_name, &compile_resolver_ctx);
 +        if (!normalized) {
 +            fprintf(stderr, "Could not normalize dynamic module '%s'\n", dyn_name);
 +            exit(1);
@@ -292,14 +363,29 @@
 +        }
 +        fprintf(fo, "    NULL\n};\n\n");
 +
++        /* Output the import map for runtime bare import resolution */
++        fprintf(fo, "/* Import map: (base, specifier) -> resolved name */\n");
++        fprintf(fo, "static const QJSXImportMapEntry qjsx_import_map[] = {\n");
++        for(i = 0; i < import_map_count; i++) {
++            fprintf(fo, "    { \"%s\", \"%s\", \"%s\" },\n",
++                    import_map_records[i].base,
++                    import_map_records[i].specifier,
++                    import_map_records[i].resolved);
++        }
++        fprintf(fo, "};\n\n");
++
 +        fprintf(fo, "static QJSXModuleResolverContext qjsx_resolver_ctx = {\n");
-+        fprintf(fo, "    .embedded_modules = qjsx_embedded_modules\n");
++        fprintf(fo, "    .embedded_modules = qjsx_embedded_modules,\n");
++        fprintf(fo, "    .import_map = qjsx_import_map,\n");
++        fprintf(fo, "    .import_map_count = %d,\n", import_map_count);
++        fprintf(fo, "    .compile_mode = 0,\n");
++        fprintf(fo, "    .record_import = NULL,\n");
 +        fprintf(fo, "};\n\n");
 +
          fprintf(fo,
                  "static JSContext *JS_NewCustomContext(JSRuntime *rt)\n"
                  "{\n"
-@@ -843,7 +936,7 @@
+@@ -843,7 +998,7 @@
  
          /* add the module loader if necessary */
          if (feature_bitmap & (1 << FE_MODULE_LOADER)) {
@@ -308,7 +394,7 @@
          }
  
          fprintf(fo,
-@@ -857,7 +950,14 @@
+@@ -857,7 +1012,14 @@
                          e->name, e->name);
              }
          }
@@ -324,10 +410,16 @@
      }
  
      JS_FreeContext(ctx);
-@@ -872,5 +972,6 @@
+@@ -872,5 +1034,12 @@
      namelist_free(&cname_list);
      namelist_free(&cmodule_list);
      namelist_free(&init_module_list);
 +    namelist_free(&embedded_module_names);
++    for(i = 0; i < import_map_count; i++) {
++        free(import_map_records[i].base);
++        free(import_map_records[i].specifier);
++        free(import_map_records[i].resolved);
++    }
++    free(import_map_records);
      return 0;
  }

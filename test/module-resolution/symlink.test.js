@@ -259,6 +259,137 @@ describe('Symlink Resolution with qn (embedded modules)', () => {
 	})
 })
 
+describe('Symlink Resolution with bare imports', () => {
+	// Tests for cycle detection when a symlink causes a bare import
+	// (via NODE_PATH or node_modules) to resolve back to an already-loaded module.
+
+	test('circular import through node_modules symlink with qjsx', ({ dir }) => {
+		// a.js -> ./lib/b.js -> ./c.js -> self/a.js (via node_modules symlink)
+		mkdirSync(`${dir}/lib`)
+		mkdirSync(`${dir}/node_modules`)
+		writeFileSync(`${dir}/a.js`, `
+			import { b } from './lib/b.js'
+			export const a = 'a-value'
+			console.log('a:', b)
+		`)
+		writeFileSync(`${dir}/lib/b.js`, `
+			import { c } from './c.js'
+			export const b = 'b-value'
+		`)
+		writeFileSync(`${dir}/lib/c.js`, `
+			import { a } from 'self/a.js'
+			export const c = 'c-value'
+		`)
+		symlinkSync(dir, `${dir}/node_modules/self`)
+
+		const output = $`${QJSX()} ${dir}/a.js`
+		assert.strictEqual(output, 'a: b-value')
+	})
+
+	test('circular import through node_modules symlink with qn', ({ dir }) => {
+		mkdirSync(`${dir}/lib`)
+		mkdirSync(`${dir}/node_modules`)
+		writeFileSync(`${dir}/a.js`, `
+			import { b } from './lib/b.js'
+			export const a = 'a-value'
+			console.log('a:', b)
+		`)
+		writeFileSync(`${dir}/lib/b.js`, `
+			import { c } from './c.js'
+			export const b = 'b-value'
+		`)
+		writeFileSync(`${dir}/lib/c.js`, `
+			import { a } from 'self/a.js'
+			export const c = 'c-value'
+		`)
+		symlinkSync(dir, `${dir}/node_modules/self`)
+
+		const output = $`${QN()} ${dir}/a.js`
+		assert.strictEqual(output, 'a: b-value')
+	})
+
+	test('circular import through NODE_PATH symlink with qjsx', ({ dir }) => {
+		// Same pattern but using NODE_PATH instead of node_modules
+		mkdirSync(`${dir}/lib`)
+		mkdirSync(`${dir}/pkg`)
+		writeFileSync(`${dir}/a.js`, `
+			import { b } from './lib/b.js'
+			export const a = 'a-value'
+			console.log('a:', b)
+		`)
+		writeFileSync(`${dir}/lib/b.js`, `
+			import { c } from './c.js'
+			export const b = 'b-value'
+		`)
+		writeFileSync(`${dir}/lib/c.js`, `
+			import { a } from 'self/a.js'
+			export const c = 'c-value'
+		`)
+		symlinkSync(dir, `${dir}/pkg/self`)
+
+		const output = $`NODE_PATH=${dir}/pkg ${QJSX()} ${dir}/a.js`
+		assert.strictEqual(output, 'a: b-value')
+	})
+
+	test('circular import through NODE_PATH symlink with qn', ({ dir }) => {
+		mkdirSync(`${dir}/lib`)
+		mkdirSync(`${dir}/pkg`)
+		writeFileSync(`${dir}/a.js`, `
+			import { b } from './lib/b.js'
+			export const a = 'a-value'
+			console.log('a:', b)
+		`)
+		writeFileSync(`${dir}/lib/b.js`, `
+			import { c } from './c.js'
+			export const b = 'b-value'
+		`)
+		writeFileSync(`${dir}/lib/c.js`, `
+			import { a } from 'self/a.js'
+			export const c = 'c-value'
+		`)
+		symlinkSync(dir, `${dir}/pkg/self`)
+
+		const output = $`NODE_PATH=${dir}/pkg ${QN()} ${dir}/a.js`
+		assert.strictEqual(output, 'a: b-value')
+	})
+
+	test('module identity preserved through node_modules symlink', ({ dir }) => {
+		// Verify the same module loaded via direct path and via node_modules symlink
+		// is the same instance (shared state)
+		mkdirSync(`${dir}/node_modules`)
+		writeFileSync(`${dir}/counter.js`, `
+			let n = 0
+			export const inc = () => ++n
+		`)
+		writeFileSync(`${dir}/main.js`, `
+			import { inc as directInc } from './counter.js'
+			import { inc as nmInc } from 'self/counter.js'
+			console.log(directInc(), nmInc())
+		`)
+		symlinkSync(dir, `${dir}/node_modules/self`)
+
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, '1 2')
+	})
+
+	test('module identity preserved through NODE_PATH symlink', ({ dir }) => {
+		mkdirSync(`${dir}/pkg`)
+		writeFileSync(`${dir}/counter.js`, `
+			let n = 0
+			export const inc = () => ++n
+		`)
+		writeFileSync(`${dir}/main.js`, `
+			import { inc as directInc } from './counter.js'
+			import { inc as npInc } from 'self/counter.js'
+			console.log(directInc(), npInc())
+		`)
+		symlinkSync(dir, `${dir}/pkg/self`)
+
+		const output = $`NODE_PATH=${dir}/pkg ${QN()} ${dir}/main.js`
+		assert.strictEqual(output, '1 2')
+	})
+})
+
 describe('Symlink Resolution with Compilation', () => {
 	test('compiled binary with symlinked source works', ({ dir }) => {
 		// Create real directory structure

@@ -1,6 +1,6 @@
 import { describe, test as nodetest } from 'node:test'
 import assert from 'node:assert'
-import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import { writeFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -336,6 +336,66 @@ describe('node_modules resolution', () => {
 
 })
 
+describe('node_modules resolution with qn', () => {
+	// qn has embedded modules which changes module resolution paths.
+	// Verify node_modules walking still works for non-embedded user packages.
+
+	test('resolves via package.json exports with qn', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/mypkg/dist`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/mypkg/package.json`, JSON.stringify({
+			name: "mypkg",
+			exports: { ".": { "import": "./dist/index.js" } }
+		}))
+		writeFileSync(`${dir}/node_modules/mypkg/dist/index.js`, `export const hello = "from mypkg";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { hello } from 'mypkg';
+			console.log(hello);
+		`)
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, 'from mypkg')
+	})
+
+	test('resolves index.js fallback with qn', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/simplepkg`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/simplepkg/index.js`, `export const v = "simple";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { v } from 'simplepkg';
+			console.log(v);
+		`)
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, 'simple')
+	})
+
+	test('walks up directory tree with qn', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/uppkg`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/uppkg/index.js`, `export const found = "walked up";`)
+		mkdirSync(`${dir}/sub/deep`, { recursive: true })
+		writeFileSync(`${dir}/sub/deep/main.js`, `
+			import { found } from 'uppkg';
+			console.log(found);
+		`)
+		const output = $`${QN()} ${dir}/sub/deep/main.js`
+		assert.strictEqual(output, 'walked up')
+	})
+
+	test('nested node_modules with qn', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/outer/node_modules/inner`, { recursive: true })
+		mkdirSync(`${dir}/node_modules/inner`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/inner/index.js`, `export const v = "top-level";`)
+		writeFileSync(`${dir}/node_modules/outer/node_modules/inner/index.js`, `export const v = "nested";`)
+		writeFileSync(`${dir}/node_modules/outer/index.js`, `
+			import { v } from 'inner';
+			export const result = v;
+		`)
+		writeFileSync(`${dir}/main.js`, `
+			import { result } from 'outer';
+			console.log(result);
+		`)
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, 'nested')
+	})
+})
+
 describe('Bundler Mode Compilation', () => {
 	test('colon-to-slash in compiled binary', ({ dir }) => {
 		mkdirSync(`${dir}/node`)
@@ -386,5 +446,71 @@ describe('Bundler Mode Compilation', () => {
 		$`NODE_PATH=${dir}/modules ${QJSXC()} -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, 'bare import works')
+	})
+
+	test('node_modules in compiled binary', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/mypkg`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/mypkg/package.json`, JSON.stringify({
+			name: "mypkg", exports: { ".": "./index.js" }
+		}))
+		writeFileSync(`${dir}/node_modules/mypkg/index.js`, `export const v = "compiled nm";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { v } from 'mypkg';
+			console.log(v);
+		`)
+		$`${QJSXC()} -o ${dir}/app ${dir}/main.js`
+		const output = $`${dir}/app`
+		assert.strictEqual(output, 'compiled nm')
+	})
+
+	test('node_modules with subpath exports in compiled binary', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/pkg/dist`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/pkg/package.json`, JSON.stringify({
+			name: "pkg",
+			exports: { ".": "./dist/index.js", "./utils": "./dist/utils.js" }
+		}))
+		writeFileSync(`${dir}/node_modules/pkg/dist/index.js`, `export const root = "root";`)
+		writeFileSync(`${dir}/node_modules/pkg/dist/utils.js`, `export const util = "util";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { root } from 'pkg';
+			import { util } from 'pkg/utils';
+			console.log(root, util);
+		`)
+		$`${QJSXC()} -o ${dir}/app ${dir}/main.js`
+		const output = $`${dir}/app`
+		assert.strictEqual(output, 'root util')
+	})
+
+	test('node_modules through symlink in compiled binary', ({ dir }) => {
+		// Package directory is a symlink to the real location
+		mkdirSync(`${dir}/real-pkg`)
+		writeFileSync(`${dir}/real-pkg/index.js`, `export const v = "symlinked pkg";`)
+		mkdirSync(`${dir}/node_modules`)
+		symlinkSync(`${dir}/real-pkg`, `${dir}/node_modules/linkpkg`)
+
+		writeFileSync(`${dir}/main.js`, `
+			import { v } from 'linkpkg';
+			console.log(v);
+		`)
+		$`${QJSXC()} -o ${dir}/app ${dir}/main.js`
+		const output = $`${dir}/app`
+		assert.strictEqual(output, 'symlinked pkg')
+	})
+
+	test('node_modules with nested dependencies in compiled binary', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/outer/node_modules/inner`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/outer/index.js`, `
+			import { v } from 'inner';
+			export const result = 'outer+' + v;
+		`)
+		writeFileSync(`${dir}/node_modules/outer/node_modules/inner/index.js`,
+			`export const v = "inner";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { result } from 'outer';
+			console.log(result);
+		`)
+		$`${QJSXC()} -o ${dir}/app ${dir}/main.js`
+		const output = $`${dir}/app`
+		assert.strictEqual(output, 'outer+inner')
 	})
 })
