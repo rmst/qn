@@ -1,35 +1,5 @@
-# qjsxc.patch - Patches to QuickJS compiler for module resolution
-#
-# Target file: quickjs/qjsc.c
-# Output: bin/<platform>/obj/qjsxc.c -> compiled to qjsxc binary
-# Applied by: Makefile rule for $(BIN_DIR)/obj/qjsxc.c
-#
-# Features added:
-#
-#   1. NODE_PATH module resolution at compile time
-#      - Resolves bare imports via NODE_PATH directories
-#      - Supports .js extension and /index.js fallbacks
-#      - Tracks embedded module names for runtime probing
-#
-#   2. Embedded module namespace (embedded:// prefix)
-#      - All compiled modules get embedded:// prefix in bytecode
-#      - Import map records compile-time resolutions for runtime replay
-#      - Namespace separation prevents collisions with disk modules
-#
-#   3. Generated executable enhancements
-#      The compiled output includes:
-#      - qjsx_loader() function for runtime module loading
-#      - Embedded module names array and import map for probing
-#      - Exit handler support (process.exitCode, process.on('exit'))
-#
-#   4. Module normalizer integration
-#      Uses qjsx_module_normalizer for consistent handling of:
-#      - Colon-to-slash translation (node:fs -> node/fs)
-#      - -D flag module embedding
-#      - embedded:// and file:// protocols
-#
---- quickjs/qjsc.c	2026-01-16 11:05:44.122659087 +0000
-+++ bin/linux/obj/qjsxc.c	2026-02-15 18:35:24.048511297 +0000
+--- /Users/simon/dev/qn/quickjs/qjsc.c	2026-01-16 11:05:44.122659087 +0000
++++ /Users/simon/dev/qn/bin/linux/obj/qjsxc.c	2026-02-15 19:08:03.530425775 +0000
 @@ -1,5 +1,8 @@
  /*
 - * QuickJS command line compiler
@@ -240,18 +210,22 @@
      }
      return m;
  }
-@@ -352,7 +432,17 @@
+@@ -352,7 +432,21 @@
          eval_flags |= JS_EVAL_TYPE_MODULE;
      else
          eval_flags |= JS_EVAL_TYPE_GLOBAL;
 -    obj = JS_Eval(ctx, (const char *)buf, buf_len, filename, eval_flags);
-+    /* For modules, prefix filename with embedded:// so the module name in
-+       bytecode will be in the embedded namespace. */
++    /* For modules, resolve symlinks and prefix with embedded:// so the module
++       name in bytecode uses the canonical path (matching runtime resolution). */
 +    char embedded_filename[PATH_MAX + EMBEDDED_PREFIX_LEN + 1];
++    char real_filename[PATH_MAX];
 +    const char *eval_name = filename;
 +    if (module) {
++        const char *canonical = filename;
++        if (realpath(filename, real_filename))
++            canonical = real_filename;
 +        snprintf(embedded_filename, sizeof(embedded_filename),
-+                 EMBEDDED_PREFIX "%s", filename);
++                 EMBEDDED_PREFIX "%s", canonical);
 +        eval_name = embedded_filename;
 +    }
 +
@@ -259,7 +233,7 @@
      if (JS_IsException(obj)) {
          js_std_dump_error(ctx);
          exit(1);
-@@ -380,14 +470,6 @@
+@@ -380,14 +474,6 @@
      "  js_std_init_handlers(rt);\n"
      ;
  
@@ -274,7 +248,7 @@
  #define PROG_NAME "qjsc"
  
  void help(void)
-@@ -760,8 +842,8 @@
+@@ -760,8 +846,8 @@
  
      JS_SetStripInfo(rt, strip_flags);
  
@@ -285,7 +259,7 @@
  
      fprintf(fo, "/* File generated automatically by the QuickJS compiler. */\n"
              "\n"
-@@ -769,8 +851,45 @@
+@@ -769,8 +855,45 @@
  
      if (output_type != OUTPUT_C) {
          fprintf(fo, "#include \"quickjs-libc.h\"\n"
@@ -331,7 +305,7 @@
      } else {
          fprintf(fo, "#include <inttypes.h>\n"
                  "\n"
-@@ -784,14 +903,50 @@
+@@ -784,14 +907,50 @@
      }
  
      for(i = 0; i < dynamic_module_list.count; i++) {
@@ -385,7 +359,7 @@
          fprintf(fo,
                  "static JSContext *JS_NewCustomContext(JSRuntime *rt)\n"
                  "{\n"
-@@ -843,7 +998,7 @@
+@@ -843,7 +1002,7 @@
  
          /* add the module loader if necessary */
          if (feature_bitmap & (1 << FE_MODULE_LOADER)) {
@@ -394,7 +368,7 @@
          }
  
          fprintf(fo,
-@@ -857,7 +1012,14 @@
+@@ -857,7 +1016,14 @@
                          e->name, e->name);
              }
          }
@@ -410,7 +384,7 @@
      }
  
      JS_FreeContext(ctx);
-@@ -872,5 +1034,12 @@
+@@ -872,5 +1038,12 @@
      namelist_free(&cname_list);
      namelist_free(&cmodule_list);
      namelist_free(&init_module_list);
