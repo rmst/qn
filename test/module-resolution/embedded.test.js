@@ -216,6 +216,25 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 		assert.strictEqual($`${dir}/app`, 'a+b+deep')
 	})
 
+	test('bare import resolved via .js extension probing (not NODE_PATH)', ({ dir }) => {
+		// Reproduces the qx/core bug: a bare import like "mylib/core" where
+		// mylib/core.js exists relative to cwd but is NOT in NODE_PATH or node_modules.
+		// The compile-time normalizer must try extension probing to find it.
+		mkdirSync(`${dir}/src/mylib`, { recursive: true })
+		writeFileSync(`${dir}/src/mylib/core.js`, `export const v = "from core";`)
+		writeFileSync(`${dir}/src/mylib/index.js`, `
+			import { v } from 'mylib/core';
+			export const result = v + " via index";
+		`)
+		writeFileSync(`${dir}/src/main.js`, `
+			import { result } from 'mylib';
+			console.log(result);
+		`)
+		$`cd ${dir}/src && NODE_PATH=. ${QJSXC()} -o ${dir}/app main.js`
+		rmSync(`${dir}/src`, { recursive: true })
+		assert.strictEqual($`${dir}/app`, 'from core via index')
+	})
+
 	test('NODE_PATH module with internal relative imports', ({ dir }) => {
 		mkdirSync(`${dir}/src/modules/mylib`, { recursive: true })
 		writeFileSync(`${dir}/src/modules/mylib/helper.js`, `export const h = 10;`)
