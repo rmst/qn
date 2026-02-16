@@ -20,7 +20,7 @@ Qn is built from ~21K LOC of own code plus five vendored C dependencies. Everyth
 - Filesystem extras (`native/`) — 0.4K LOC
 - Closure introspection (`introspect/`) — 49 LOC (bulk is in QuickJS patch)
 
-**Module resolution** (`module_resolution/`) — ~0.8K LOC C. NODE_PATH, node_modules walking, package.json resolution.
+**Module resolution** ([`module_resolution/`](module_resolution/Readme.md)) — ~0.8K LOC C. NODE_PATH, node_modules walking, package.json resolution. For standalone binaries: `embedded://` namespace separation, compile-time import map, `file://` protocol for forced disk loading.
 
 ## Vendored Dependencies
 

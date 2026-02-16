@@ -766,6 +766,43 @@ static char *make_embedded_name(JSContext *ctx, const char *name) {
 }
 
 /**
+ * Get the canonical CWD path (cached).
+ */
+static const char *get_cached_cwd(void) {
+    static char cwd_cache[PATH_MAX];
+    static int initialized = 0;
+    if (!initialized) {
+        if (!getcwd(cwd_cache, sizeof(cwd_cache)))
+            cwd_cache[0] = '\0';
+        initialized = 1;
+    }
+    return cwd_cache[0] ? cwd_cache : NULL;
+}
+
+/**
+ * Resolve a path via realpath, then strip the CWD prefix to avoid
+ * leaking build machine absolute paths into compiled output.
+ * Falls back to the absolute realpath if the path is outside CWD.
+ * Returns NULL if realpath fails.
+ */
+static char *resolve_compile_realpath(JSContext *ctx, const char *path) {
+    char *real = resolve_realpath(ctx, path);
+    if (!real) return NULL;
+
+    const char *cwd = get_cached_cwd();
+    if (cwd && real[0] == '/') {
+        size_t cwd_len = strlen(cwd);
+        if (strncmp(real, cwd, cwd_len) == 0 && real[cwd_len] == '/') {
+            char *rel = js_strdup(ctx, real + cwd_len + 1);
+            js_free(ctx, real);
+            return rel;
+        }
+    }
+
+    return real;
+}
+
+/**
  * Resolve a bare import for embedded modules.
  * Checks NODE_PATH canonical resolution first, then node_modules walking.
  * Returns the resolved disk path or NULL.
@@ -832,19 +869,25 @@ static char *compile_mode_normalize(JSContext *ctx, const char *base_name,
     int found_on_disk = 0;
 
     if (!is_filesystem_path(name)) {
-        /* Bare import: try NODE_PATH (returns canonical name), then node_modules */
+        /* Bare import: try NODE_PATH (real filesystem path), then node_modules */
         if (!is_node_resolution()) {
-            char *canonical = resolve_node_path_canonical(ctx, resolved, NULL);
-            if (canonical) {
-                result = make_embedded_name(ctx, canonical);
-                js_free(ctx, canonical);
+            char *full_path = resolve_node_path(ctx, resolved);
+            if (full_path) {
+                char *real = resolve_compile_realpath(ctx, full_path);
+                if (real) {
+                    result = make_embedded_name(ctx, real);
+                    js_free(ctx, real);
+                } else {
+                    result = make_embedded_name(ctx, full_path);
+                }
+                js_free(ctx, full_path);
                 found_on_disk = 1;
             }
         }
         if (!result && is_filesystem_path(effective_base)) {
             char *nm_resolved = resolve_node_modules(ctx, effective_base, resolved);
             if (nm_resolved) {
-                char *real = resolve_realpath(ctx, nm_resolved);
+                char *real = resolve_compile_realpath(ctx, nm_resolved);
                 if (real) {
                     result = make_embedded_name(ctx, real);
                     js_free(ctx, real);
@@ -860,7 +903,7 @@ static char *compile_mode_normalize(JSContext *ctx, const char *base_name,
         if (!result && !is_node_resolution()) {
             char *with_ext = resolve_with_index(ctx, resolved);
             if (with_ext) {
-                char *real = resolve_realpath(ctx, with_ext);
+                char *real = resolve_compile_realpath(ctx, with_ext);
                 if (real) {
                     result = make_embedded_name(ctx, real);
                     js_free(ctx, real);
@@ -885,7 +928,7 @@ static char *compile_mode_normalize(JSContext *ctx, const char *base_name,
                 resolved = probed;
             }
         }
-        char *real = resolve_realpath(ctx, resolved);
+        char *real = resolve_compile_realpath(ctx, resolved);
         if (real) {
             result = make_embedded_name(ctx, real);
             js_free(ctx, real);
@@ -895,7 +938,11 @@ static char *compile_mode_normalize(JSContext *ctx, const char *base_name,
         found_on_disk = 1;
     }
 
-    if (found_on_disk && !is_filesystem_path(name) &&
+    /* Record import map for resolutions the runtime can't reproduce:
+       bare imports (NODE_PATH, extension probing) and absolute path imports
+       (CWD-relativization). Relative imports (./  ../) don't need recording
+       since runtime resolves them via path arithmetic on the embedded base. */
+    if (found_on_disk && (!is_filesystem_path(name) || name[0] == '/') &&
         resolver_ctx->record_import && result) {
         resolver_ctx->record_import(base_name, name, result);
     }
@@ -989,20 +1036,17 @@ static char *qjsx_module_normalizer(JSContext *ctx, const char *base_name,
     /* ---- BARE IMPORTS (no leading dot or slash) ---- */
     if (!is_filesystem_path(name)) {
         if (base_is_embedded) {
-            /* Embedded importer: check embedded modules via NODE_PATH canonical,
-               then fall back to disk */
-            if (embedded_modules && !is_node_resolution()) {
-                char *canonical = resolve_node_path_canonical(ctx, resolved, embedded_modules);
-                if (canonical) {
-                    if (embedded_module_exists(embedded_modules, canonical)) {
-                        char *result = make_embedded_name(ctx, canonical);
-                        js_free(ctx, canonical);
-                        if (real_base) js_free(ctx, real_base);
-                        js_free(ctx, resolved);
-                        MODULE_DEBUG("result (embedded bare): '%s'", result);
-                        return result;
-                    }
-                    js_free(ctx, canonical);
+            /* Embedded importer: check import map with embedded://<input> base
+               (handles -D entries and dynamically discovered bare imports) */
+            if (resolver_ctx && resolver_ctx->import_map) {
+                const char *mapped = import_map_lookup(
+                    resolver_ctx->import_map, resolver_ctx->import_map_count,
+                    EMBEDDED_PREFIX "<input>", name);
+                if (mapped) {
+                    if (real_base) js_free(ctx, real_base);
+                    js_free(ctx, resolved);
+                    MODULE_DEBUG("result (embedded bare via input map): '%s'", mapped);
+                    return js_strdup(ctx, mapped);
                 }
             }
 
@@ -1023,19 +1067,17 @@ static char *qjsx_module_normalizer(JSContext *ctx, const char *base_name,
             return resolved;
         }
 
-        /* Non-embedded importer: check embedded first, then disk */
-        if (embedded_modules && !is_node_resolution()) {
-            char *canonical = resolve_node_path_canonical(ctx, resolved, embedded_modules);
-            if (canonical) {
-                if (embedded_module_exists(embedded_modules, canonical)) {
-                    char *result = make_embedded_name(ctx, canonical);
-                    js_free(ctx, canonical);
-                    if (real_base) js_free(ctx, real_base);
-                    js_free(ctx, resolved);
-                    MODULE_DEBUG("result (disk->embedded bare): '%s'", result);
-                    return result;
-                }
-                js_free(ctx, canonical);
+        /* Non-embedded importer: check import map with embedded://<input> base
+           (allows disk scripts to import embedded modules by bare name) */
+        if (resolver_ctx && resolver_ctx->import_map) {
+            const char *mapped = import_map_lookup(
+                resolver_ctx->import_map, resolver_ctx->import_map_count,
+                EMBEDDED_PREFIX "<input>", name);
+            if (mapped) {
+                if (real_base) js_free(ctx, real_base);
+                js_free(ctx, resolved);
+                MODULE_DEBUG("result (disk->embedded bare via input map): '%s'", mapped);
+                return js_strdup(ctx, mapped);
             }
         }
 

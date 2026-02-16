@@ -250,6 +250,63 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, '20')
 	})
+
+	test('same module via absolute and relative path shares identity', ({ dir }) => {
+		mkdirSync(`${dir}/src`, { recursive: true })
+		writeFileSync(`${dir}/src/counter.js`, `
+			let n = 0;
+			export const inc = () => ++n;
+		`)
+		writeFileSync(`${dir}/src/via-abs.js`, `
+			import { inc } from '${dir}/src/counter.js';
+			export const absInc = inc;
+		`)
+		writeFileSync(`${dir}/src/main.js`, `
+			import { inc } from './counter.js';
+			import { absInc } from './via-abs.js';
+			console.log(inc(), absInc());
+		`)
+		$`cd ${dir}/src && ${QJSXC()} -o ${dir}/app main.js`
+		rmSync(`${dir}/src`, { recursive: true })
+		assert.strictEqual($`${dir}/app`, '1 2')
+	})
+
+	test('two bare modules import same file via relative and absolute path', ({ dir }) => {
+		mkdirSync(`${dir}/src/libs/pkg-a`, { recursive: true })
+		mkdirSync(`${dir}/src/libs/pkg-b`, { recursive: true })
+		writeFileSync(`${dir}/src/libs/shared.js`, `
+			let n = 0;
+			export const inc = () => ++n;
+		`)
+		writeFileSync(`${dir}/src/libs/pkg-a/index.js`, `
+			import { inc } from '../shared.js';
+			export const aInc = inc;
+		`)
+		writeFileSync(`${dir}/src/libs/pkg-b/index.js`, `
+			import { inc } from '${dir}/src/libs/shared.js';
+			export const bInc = inc;
+		`)
+		writeFileSync(`${dir}/src/main.js`, `
+			import { aInc } from 'pkg-a';
+			import { bInc } from 'pkg-b';
+			console.log(aInc(), bInc());
+		`)
+		$`cd ${dir}/src && NODE_PATH=libs ${QJSXC()} -o ${dir}/app main.js`
+		rmSync(`${dir}/src`, { recursive: true })
+		assert.strictEqual($`${dir}/app`, '1 2')
+	})
+
+	test('parent directory import via ../', ({ dir }) => {
+		mkdirSync(`${dir}/src/sub`, { recursive: true })
+		writeFileSync(`${dir}/src/shared.js`, `export const v = "from parent";`)
+		writeFileSync(`${dir}/src/sub/main.js`, `
+			import { v } from '../shared.js';
+			console.log(v);
+		`)
+		$`cd ${dir}/src && ${QJSXC()} -o ${dir}/app sub/main.js`
+		rmSync(`${dir}/src`, { recursive: true })
+		assert.strictEqual($`${dir}/app`, 'from parent')
+	})
 })
 
 describe('Namespace separation (qn runtime)', () => {
@@ -350,6 +407,54 @@ describe('Compiled binary namespace separation', () => {
 		writeFileSync(`${dir}/src/node_modules/mypkg/index.js`, `export const v = "disk";`)
 		// Bare import should still resolve to the embedded version
 		assert.strictEqual($`${dir}/app`, 'embedded')
+	})
+
+	test('dynamic import at same path as embedded module loads from disk', ({ dir }) => {
+		mkdirSync(`${dir}/src/lib`, { recursive: true })
+		writeFileSync(`${dir}/src/lib/utils.js`, `export const v = "embedded";`)
+		// The embedded key will be "lib/utils.js" (CWD-relative from src/)
+		// Try to alias into the embedded namespace by importing that exact relative path
+		writeFileSync(`${dir}/src/main.js`, `
+			import { v as ev } from './lib/utils.js';
+			async function main() {
+				const path = scriptArgs[1];
+				const mod = await import(path);
+				// Also try file:// to force disk load
+				const fileMod = await import("file://" + path);
+				console.log(ev, mod.v, fileMod.v);
+			}
+			main();
+		`)
+		$`cd ${dir}/src && ${QJSXC()} -o ${dir}/app main.js`
+		// Overwrite with different content after compilation
+		writeFileSync(`${dir}/src/lib/utils.js`, `export const v = "disk";`)
+		// Import using the exact path that matches the embedded key
+		// Both should load from disk, not alias into the embedded module
+		assert.strictEqual($`cd ${dir}/src && ${dir}/app lib/utils.js`, 'embedded disk disk')
+	})
+
+	test('absolute-path embedded module shadows disk file unless file:// is used', ({ dir }) => {
+		// Compile from src/ but import a file outside CWD — its embedded key
+		// will be an absolute path (CWD stripping can't help).
+		// At runtime, a bare dynamic import of that path returns the embedded
+		// version. file:// is needed to force disk loading.
+		mkdirSync(`${dir}/src`, { recursive: true })
+		mkdirSync(`${dir}/external`, { recursive: true })
+		writeFileSync(`${dir}/external/lib.js`, `export const v = "embedded";`)
+		writeFileSync(`${dir}/src/main.js`, `
+			import { v as ev } from '${dir}/external/lib.js';
+			async function main() {
+				const shadowed = await import('${dir}/external/lib.js');
+				const disk = await import('file://${dir}/external/lib.js');
+				console.log(ev, shadowed.v, disk.v);
+			}
+			main();
+		`)
+		$`cd ${dir}/src && ${QJSXC()} -o ${dir}/app main.js`
+		writeFileSync(`${dir}/external/lib.js`, `export const v = "disk";`)
+		// Without file://: embedded version wins (shadowed)
+		// With file://: disk version is loaded
+		assert.strictEqual($`${dir}/app`, 'embedded embedded disk')
 	})
 
 	test('compiled binary with embedded and runtime disk imports coexist', ({ dir }) => {

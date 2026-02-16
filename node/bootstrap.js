@@ -266,7 +266,7 @@ if (scriptArgs.length < 2) {
 	if (testFiles.length === 1) {
 		// Single file: run in-process (fast path, no child process overhead)
 		await import('node:test')
-		await import(testFiles[0])
+		await import("file://" + testFiles[0])
 	} else {
 		// Multiple files: run in parallel via child processes
 		await runTestsParallel(testFiles, concurrency)
@@ -279,7 +279,7 @@ if (scriptArgs.length < 2) {
 
 	// Load and execute the user's script
 	try {
-		await import(scriptPath)
+		await import("file://" + scriptPath)
 	} catch (e) {
 		std.err.puts("Error loading script: " + e.message + "\n")
 		if (e.stack) {

@@ -1,5 +1,5 @@
 --- /Users/simon/dev/qn/quickjs/qjsc.c	2026-01-16 11:05:44.122659087 +0000
-+++ /Users/simon/dev/qn/bin/linux/obj/qjsxc.c	2026-02-15 19:08:03.530425775 +0000
++++ /Users/simon/dev/qn/bin/linux/obj/qjsxc.c	2026-02-15 20:41:18.983717485 +0000
 @@ -1,5 +1,8 @@
  /*
 - * QuickJS command line compiler
@@ -210,7 +210,7 @@
      }
      return m;
  }
-@@ -352,7 +432,21 @@
+@@ -352,7 +432,29 @@
          eval_flags |= JS_EVAL_TYPE_MODULE;
      else
          eval_flags |= JS_EVAL_TYPE_GLOBAL;
@@ -222,8 +222,16 @@
 +    const char *eval_name = filename;
 +    if (module) {
 +        const char *canonical = filename;
-+        if (realpath(filename, real_filename))
++        if (realpath(filename, real_filename)) {
 +            canonical = real_filename;
++            const char *cwd = get_cached_cwd();
++            if (cwd) {
++                size_t cwd_len = strlen(cwd);
++                if (strncmp(real_filename, cwd, cwd_len) == 0 &&
++                    real_filename[cwd_len] == '/')
++                    canonical = real_filename + cwd_len + 1;
++            }
++        }
 +        snprintf(embedded_filename, sizeof(embedded_filename),
 +                 EMBEDDED_PREFIX "%s", canonical);
 +        eval_name = embedded_filename;
@@ -233,7 +241,7 @@
      if (JS_IsException(obj)) {
          js_std_dump_error(ctx);
          exit(1);
-@@ -380,14 +474,6 @@
+@@ -380,14 +482,6 @@
      "  js_std_init_handlers(rt);\n"
      ;
  
@@ -248,7 +256,7 @@
  #define PROG_NAME "qjsc"
  
  void help(void)
-@@ -760,8 +846,8 @@
+@@ -760,8 +854,8 @@
  
      JS_SetStripInfo(rt, strip_flags);
  
@@ -259,7 +267,7 @@
  
      fprintf(fo, "/* File generated automatically by the QuickJS compiler. */\n"
              "\n"
-@@ -769,8 +855,45 @@
+@@ -769,8 +863,45 @@
  
      if (output_type != OUTPUT_C) {
          fprintf(fo, "#include \"quickjs-libc.h\"\n"
@@ -305,7 +313,7 @@
      } else {
          fprintf(fo, "#include <inttypes.h>\n"
                  "\n"
-@@ -784,14 +907,50 @@
+@@ -784,14 +915,50 @@
      }
  
      for(i = 0; i < dynamic_module_list.count; i++) {
@@ -317,13 +325,13 @@
 +        char *normalized = qjsx_module_normalizer(ctx, EMBEDDED_PREFIX "<input>", dyn_name, &compile_resolver_ctx);
 +        if (!normalized) {
 +            fprintf(stderr, "Could not normalize dynamic module '%s'\n", dyn_name);
-+            exit(1);
-+        }
+             exit(1);
+         }
 +        if (!jsc_module_loader(ctx, normalized, NULL, JS_UNDEFINED)) {
 +            fprintf(stderr, "Could not load dynamic module '%s'\n", dyn_name);
 +            js_free(ctx, normalized);
-             exit(1);
-         }
++            exit(1);
++        }
 +        js_free(ctx, normalized);
      }
  
@@ -359,7 +367,7 @@
          fprintf(fo,
                  "static JSContext *JS_NewCustomContext(JSRuntime *rt)\n"
                  "{\n"
-@@ -843,7 +1002,7 @@
+@@ -843,7 +1010,7 @@
  
          /* add the module loader if necessary */
          if (feature_bitmap & (1 << FE_MODULE_LOADER)) {
@@ -368,7 +376,7 @@
          }
  
          fprintf(fo,
-@@ -857,7 +1016,14 @@
+@@ -857,7 +1024,14 @@
                          e->name, e->name);
              }
          }
@@ -384,7 +392,7 @@
      }
  
      JS_FreeContext(ctx);
-@@ -872,5 +1038,12 @@
+@@ -872,5 +1046,12 @@
      namelist_free(&cname_list);
      namelist_free(&cmodule_list);
      namelist_free(&init_module_list);

@@ -2,7 +2,7 @@
 
 Qn is [QuickJS](https://bellard.org/quickjs) with a few additional features:
 
-1. **Module resolution** with two modes (see [tests](test/module-resolution/)):
+1. **Module resolution** with two modes (see [docs](module_resolution/Readme.md), [tests](test/module-resolution/)):
    - **Bundler mode** (default): `NODE_PATH` for bare imports, `node_modules` walking, `.js` and `/index.js` fallbacks
    - **Node mode** (`QJSX_MODULE_RESOLUTION=node`): matches Node.js ESM exactly
 

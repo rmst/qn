@@ -1,85 +1,114 @@
 # Module Resolution
 
-This directory contains the module resolution implementation for QJSX.
+Shared module resolution for the qjsx interpreter, the qjsxc compiler, and standalone compiled binaries. Implemented in `module-resolution.h`.
 
-## Import Types
+## Import Specifiers
 
-| Import type | Example | Resolution |
-|-------------|---------|------------|
-| **Bare** | `lodash`, `node:fs` | NODE_PATH / node_modules / embedded lookup, no realpath |
-| **Filesystem** | `./foo`, `../bar`, `/path/to/foo` | `realpath()` → absolute canonical path |
+| Type | Example | How it resolves |
+|------|---------|-----------------|
+| **Bare** | `lodash`, `node:fs` | NODE_PATH dirs, then `node_modules` walking |
+| **Relative** | `./foo`, `../bar` | Against importing module's directory |
+| **Absolute** | `/path/to/foo` | Used directly |
 
-## Resolution Details
+## Resolution Steps
 
-### Bare Imports
+### 1. Colon-to-slash translation
 
-Bare imports (no leading `/`, `./`, or `../`) are resolved via:
+`node:fs` becomes `node/fs`. This lets NODE_PATH handle Node.js-style module specifiers without any special cases.
 
-1. **Colon-to-slash translation**: `node:fs` → `node/fs`
-2. **NODE_PATH lookup**: Search directories in `NODE_PATH` environment variable
-3. **node_modules walking**: Walk up directory tree from importing file, checking `node_modules/<pkg>/`
-4. **package.json resolution**: Read `exports` field (with subpath and conditional support), then `main`
-5. **Extension probing** (bundler mode only): Try `.js`, then `/index.js`
+### 2. Bare import resolution
 
-For compiled binaries, bare imports check the embedded module list first, then fall back to NODE_PATH.
+Tried in order until one succeeds:
 
-### Filesystem Paths (Relative and Absolute)
+1. **NODE_PATH**: search each directory in the `NODE_PATH` environment variable for `<dir>/<name>`, `<dir>/<name>.js`, `<dir>/<name>/index.js`
+2. **node_modules walking**: walk up from the importing file, check `node_modules/<pkg>/` with `package.json` resolution (`exports` field with subpath and conditional support, then `main` field)
+3. **Extension probing** (bundler mode only): try `<name>.js`, `<name>/index.js`
 
-Both relative (`./foo`, `../bar`) and absolute (`/path/to/foo`) imports are filesystem paths:
+### 3. Filesystem path resolution
 
-1. **Relative resolution**: Resolve against the importing module's directory
-2. **Symlink resolution**: `realpath()` converts to canonical absolute path
-3. **Extension probing** (bundler mode only): Try `.js`, then `/index.js`
+For relative and absolute imports:
 
-This means relative imports resolve against the **real location** of the importing file, not a symlink's location. This matches Node.js ESM behavior.
+1. Resolve `./` and `../` against the importing module's directory
+2. **Extension probing** (bundler mode only): try `.js`, `/index.js`
+3. **Symlink resolution**: `realpath()` to canonical path
 
-### Compile Time vs Runtime
-
-| Context | Behavior |
-|---------|----------|
-| **Compile time** | Modules are discovered and embedded under their resolved canonical names |
-| **Runtime (interpreted)** | Modules are resolved and loaded from disk |
-| **Runtime (compiled)** | Embedded modules checked first by name, then fall back to disk |
+Relative imports resolve against the **real location** (after symlink resolution) of the importing file, matching Node.js ESM behavior.
 
 ## Resolution Modes
 
-### Bundler Mode (default)
+**Bundler mode** (default): extension probing enabled, more lenient.
 
-- Extension probing enabled: `./foo` tries `./foo.js`, `./foo/index.js`
-- More lenient, matches bundler conventions
+**Node mode** (`QJSX_MODULE_RESOLUTION=node`): explicit extensions required, matches Node.js ESM exactly. NODE_PATH and colon-to-slash still work.
 
-### Node Mode (`QJSX_MODULE_RESOLUTION=node`)
 
-- Explicit extensions required: `./foo.js` not `./foo`
-- Matches Node.js ESM behavior exactly
-- NODE_PATH and colon-to-slash still work
+## Standalone Compiled Binaries
+
+`qjsxc` compiles JavaScript into standalone executables. All imported modules are embedded in the binary. The module resolution system handles three distinct contexts:
+
+### Namespaces
+
+Embedded and disk modules live in separate namespaces in QuickJS's module cache:
+
+- `embedded://lib/utils.js` — an embedded module
+- `/home/user/lib/utils.js` — a disk module
+
+These can never collide, even if they refer to the same original file.
+
+### Compile time (qjsxc)
+
+The compiler resolves all imports on the filesystem and assigns each module an `embedded://` prefixed name:
+
+- **CWD-relative paths**: files under the working directory get short names like `embedded://lib/utils.js` (the CWD prefix is stripped after `realpath`)
+- **Absolute paths**: files outside CWD keep their full path, e.g. `embedded:///opt/shared/lib.js`
+- **C modules** (`std`, `os`): kept as plain names without the prefix
+
+An **import map** records how each `(importer, specifier)` pair was resolved. This captures resolutions the runtime can't reproduce on its own:
+- Bare imports (NODE_PATH lookup, extension probing)
+- Absolute path imports (CWD-relativization)
+
+Relative imports (`./foo`, `../bar`) are NOT recorded because the runtime can reproduce them via path arithmetic on the embedded base name.
+
+### Runtime (standalone binary)
+
+When a standalone binary resolves an import, it proceeds in this order:
+
+1. **`file://` protocol**: `import("file:///path/to/mod.js")` strips the prefix and forces disk loading, bypassing the embedded namespace entirely
+2. **Import map**: if the importer is embedded, look up the `(base, specifier)` pair — this handles bare imports and other compile-time-only resolutions
+3. **`embedded://<input>` fallback**: for bare imports (from any base), check import map entries recorded from `-D` flags — this lets dynamically loaded disk scripts access embedded modules
+4. **Embedded list**: for filesystem path imports from an embedded base, check if the resolved name exists in the embedded module list
+5. **Disk fallback**: resolve on the filesystem via NODE_PATH, node_modules, or realpath
+
+### The `-D` flag
+
+`-D <name>` embeds a module that isn't directly imported by the entry point. At compile time, it resolves `<name>` as if imported from a virtual `embedded://<input>` base and records the result in the import map.
+
+At runtime, any script (embedded or disk) importing `<name>` as a bare import can find it via the `embedded://<input>` import map entries. This is how `qn` makes `node:fs`, `node:path`, etc. available to user scripts.
+
+```bash
+# Embed node:fs for dynamic use by external scripts
+NODE_PATH=./node qjsxc -D node:fs -o runtime bootstrap.js
+
+# External scripts can now import it
+./runtime user-script.js  # can use: import { readFileSync } from "node:fs"
+```
+
+### The `file://` protocol
+
+Embedded code can force disk loading with the `file://` prefix:
+
+```js
+// From inside an embedded module:
+const mod = await import("file:///path/to/plugin.js")
+```
+
+This is necessary because embedded importers check the embedded namespace first for filesystem path imports. Without `file://`, a disk file at a path matching an embedded module name would be shadowed by the embedded version.
+
+The `qn` bootstrap uses `file://` when loading user scripts to prevent this shadowing.
 
 ## Debugging
-
-Set `QJSX_MODULE_DEBUG=1` to print module resolution steps:
 
 ```bash
 QJSX_MODULE_DEBUG=1 ./bin/qjsx script.js
 ```
 
-Output shows:
-- Normalizer inputs (base module, import specifier)
-- Realpath resolution results
-- Final resolved module name
-
-## Path Leakage in Compiled Binaries
-
-When compiling with `qjsxc`, filesystem paths (relative and absolute imports) are embedded as absolute canonical paths. This may expose build environment paths in the binary.
-
-To avoid path leakage, use **bare imports** with NODE_PATH:
-
-```bash
-# Instead of relative imports:
-import { foo } from './lib/utils.js'
-
-# Use bare imports:
-import { foo } from 'lib/utils'
-# With: NODE_PATH=./lib qjsxc -o app main.js
-```
-
-Bare imports are embedded under canonical names like `lib/utils.js` without absolute paths.
+Shows normalizer inputs, realpath results, import map hits, and final resolved names.
