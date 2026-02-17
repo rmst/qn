@@ -17,6 +17,7 @@ import "node-globals"
 import { resolve } from "node:path"
 import { globSync } from "node:fs"
 import { commit, buildTime } from "qn:version-info"
+import { isDirectory, resolveDirectoryEntry } from "./qn/bootstrap-utils.js"
 
 /** Check if a pattern contains glob special characters */
 function isGlobPattern(pattern) {
@@ -272,7 +273,12 @@ if (scriptArgs.length < 2) {
 		await runTestsParallel(testFiles, concurrency)
 	}
 } else {
-	const scriptPath = resolveScriptPath(scriptArgs[1])
+	let scriptPath = resolveScriptPath(scriptArgs[1])
+
+	// If the script path is a directory, resolve to its entry point
+	if (isDirectory(scriptPath)) {
+		scriptPath = resolveDirectoryEntry(scriptPath)
+	}
 
 	// Keep scriptArgs as-is to match Node.js argv behavior:
 	// argv[0] = interpreter, argv[1] = script, argv[2+] = args

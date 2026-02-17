@@ -9,12 +9,14 @@
  */
 
 import * as std from "std"
+import * as os from "os"
 import "node-globals"
 import { resolve } from "node:path"
 import process from "node:process"
 import { Buffer } from "node:buffer"
 import $, { ProcessPromise, ProcessOutput, retry } from "qx/core"
 import { commit, buildTime } from "qn:version-info"
+import { isDirectory, resolveDirectoryEntry } from "../node/qn/bootstrap-utils.js"
 
 // Handle --version flag
 if (scriptArgs[1] === '--version' || scriptArgs[1] === '-V') {
@@ -98,7 +100,12 @@ function resolveScriptPath(path) {
 if (process.argv.length < 2) {
 	await import("repl")
 } else {
-	const scriptPath = resolveScriptPath(process.argv[1])
+	let scriptPath = resolveScriptPath(process.argv[1])
+
+	// If the script path is a directory, resolve to its entry point
+	if (isDirectory(scriptPath)) {
+		scriptPath = resolveDirectoryEntry(scriptPath)
+	}
 
 	// Load and execute the user's script
 	try {
