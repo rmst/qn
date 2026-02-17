@@ -5,6 +5,3 @@
 [submodule "vendor/bearssl"]
 	path = vendor/bearssl
 	url = https://github.com/nickray/bearssl
-[submodule "vendor/lwip"]
-	path = vendor/lwip
-	url = https://github.com/lwip-tcpip/lwip.git

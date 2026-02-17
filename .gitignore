@@ -1,6 +1,5 @@
 # Build outputs
 bin/
-wireguard/build/
 
 # OS files
 .DS_Store

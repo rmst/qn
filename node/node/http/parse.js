@@ -1,7 +1,7 @@
 /**
  * Shared HTTP/1.1 parsing utilities.
  *
- * Used by node:fetch, node:http, and qn:wireguard for transport-independent
+ * Used by node:fetch and node:http for transport-independent
  * HTTP request/response parsing and serialization.
  */
 

@@ -82,7 +82,7 @@ This is how `qn` is built - it compiles a minimal bootstrap with all node module
 
 ### Architecture
 
-See [architecture.md](architecture.md) for an overview of own code and vendored dependencies (QuickJS, SQLite, BearSSL, lwIP, WireGuard).
+See [architecture.md](architecture.md) for an overview of own code and vendored dependencies (QuickJS, SQLite, BearSSL).
 
 The following files are used to compile the `qjsx` binary:
 
