@@ -1,28 +1,11 @@
 /*
- * node:fs/promises - Async wrappers around sync fs functions
- *
- * Since QuickJS uses a synchronous I/O model, these functions
- * wrap the sync implementations in resolved Promises.
+ * node:fs/promises - Async filesystem operations via libuv
  */
 
+import * as uv_fs from 'qn_uv_fs'
 import {
-	readFileSync,
-	writeFileSync,
-	realpathSync,
-	statSync,
-	lstatSync,
-	mkdirSync,
-	readdirSync,
-	renameSync,
 	rmSync,
 	cpSync,
-	symlinkSync,
-	readlinkSync,
-	accessSync,
-	chmodSync,
-	utimesSync,
-	chownSync,
-	lchownSync,
 	constants,
 } from 'node:fs'
 
@@ -36,22 +19,141 @@ function wrapSync(fn) {
 	}
 }
 
-export const readFile = wrapSync(readFileSync)
-export const writeFile = wrapSync(writeFileSync)
-export const realpath = wrapSync(realpathSync)
-export const stat = wrapSync(statSync)
-export const lstat = wrapSync(lstatSync)
-export const mkdir = wrapSync(mkdirSync)
-export const readdir = wrapSync(readdirSync)
-export const rename = wrapSync(renameSync)
+/* S_IFMT and type constants */
+const S_IFMT = 0o170000
+const S_IFDIR = 0o040000
+const S_IFREG = 0o100000
+const S_IFBLK = 0o060000
+const S_IFCHR = 0o020000
+const S_IFLNK = 0o120000
+const S_IFIFO = 0o010000
+const S_IFSOCK = 0o140000
+
+function addStatMethods(obj) {
+	obj.atime = new Date(obj.atimeMs)
+	obj.mtime = new Date(obj.mtimeMs)
+	obj.ctime = new Date(obj.ctimeMs)
+	obj.birthtime = new Date(obj.birthtimeMs)
+	obj.isDirectory = function() { return (this.mode & S_IFMT) === S_IFDIR }
+	obj.isFile = function() { return (this.mode & S_IFMT) === S_IFREG }
+	obj.isBlockDevice = function() { return (this.mode & S_IFMT) === S_IFBLK }
+	obj.isCharacterDevice = function() { return (this.mode & S_IFMT) === S_IFCHR }
+	obj.isSymbolicLink = function() { return (this.mode & S_IFMT) === S_IFLNK }
+	obj.isFIFO = function() { return (this.mode & S_IFMT) === S_IFIFO }
+	obj.isSocket = function() { return (this.mode & S_IFMT) === S_IFSOCK }
+	return obj
+}
+
+/* Truly async via libuv */
+
+export function readFile(path, options) {
+	let encoding = null
+	if (typeof options === 'string') encoding = options
+	else if (options && options.encoding) encoding = options.encoding
+	const useUtf8 = encoding === 'utf8' || encoding === 'utf-8'
+	return uv_fs.readFile(String(path), useUtf8)
+}
+
+export function writeFile(path, data, options) {
+	return uv_fs.writeFile(String(path), data)
+}
+
+export function stat(path) {
+	return uv_fs.stat(String(path)).then(addStatMethods)
+}
+
+export function lstat(path) {
+	return uv_fs.lstat(String(path)).then(addStatMethods)
+}
+
+export async function readdir(path, options) {
+	const p = String(path)
+	const entries = await uv_fs.readdir(p)
+	if (options && options.withFileTypes) {
+		const results = []
+		for (const name of entries) {
+			const s = await uv_fs.lstat(p + '/' + name)
+			results.push({
+				name,
+				parentPath: p,
+				path: p,
+				_mode: s.mode,
+				isDirectory() { return (this._mode & S_IFMT) === S_IFDIR },
+				isFile() { return (this._mode & S_IFMT) === S_IFREG },
+				isSymbolicLink() { return (this._mode & S_IFMT) === S_IFLNK },
+				isBlockDevice() { return (this._mode & S_IFMT) === S_IFBLK },
+				isCharacterDevice() { return (this._mode & S_IFMT) === S_IFCHR },
+				isFIFO() { return (this._mode & S_IFMT) === S_IFIFO },
+				isSocket() { return (this._mode & S_IFMT) === S_IFSOCK },
+			})
+		}
+		return results
+	}
+	return entries
+}
+
+export function mkdir(path, options) {
+	let mode = 0o777
+	if (typeof options === 'object' && options) {
+		if (options.mode != null) mode = options.mode
+	} else if (typeof options === 'number') {
+		mode = options
+	}
+	return uv_fs.mkdir(String(path), mode)
+}
+
+export function unlink(path) {
+	return uv_fs.unlink(String(path))
+}
+
+export function rename(oldPath, newPath) {
+	return uv_fs.rename(String(oldPath), String(newPath))
+}
+
+export function symlink(target, path) {
+	return uv_fs.symlink(String(target), String(path))
+}
+
+export function readlink(path) {
+	return uv_fs.readlink(String(path))
+}
+
+export function realpath(path) {
+	return uv_fs.realpath(String(path))
+}
+
+export function access(path, mode) {
+	return uv_fs.access(String(path), mode ?? 0)
+}
+
+export function chmod(path, mode) {
+	return uv_fs.chmod(String(path), mode)
+}
+
+export function utimes(path, atime, mtime) {
+	const toSec = (t) => {
+		if (t instanceof Date) return t.getTime() / 1000
+		if (typeof t === 'string') return new Date(t).getTime() / 1000
+		return Number(t)
+	}
+	return uv_fs.utimes(String(path), toSec(atime), toSec(mtime))
+}
+
+export function chown(path, uid, gid) {
+	return uv_fs.chown(String(path), uid, gid)
+}
+
+export function lchown(path, uid, gid) {
+	return uv_fs.lchown(String(path), uid, gid)
+}
+
+export function rmdir(path) {
+	return uv_fs.rmdir(String(path))
+}
+
+/* Fallbacks (no native async implementation yet) */
+
 export const rm = wrapSync(rmSync)
 export const cp = wrapSync(cpSync)
-export const symlink = wrapSync(symlinkSync)
-export const readlink = wrapSync(readlinkSync)
-export const access = wrapSync(accessSync)
-export const chmod = wrapSync(chmodSync)
-export const utimes = wrapSync(utimesSync)
-export const chown = wrapSync(chownSync)
-export const lchown = wrapSync(lchownSync)
 
 export { constants }

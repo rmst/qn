@@ -5,3 +5,6 @@
 [submodule "vendor/bearssl"]
 	path = vendor/bearssl
 	url = https://github.com/nickray/bearssl
+[submodule "vendor/libuv"]
+	path = vendor/libuv
+	url = https://github.com/libuv/libuv.git

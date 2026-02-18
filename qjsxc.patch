@@ -1,5 +1,5 @@
---- /Users/simon/dev/qn/quickjs/qjsc.c	2026-01-16 11:05:44.122659087 +0000
-+++ /Users/simon/dev/qn/bin/linux/obj/qjsxc.c	2026-02-15 20:41:18.983717485 +0000
+--- quickjs/qjsc.c	2026-02-18 15:49:15.799575407 +0000
++++ bin/linux/obj/qjsxc.c	2026-02-18 15:58:19.182562505 +0000
 @@ -1,5 +1,8 @@
  /*
 - * QuickJS command line compiler
@@ -256,7 +256,30 @@
  #define PROG_NAME "qjsc"
  
  void help(void)
-@@ -760,8 +854,8 @@
+@@ -452,6 +546,7 @@
+     const char *argv[64];
+     const char **arg, *bn_suffix, *lto_suffix;
+     char libjsname[1024];
++    char libuvname[1024];
+     char exe_dir[1024], inc_dir[1024], lib_dir[1024], buf[1024], *p;
+     int ret;
+ 
+@@ -501,9 +596,14 @@
+     snprintf(libjsname, sizeof(libjsname), "%s/libquickjs%s%s.a",
+              lib_dir, bn_suffix, lto_suffix);
+     *arg++ = libjsname;
++    snprintf(libuvname, sizeof(libuvname), "%s/libuv.a", lib_dir);
++    *arg++ = libuvname;
+     *arg++ = "-lm";
+     *arg++ = "-ldl";
+     *arg++ = "-lpthread";
++#ifdef __linux__
++    *arg++ = "-lrt";
++#endif
+     *arg = NULL;
+ 
+     if (verbose) {
+@@ -760,8 +860,8 @@
  
      JS_SetStripInfo(rt, strip_flags);
  
@@ -267,7 +290,7 @@
  
      fprintf(fo, "/* File generated automatically by the QuickJS compiler. */\n"
              "\n"
-@@ -769,8 +863,45 @@
+@@ -769,8 +869,45 @@
  
      if (output_type != OUTPUT_C) {
          fprintf(fo, "#include \"quickjs-libc.h\"\n"
@@ -313,7 +336,7 @@
      } else {
          fprintf(fo, "#include <inttypes.h>\n"
                  "\n"
-@@ -784,14 +915,50 @@
+@@ -784,14 +921,50 @@
      }
  
      for(i = 0; i < dynamic_module_list.count; i++) {
@@ -367,7 +390,7 @@
          fprintf(fo,
                  "static JSContext *JS_NewCustomContext(JSRuntime *rt)\n"
                  "{\n"
-@@ -843,7 +1010,7 @@
+@@ -843,7 +1016,7 @@
  
          /* add the module loader if necessary */
          if (feature_bitmap & (1 << FE_MODULE_LOADER)) {
@@ -376,7 +399,7 @@
          }
  
          fprintf(fo,
-@@ -857,7 +1024,14 @@
+@@ -857,7 +1030,14 @@
                          e->name, e->name);
              }
          }
@@ -392,7 +415,7 @@
      }
  
      JS_FreeContext(ctx);
-@@ -872,5 +1046,12 @@
+@@ -872,5 +1052,12 @@
      namelist_free(&cname_list);
      namelist_free(&cmodule_list);
      namelist_free(&init_module_list);
