@@ -5,7 +5,7 @@
  * low-level fd primitives exposed by qn_uv_fs.
  */
 
-import * as uv_fs from 'qn_uv_fs'
+import * as uv_fs from 'qn/uv-fs'
 import {
 	rmSync,
 	cpSync,
