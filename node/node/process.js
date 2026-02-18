@@ -1,5 +1,6 @@
 import * as std from 'std';
 import * as os from 'os';
+import { signal as uvSignal, signals as signalMap } from 'qn_uv_signals';
 
 // Create stream-like objects for stdin, stdout, stderr
 const createStream = (fd) => {
@@ -48,19 +49,8 @@ const createStream = (fd) => {
 
 // Event handlers storage
 const eventHandlers = new Map();
-
-// Signal name to number mapping
-const signalMap = {
-  'SIGHUP': 1,
-  'SIGINT': os.SIGINT ?? 2,
-  'SIGQUIT': 3,
-  'SIGILL': os.SIGILL ?? 4,
-  'SIGABRT': os.SIGABRT ?? 6,
-  'SIGFPE': os.SIGFPE ?? 8,
-  'SIGKILL': 9,
-  'SIGSEGV': os.SIGSEGV ?? 11,
-  'SIGTERM': os.SIGTERM ?? 15,
-};
+// Active uv_signal_t handles per signal name
+const signalHandles = new Map();
 
 // Process object that mimics Node.js process module
 const process = {
@@ -189,17 +179,18 @@ const process = {
       };
     }
 
-    // Register signal handler with os.signal if it's a signal event
+    // Register signal handler via libuv if it's a signal event
     const signum = signalMap[event];
     if (signum !== undefined) {
       // Only register if this is the first handler for this signal
       if (eventHandlers.get(event).length === 1) {
-        os.signal(signum, () => {
+        const handle = uvSignal(signum, () => {
           const handlers = eventHandlers.get(event);
           if (handlers) {
             handlers.forEach(h => { try { h(); } catch (e) { console.error(e); } });
           }
         });
+        signalHandles.set(event, handle);
       }
     }
 
@@ -209,10 +200,11 @@ const process = {
   removeAllListeners(event) {
     if (event) {
       eventHandlers.delete(event);
-      // Restore default signal handler
-      const signum = signalMap[event];
-      if (signum !== undefined) {
-        os.signal(signum, null);
+      // Close the libuv signal handle if one exists
+      const handle = signalHandles.get(event);
+      if (handle) {
+        handle.close();
+        signalHandles.delete(event);
       }
     } else {
       // Remove all event handlers

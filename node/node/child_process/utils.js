@@ -27,6 +27,13 @@ export function parseStdio(stdio) {
 	throw new TypeError(`Invalid stdio option: ${stdio}`)
 }
 
+import { signals as _signals } from 'qn_uv_signals'
+
+// Build reverse map (number → name)
+const _signalNames = Object.fromEntries(
+	Object.entries(_signals).map(([k, v]) => [v, k])
+)
+
 /**
  * Signal name to number mapping.
  * @param {string|number} signal
@@ -34,14 +41,7 @@ export function parseStdio(stdio) {
  */
 export function getSignalNumber(signal) {
 	if (typeof signal === 'number') return signal
-	const signals = {
-		SIGHUP: 1,
-		SIGINT: 2,
-		SIGQUIT: 3,
-		SIGKILL: 9,
-		SIGTERM: 15,
-	}
-	return signals[signal] || 15
+	return _signals[signal] || 15
 }
 
 /**
@@ -50,14 +50,7 @@ export function getSignalNumber(signal) {
  * @returns {string}
  */
 export function signalName(num) {
-	const names = {
-		1: 'SIGHUP',
-		2: 'SIGINT',
-		3: 'SIGQUIT',
-		9: 'SIGKILL',
-		15: 'SIGTERM',
-	}
-	return names[num] || `SIG${num}`
+	return _signalNames[num] || `SIG${num}`
 }
 
 /**
