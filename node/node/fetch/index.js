@@ -6,9 +6,10 @@
 import * as os from 'os'
 import {
 	socket as _socket, connect as _connect, connectFinish as _connectFinish,
-	getaddrinfoAsync as _getaddrinfoAsync, send as _send, recv as _recv,
+	send as _send, recv as _recv,
 	AF_INET, SOCK_STREAM, EAGAIN, EINPROGRESS,
 } from 'qn_socket'
+import { getaddrinfo as _getaddrinfo } from 'qn_uv_dns'
 import * as tls from 'node:tls'
 import { existsSync } from 'node:fs'
 import { Headers } from './Headers.js'
@@ -61,55 +62,15 @@ function isRedirectStatus(status) {
 }
 
 /**
- * Read the serialized result from an async getaddrinfo pipe fd.
- * Returns a promise that resolves to [{ family, address }].
- */
-function readAddrinfoPipe(fd) {
-	return new Promise((resolve, reject) => {
-		os.setReadHandler(fd, () => {
-			const buf = new ArrayBuffer(4096)
-			const n = os.read(fd, buf, 0, 4096)
-			if (n === -EAGAIN) return
-			os.setReadHandler(fd, null)
-			os.close(fd)
-			if (n <= 0) {
-				reject(new TypeError('getaddrinfo failed: no data'))
-				return
-			}
-			const view = new Uint8Array(buf, 0, n)
-			if (view[0] !== 0) {
-				let end = 1
-				while (end < n && view[end] !== 0) end++
-				const errMsg = new TextDecoder().decode(view.subarray(1, end))
-				reject(new TypeError(`getaddrinfo error: ${errMsg}`))
-				return
-			}
-			const count = view[1]
-			const addresses = []
-			let pos = 2
-			for (let i = 0; i < count && pos < n; i++) {
-				const family = view[pos++]
-				let end = pos
-				while (end < n && view[end] !== 0) end++
-				const address = new TextDecoder().decode(view.subarray(pos, end))
-				pos = end + 1
-				addresses.push({ family, address })
-			}
-			resolve(addresses)
-		})
-	})
-}
-
-/**
  * Connect a TCP socket to host:port via event loop.
  */
 async function tcpConnect(host, port, signal) {
 	if (signal?.aborted) throw signal.reason
 
-	let addrs = await readAddrinfoPipe(_getaddrinfoAsync(host, port, { family: AF_INET }))
+	let addrs = await _getaddrinfo(host, port, { family: AF_INET })
 	if (signal?.aborted) throw signal.reason
 	if (addrs.length === 0) {
-		addrs = await readAddrinfoPipe(_getaddrinfoAsync(host, port))
+		addrs = await _getaddrinfo(host, port)
 		if (addrs.length === 0) throw new TypeError(`fetch failed: DNS lookup failed for ${host}`)
 	}
 
