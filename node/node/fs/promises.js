@@ -1,5 +1,8 @@
 /*
  * node:fs/promises - Async filesystem operations via libuv
+ *
+ * High-level operations (readFile, writeFile) are composed from
+ * low-level fd primitives exposed by qn_uv_fs.
  */
 
 import * as uv_fs from 'qn_uv_fs'
@@ -44,19 +47,77 @@ function addStatMethods(obj) {
 	return obj
 }
 
-/* Truly async via libuv */
+/* ==== readFile/writeFile composed from fd primitives ==== */
 
-export function readFile(path, options) {
+export async function readFile(path, options) {
 	let encoding = null
 	if (typeof options === 'string') encoding = options
 	else if (options && options.encoding) encoding = options.encoding
 	const useUtf8 = encoding === 'utf8' || encoding === 'utf-8'
-	return uv_fs.readFile(String(path), useUtf8)
+
+	const p = String(path)
+	const fd = await uv_fs.open(p, 'r')
+	try {
+		const st = await uv_fs.fstat(fd)
+		const size = st.size
+		if (size === 0) {
+			/* Special files (e.g. /proc/*) report size 0 but have content.
+			 * Read in chunks until EOF. */
+			const chunks = []
+			let total = 0
+			for (;;) {
+				const chunk = new Uint8Array(8192)
+				const n = await uv_fs.read(fd, chunk, -1)
+				if (n === 0) break
+				chunks.push(n === chunk.length ? chunk : chunk.subarray(0, n))
+				total += n
+			}
+			if (chunks.length === 0) {
+				return useUtf8 ? '' : new Uint8Array(0).buffer
+			}
+			const result = new Uint8Array(total)
+			let offset = 0
+			for (const c of chunks) {
+				result.set(c, offset)
+				offset += c.length
+			}
+			if (useUtf8) {
+				return new TextDecoder().decode(result)
+			}
+			return result.buffer
+		}
+		const buf = new Uint8Array(size)
+		await uv_fs.read(fd, buf, 0)
+		if (useUtf8) {
+			return new TextDecoder().decode(buf)
+		}
+		return buf.buffer
+	} finally {
+		await uv_fs.close(fd)
+	}
 }
 
-export function writeFile(path, data, options) {
-	return uv_fs.writeFile(String(path), data)
+export async function writeFile(path, data, options) {
+	const p = String(path)
+	let buf
+	if (typeof data === 'string') {
+		buf = new TextEncoder().encode(data)
+	} else if (data instanceof ArrayBuffer) {
+		buf = new Uint8Array(data)
+	} else if (ArrayBuffer.isView(data)) {
+		buf = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+	} else {
+		throw new TypeError('writeFile: data must be string, ArrayBuffer, or TypedArray')
+	}
+	const fd = await uv_fs.open(p, 'w')
+	try {
+		await uv_fs.write(fd, buf, 0)
+	} finally {
+		await uv_fs.close(fd)
+	}
 }
+
+/* ==== Path operations (thin wrappers) ==== */
 
 export function stat(path) {
 	return uv_fs.stat(String(path)).then(addStatMethods)

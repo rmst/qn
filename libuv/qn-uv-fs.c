@@ -1,119 +1,47 @@
 /*
  * qn_uv_fs - Async filesystem operations via libuv for QuickJS
+ *
+ * Low-level fd-based primitives. High-level operations (readFile, writeFile)
+ * are composed in JS from these primitives.
+ *
+ * Adapted from txiki.js mod_fs.c by Saul Ibarra Corretge (MIT).
  */
 
-#include "quickjs/quickjs.h"
-#include "quickjs/cutils.h"
-#include <uv.h>
+#include "qn-uv-utils.h"
+
 #include <string.h>
-#include <stdlib.h>
 #include <fcntl.h>
 
-extern uv_loop_t *js_uv_loop(JSContext *ctx);
-
-/* ---- promise helper ---- */
-
-typedef struct {
-	JSContext *ctx;
-	JSValue resolving_funcs[2]; /* [resolve, reject] */
-} QNPromise;
-
-static int qn_promise_init(JSContext *ctx, QNPromise *p, JSValue *promise_out) {
-	p->ctx = ctx;
-	*promise_out = JS_NewPromiseCapability(ctx, p->resolving_funcs);
-	if (JS_IsException(*promise_out))
-		return -1;
-	return 0;
-}
-
-static void qn_promise_settle(QNPromise *p, int is_reject, JSValue val) {
-	JSContext *ctx = p->ctx;
-	JSValue ret = JS_Call(ctx, p->resolving_funcs[is_reject ? 1 : 0],
-	                      JS_UNDEFINED, 1, &val);
-	JS_FreeValue(ctx, ret);
-	JS_FreeValue(ctx, val);
-	JS_FreeValue(ctx, p->resolving_funcs[0]);
-	JS_FreeValue(ctx, p->resolving_funcs[1]);
+/* Get buffer pointer from a Uint8Array (Bellard QuickJS compatible).
+ * quickjs-ng has JS_GetUint8Array but Bellard's QuickJS does not. */
+static uint8_t *qn_get_uint8array(JSContext *ctx, size_t *psize, JSValueConst obj) {
+	size_t byte_offset, byte_length, elem_size;
+	JSValue ab = JS_GetTypedArrayBuffer(ctx, obj, &byte_offset, &byte_length, &elem_size);
+	if (JS_IsException(ab))
+		return NULL;
+	size_t ab_size;
+	uint8_t *buf = JS_GetArrayBuffer(ctx, &ab_size, ab);
+	JS_FreeValue(ctx, ab);
+	if (!buf)
+		return NULL;
+	*psize = byte_length;
+	return buf + byte_offset;
 }
 
 /* ---- fs request struct ---- */
 
 typedef struct {
 	uv_fs_t req;
-	QNPromise promise;
-	char *path;         /* duped path for error messages */
-	int fd;             /* for multi-step chains */
-	uint8_t *buf;       /* read buffer */
-	size_t buf_size;
-	int encoding;       /* 0=buffer, 1=utf8 */
-	uint8_t *write_buf; /* write data (copied) */
-	size_t write_len;
-	int free_write_buf; /* whether to free write_buf */
+	JSContext *ctx;
+	QNPromise result;
+	JSValue tarray;  /* pinned typed array during read/write */
 } QNFsReq;
 
-static QNFsReq *qn_fs_req_alloc(JSContext *ctx) {
-	QNFsReq *fr = (QNFsReq *)malloc(sizeof(QNFsReq));
-	if (!fr) return NULL;
-	memset(fr, 0, sizeof(QNFsReq));
-	fr->fd = -1;
+static JSValue qn_fsreq_init(JSContext *ctx, QNFsReq *fr) {
+	fr->ctx = ctx;
 	fr->req.data = fr;
-	return fr;
-}
-
-static void qn_fs_req_free(QNFsReq *fr) {
-	uv_fs_req_cleanup(&fr->req);
-	if (fr->path) free(fr->path);
-	if (fr->buf) js_free(fr->promise.ctx, fr->buf);
-	if (fr->free_write_buf && fr->write_buf) free(fr->write_buf);
-	free(fr);
-}
-
-/* ---- error helpers ---- */
-
-static const char *errno_code(int uv_err) {
-	switch (uv_err) {
-	case UV_ENOENT: return "ENOENT";
-	case UV_EACCES: return "EACCES";
-	case UV_EEXIST: return "EEXIST";
-	case UV_ENOTDIR: return "ENOTDIR";
-	case UV_EISDIR: return "EISDIR";
-	case UV_ENOSPC: return "ENOSPC";
-	case UV_EPERM: return "EPERM";
-	case UV_ENOTEMPTY: return "ENOTEMPTY";
-	case UV_EBADF: return "EBADF";
-	default: return "EIO";
-	}
-}
-
-static JSValue make_fs_error(JSContext *ctx, int uv_err,
-                             const char *syscall, const char *path) {
-	JSValue err = JS_NewError(ctx);
-	if (JS_IsException(err))
-		return JS_EXCEPTION;
-
-	const char *code = errno_code(uv_err);
-	const char *msg = uv_strerror(uv_err);
-
-	/* format: "CODE: msg, syscall 'path'" or "CODE: msg, syscall" */
-	char buf[1024];
-	if (path)
-		snprintf(buf, sizeof(buf), "%s: %s, %s '%s'", code, msg, syscall, path);
-	else
-		snprintf(buf, sizeof(buf), "%s: %s, %s", code, msg, syscall);
-
-	JS_DefinePropertyValueStr(ctx, err, "message",
-		JS_NewString(ctx, buf), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-	JS_DefinePropertyValueStr(ctx, err, "code",
-		JS_NewString(ctx, code), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-	JS_DefinePropertyValueStr(ctx, err, "errno",
-		JS_NewInt32(ctx, uv_err), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-	JS_DefinePropertyValueStr(ctx, err, "syscall",
-		JS_NewString(ctx, syscall), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-	if (path) {
-		JS_DefinePropertyValueStr(ctx, err, "path",
-			JS_NewString(ctx, path), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-	}
-	return err;
+	fr->tarray = JS_UNDEFINED;
+	return qn_promise_init(ctx, &fr->result);
 }
 
 /* ---- stat result helper ---- */
@@ -163,617 +91,528 @@ static JSValue make_stat_obj(JSContext *ctx, const uv_stat_t *s) {
 	return obj;
 }
 
-/* ==== readFile ==== */
+/* ---- open flags parser (from txiki.js) ---- */
 
-static void readfile_on_close(uv_fs_t *req);
-static void readfile_on_read(uv_fs_t *req);
-static void readfile_on_fstat(uv_fs_t *req);
-static void readfile_on_open(uv_fs_t *req);
+static int parse_open_flags(const char *strflags, size_t len) {
+	int flags = 0, read = 0, write = 0;
 
-static void readfile_on_open(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "open", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		qn_fs_req_free(fr);
-		return;
-	}
-
-	fr->fd = (int)req->result;
-	uv_fs_req_cleanup(req);
-
-	int r = uv_fs_fstat(js_uv_loop(ctx), &fr->req, fr->fd, readfile_on_fstat);
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "fstat", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		qn_fs_req_free(fr);
-	}
-}
-
-static void readfile_on_fstat(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "fstat", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		qn_fs_req_free(fr);
-		return;
-	}
-
-	size_t size = (size_t)req->statbuf.st_size;
-	uv_fs_req_cleanup(req);
-
-	fr->buf_size = size;
-	if (size > 0) {
-		fr->buf = (uint8_t *)js_mallocz(ctx, size);
-		if (!fr->buf) {
-			JSValue err = JS_NewError(ctx);
-			JS_DefinePropertyValueStr(ctx, err, "message",
-				JS_NewString(ctx, "ENOMEM: out of memory, read"),
-				JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-			qn_promise_settle(&fr->promise, 1, err);
-			qn_fs_req_free(fr);
-			return;
+	for (size_t i = 0; i < len; i++) {
+		switch (strflags[i]) {
+			case 'r': read = 1; break;
+			case 'w': write = 1; flags |= O_TRUNC | O_CREAT; break;
+			case 'a': write = 1; flags |= O_APPEND | O_CREAT; break;
+			case '+': read = 1; write = 1; break;
+			case 'x': flags |= O_EXCL; break;
+			default: break;
 		}
 	}
 
-	uv_buf_t uvbuf = uv_buf_init((char *)fr->buf, size);
-	int r = uv_fs_read(js_uv_loop(ctx), &fr->req, fr->fd, &uvbuf, 1, 0,
-	                    readfile_on_read);
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "read", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		qn_fs_req_free(fr);
-	}
+	flags |= read ? (write ? O_RDWR : O_RDONLY) : (write ? O_WRONLY : 0);
+	return flags;
 }
 
-static void readfile_on_read(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
+/* ==== Unified callback (txiki.js pattern) ==== */
+
+static void qn_fs_req_cb(uv_fs_t *req) {
+	QNFsReq *fr = req->data;
+	if (!fr) return;
+
+	JSContext *ctx = fr->ctx;
+	JSValue arg;
+	bool is_reject = false;
 
 	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "read", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		qn_fs_req_free(fr);
-		return;
+		arg = qn_new_error(ctx, req->result);
+		is_reject = true;
+		goto settle;
 	}
 
-	/* actual bytes read might differ from expected for special files */
-	size_t nread = (size_t)req->result;
-	uv_fs_req_cleanup(req);
+	switch (req->fs_type) {
+		case UV_FS_OPEN:
+			arg = JS_NewInt32(ctx, req->result);
+			break;
 
-	int r = uv_fs_close(js_uv_loop(ctx), &fr->req, fr->fd, readfile_on_close);
-	fr->fd = -1;
-	if (r < 0) {
-		/* still deliver data even if close fails */
-		JSValue val;
-		if (fr->encoding == 1)
-			val = JS_NewStringLen(ctx, (const char *)fr->buf, nread);
-		else
-			val = JS_NewArrayBufferCopy(ctx, fr->buf, nread);
-		qn_promise_settle(&fr->promise, 0, val);
-		qn_fs_req_free(fr);
+		case UV_FS_READ:
+			arg = req->result == 0 ? JS_NewInt32(ctx, 0) : JS_NewInt32(ctx, req->result);
+			break;
+
+		case UV_FS_WRITE:
+			arg = JS_NewInt32(ctx, req->result);
+			break;
+
+		case UV_FS_STAT:
+		case UV_FS_LSTAT:
+		case UV_FS_FSTAT:
+			arg = make_stat_obj(ctx, &req->statbuf);
+			break;
+
+		case UV_FS_READLINK:
+		case UV_FS_REALPATH:
+			arg = JS_NewString(ctx, req->ptr);
+			break;
+
+		case UV_FS_SCANDIR: {
+			JSValue arr = JS_NewArray(ctx);
+			uv_dirent_t ent;
+			uint32_t i = 0;
+			while (uv_fs_scandir_next(req, &ent) != UV_EOF) {
+				JS_DefinePropertyValueUint32(ctx, arr, i,
+					JS_NewString(ctx, ent.name), JS_PROP_C_W_E);
+				i++;
+			}
+			arg = arr;
+			break;
+		}
+
+		case UV_FS_MKDTEMP:
+			arg = JS_NewString(ctx, req->path);
+			break;
+
+		case UV_FS_CLOSE:
+		case UV_FS_MKDIR:
+		case UV_FS_UNLINK:
+		case UV_FS_RMDIR:
+		case UV_FS_RENAME:
+		case UV_FS_SYMLINK:
+		case UV_FS_LINK:
+		case UV_FS_COPYFILE:
+		case UV_FS_CHMOD:
+		case UV_FS_FCHMOD:
+		case UV_FS_CHOWN:
+		case UV_FS_LCHOWN:
+		case UV_FS_FCHOWN:
+		case UV_FS_UTIME:
+		case UV_FS_FUTIME:
+		case UV_FS_FTRUNCATE:
+		case UV_FS_FSYNC:
+		case UV_FS_FDATASYNC:
+		case UV_FS_ACCESS:
+			arg = JS_UNDEFINED;
+			break;
+
+		default:
+			arg = JS_UNDEFINED;
+			break;
 	}
+
+settle:
+	qn_promise_settle(ctx, &fr->result, is_reject, 1, &arg);
+	JS_FreeValue(ctx, fr->tarray);
+	uv_fs_req_cleanup(&fr->req);
+	js_free(ctx, fr);
 }
 
-static void readfile_on_close(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
+/* ==== fd-based primitives ==== */
 
-	uv_fs_req_cleanup(req);
+/* open(path, flags_string, mode) → promise<fd> */
+static JSValue js_uv_open(JSContext *ctx, JSValueConst this_val,
+                           int argc, JSValueConst *argv) {
+	const char *path = JS_ToCString(ctx, argv[0]);
+	if (!path) return JS_EXCEPTION;
 
-	JSValue val;
-	if (fr->encoding == 1)
-		val = JS_NewStringLen(ctx, (const char *)fr->buf, fr->buf_size);
+	size_t flen;
+	const char *strflags = JS_ToCStringLen(ctx, &flen, argv[1]);
+	if (!strflags) {
+		JS_FreeCString(ctx, path);
+		return JS_EXCEPTION;
+	}
+	int flags = parse_open_flags(strflags, flen);
+	JS_FreeCString(ctx, strflags);
+
+	int32_t mode = 0666;
+	if (argc > 2 && !JS_IsUndefined(argv[2])) {
+		if (JS_ToInt32(ctx, &mode, argv[2])) {
+			JS_FreeCString(ctx, path);
+			return JS_EXCEPTION;
+		}
+	}
+
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
+		JS_FreeCString(ctx, path);
+		return JS_EXCEPTION;
+	}
+
+	int r = uv_fs_open(js_uv_loop(ctx), &fr->req, path, flags, mode, qn_fs_req_cb);
+	JS_FreeCString(ctx, path);
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	return qn_fsreq_init(ctx, fr);
+}
+
+/* close(fd) → promise<undefined> */
+static JSValue js_uv_close(JSContext *ctx, JSValueConst this_val,
+                            int argc, JSValueConst *argv) {
+	int fd;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) return JS_EXCEPTION;
+
+	int r = uv_fs_close(js_uv_loop(ctx), &fr->req, fd, qn_fs_req_cb);
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	return qn_fsreq_init(ctx, fr);
+}
+
+/* read(fd, buffer, position) → promise<bytes_read>
+ * buffer is a Uint8Array, position is file offset (-1 for current) */
+static JSValue js_uv_read(JSContext *ctx, JSValueConst this_val,
+                           int argc, JSValueConst *argv) {
+	int fd;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+
+	size_t size;
+	uint8_t *buf = qn_get_uint8array(ctx, &size, argv[1]);
+	if (!buf) return JS_EXCEPTION;
+
+	int64_t pos = -1;
+	if (argc > 2 && !JS_IsUndefined(argv[2])) {
+		if (JS_ToInt64(ctx, &pos, argv[2]))
+			return JS_EXCEPTION;
+	}
+
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) return JS_EXCEPTION;
+
+	uv_buf_t b = uv_buf_init((char *)buf, size);
+	int r = uv_fs_read(js_uv_loop(ctx), &fr->req, fd, &b, 1, pos, qn_fs_req_cb);
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	JSValue promise = qn_fsreq_init(ctx, fr);
+	/* Pin the typed array so the buffer stays alive during async I/O */
+	fr->tarray = JS_DupValue(ctx, argv[1]);
+	return promise;
+}
+
+/* write(fd, buffer, position) → promise<bytes_written>
+ * buffer is a Uint8Array, position is file offset (-1 for current) */
+static JSValue js_uv_write(JSContext *ctx, JSValueConst this_val,
+                            int argc, JSValueConst *argv) {
+	int fd;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+
+	size_t size;
+	uint8_t *buf = qn_get_uint8array(ctx, &size, argv[1]);
+	if (!buf) return JS_EXCEPTION;
+
+	int64_t pos = -1;
+	if (argc > 2 && !JS_IsUndefined(argv[2])) {
+		if (JS_ToInt64(ctx, &pos, argv[2]))
+			return JS_EXCEPTION;
+	}
+
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) return JS_EXCEPTION;
+
+	uv_buf_t b = uv_buf_init((char *)buf, size);
+	int r = uv_fs_write(js_uv_loop(ctx), &fr->req, fd, &b, 1, pos, qn_fs_req_cb);
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	JSValue promise = qn_fsreq_init(ctx, fr);
+	fr->tarray = JS_DupValue(ctx, argv[1]);
+	return promise;
+}
+
+/* fstat(fd) → promise<stat_obj> */
+static JSValue js_uv_fstat(JSContext *ctx, JSValueConst this_val,
+                            int argc, JSValueConst *argv) {
+	int fd;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) return JS_EXCEPTION;
+
+	int r = uv_fs_fstat(js_uv_loop(ctx), &fr->req, fd, qn_fs_req_cb);
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	return qn_fsreq_init(ctx, fr);
+}
+
+/* ftruncate(fd, length) → promise<undefined> */
+static JSValue js_uv_ftruncate(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv) {
+	int fd;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+
+	int64_t len = 0;
+	if (argc > 1 && !JS_IsUndefined(argv[1])) {
+		if (JS_ToInt64(ctx, &len, argv[1]))
+			return JS_EXCEPTION;
+	}
+
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) return JS_EXCEPTION;
+
+	int r = uv_fs_ftruncate(js_uv_loop(ctx), &fr->req, fd, len, qn_fs_req_cb);
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	return qn_fsreq_init(ctx, fr);
+}
+
+/* fsync(fd) → promise<undefined> */
+static JSValue js_uv_fsync(JSContext *ctx, JSValueConst this_val,
+                            int argc, JSValueConst *argv) {
+	int fd;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) return JS_EXCEPTION;
+
+	int r = uv_fs_fsync(js_uv_loop(ctx), &fr->req, fd, qn_fs_req_cb);
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	return qn_fsreq_init(ctx, fr);
+}
+
+/* fdatasync(fd) → promise<undefined> */
+static JSValue js_uv_fdatasync(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv) {
+	int fd;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) return JS_EXCEPTION;
+
+	int r = uv_fs_fdatasync(js_uv_loop(ctx), &fr->req, fd, qn_fs_req_cb);
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	return qn_fsreq_init(ctx, fr);
+}
+
+/* fchmod(fd, mode) → promise<undefined> */
+static JSValue js_uv_fchmod(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv) {
+	int fd;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+
+	int mode;
+	if (JS_ToInt32(ctx, &mode, argv[1]))
+		return JS_EXCEPTION;
+
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) return JS_EXCEPTION;
+
+	int r = uv_fs_fchmod(js_uv_loop(ctx), &fr->req, fd, mode, qn_fs_req_cb);
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	return qn_fsreq_init(ctx, fr);
+}
+
+/* fchown(fd, uid, gid) → promise<undefined> */
+static JSValue js_uv_fchown(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv) {
+	int fd;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+
+	int uid, gid;
+	if (JS_ToInt32(ctx, &uid, argv[1]))
+		return JS_EXCEPTION;
+	if (JS_ToInt32(ctx, &gid, argv[2]))
+		return JS_EXCEPTION;
+
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) return JS_EXCEPTION;
+
+	int r = uv_fs_fchown(js_uv_loop(ctx), &fr->req, fd, uid, gid, qn_fs_req_cb);
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	return qn_fsreq_init(ctx, fr);
+}
+
+/* futime(fd, atime, mtime) → promise<undefined>
+ * atime/mtime in seconds (not milliseconds) */
+static JSValue js_uv_futime(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv) {
+	int fd;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+
+	double atime, mtime;
+	if (JS_ToFloat64(ctx, &atime, argv[1]))
+		return JS_EXCEPTION;
+	if (JS_ToFloat64(ctx, &mtime, argv[2]))
+		return JS_EXCEPTION;
+
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) return JS_EXCEPTION;
+
+	int r = uv_fs_futime(js_uv_loop(ctx), &fr->req, fd, atime, mtime, qn_fs_req_cb);
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	return qn_fsreq_init(ctx, fr);
+}
+
+/* ==== Path-based operations ==== */
+
+/* stat/lstat via magic: 0=stat, 1=lstat */
+static JSValue js_uv_stat(JSContext *ctx, JSValueConst this_val,
+                           int argc, JSValueConst *argv, int magic) {
+	const char *path = JS_ToCString(ctx, argv[0]);
+	if (!path) return JS_EXCEPTION;
+
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
+		JS_FreeCString(ctx, path);
+		return JS_EXCEPTION;
+	}
+
+	int r;
+	if (magic)
+		r = uv_fs_lstat(js_uv_loop(ctx), &fr->req, path, qn_fs_req_cb);
 	else
-		val = JS_NewArrayBufferCopy(ctx, fr->buf, fr->buf_size);
+		r = uv_fs_stat(js_uv_loop(ctx), &fr->req, path, qn_fs_req_cb);
+	JS_FreeCString(ctx, path);
 
-	qn_promise_settle(&fr->promise, 0, val);
-	qn_fs_req_free(fr);
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	return qn_fsreq_init(ctx, fr);
 }
 
-static JSValue js_uv_readFile(JSContext *ctx, JSValueConst this_val,
+/* readdir(path) → promise<string[]> (uses scandir) */
+static JSValue js_uv_readdir(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv) {
 	const char *path = JS_ToCString(ctx, argv[0]);
 	if (!path) return JS_EXCEPTION;
 
-	int use_utf8 = 0;
-	if (argc > 1)
-		use_utf8 = JS_ToBool(ctx, argv[1]);
-
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
 	if (!fr) {
 		JS_FreeCString(ctx, path);
 		return JS_EXCEPTION;
 	}
 
-	fr->path = strdup(path);
-	fr->encoding = use_utf8 ? 1 : 0;
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
-		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
-	}
-
-	int r = uv_fs_open(js_uv_loop(ctx), &fr->req, path, O_RDONLY, 0,
-	                    readfile_on_open);
+	int r = uv_fs_scandir(js_uv_loop(ctx), &fr->req, path, 0, qn_fs_req_cb);
 	JS_FreeCString(ctx, path);
 
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "open", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
 	}
 
-	return promise;
+	return qn_fsreq_init(ctx, fr);
 }
 
-/* ==== writeFile ==== */
-
-static void writefile_on_close(uv_fs_t *req);
-static void writefile_on_write(uv_fs_t *req);
-static void writefile_on_open(uv_fs_t *req);
-
-static void writefile_on_open(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "open", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		qn_fs_req_free(fr);
-		return;
-	}
-
-	fr->fd = (int)req->result;
-	uv_fs_req_cleanup(req);
-
-	uv_buf_t uvbuf = uv_buf_init((char *)fr->write_buf, fr->write_len);
-	int r = uv_fs_write(js_uv_loop(ctx), &fr->req, fr->fd, &uvbuf, 1, 0,
-	                     writefile_on_write);
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "write", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		qn_fs_req_free(fr);
-	}
-}
-
-static void writefile_on_write(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "write", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		qn_fs_req_free(fr);
-		return;
-	}
-
-	uv_fs_req_cleanup(req);
-
-	int r = uv_fs_close(js_uv_loop(ctx), &fr->req, fr->fd, writefile_on_close);
-	fr->fd = -1;
-	if (r < 0) {
-		/* write succeeded, close failed - still resolve */
-		qn_promise_settle(&fr->promise, 0, JS_UNDEFINED);
-		qn_fs_req_free(fr);
-	}
-}
-
-static void writefile_on_close(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-
-	uv_fs_req_cleanup(req);
-	qn_promise_settle(&fr->promise, 0, JS_UNDEFINED);
-	qn_fs_req_free(fr);
-}
-
-static JSValue js_uv_writeFile(JSContext *ctx, JSValueConst this_val,
-                               int argc, JSValueConst *argv) {
-	const char *path = JS_ToCString(ctx, argv[0]);
-	if (!path) return JS_EXCEPTION;
-
-	/* extract data from string, ArrayBuffer, or TypedArray */
-	uint8_t *data = NULL;
-	size_t data_len = 0;
-
-	if (JS_IsString(argv[1])) {
-		size_t len;
-		const char *str = JS_ToCStringLen(ctx, &len, argv[1]);
-		if (!str) {
-			JS_FreeCString(ctx, path);
-			return JS_EXCEPTION;
-		}
-		data = (uint8_t *)str;
-		data_len = len;
-	} else {
-		/* try ArrayBuffer first */
-		size_t len;
-		uint8_t *ptr = JS_GetArrayBuffer(ctx, &len, argv[1]);
-		if (ptr) {
-			data = ptr;
-			data_len = len;
-		} else {
-			/* try TypedArray */
-			JSValue ab = JS_GetTypedArrayBuffer(ctx, argv[1], NULL, NULL, NULL);
-			if (!JS_IsException(ab)) {
-				ptr = JS_GetArrayBuffer(ctx, &len, ab);
-				JS_FreeValue(ctx, ab);
-				if (ptr) {
-					data = ptr;
-					data_len = len;
-				}
-			}
-		}
-		if (!data) {
-			JS_FreeCString(ctx, path);
-			return JS_ThrowTypeError(ctx, "writeFile: data must be string, ArrayBuffer, or TypedArray");
-		}
-	}
-
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) {
-		if (JS_IsString(argv[1]))
-			JS_FreeCString(ctx, (const char *)data);
-		JS_FreeCString(ctx, path);
-		return JS_EXCEPTION;
-	}
-
-	/* copy data since originals may be GC'd before async completes */
-	fr->write_buf = (uint8_t *)malloc(data_len);
-	if (!fr->write_buf && data_len > 0) {
-		if (JS_IsString(argv[1]))
-			JS_FreeCString(ctx, (const char *)data);
-		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
-	}
-	if (data_len > 0)
-		memcpy(fr->write_buf, data, data_len);
-	fr->write_len = data_len;
-	fr->free_write_buf = 1;
-
-	if (JS_IsString(argv[1]))
-		JS_FreeCString(ctx, (const char *)data);
-
-	fr->path = strdup(path);
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
-		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
-	}
-
-	int r = uv_fs_open(js_uv_loop(ctx), &fr->req, path,
-	                    O_WRONLY | O_CREAT | O_TRUNC, 0666,
-	                    writefile_on_open);
-	JS_FreeCString(ctx, path);
-
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "open", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
-	}
-
-	return promise;
-}
-
-/* ==== simple single-request operations ==== */
-
-/* ---- stat ---- */
-
-static void stat_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "stat", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		JSValue obj = make_stat_obj(ctx, &req->statbuf);
-		qn_promise_settle(&fr->promise, 0, obj);
-	}
-	qn_fs_req_free(fr);
-}
-
-static JSValue js_uv_stat(JSContext *ctx, JSValueConst this_val,
-                          int argc, JSValueConst *argv) {
-	const char *path = JS_ToCString(ctx, argv[0]);
-	if (!path) return JS_EXCEPTION;
-
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
-	fr->path = strdup(path);
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
-		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
-	}
-
-	int r = uv_fs_stat(js_uv_loop(ctx), &fr->req, path, stat_cb);
-	JS_FreeCString(ctx, path);
-
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "stat", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
-	}
-	return promise;
-}
-
-/* ---- lstat ---- */
-
-static void lstat_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "lstat", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		JSValue obj = make_stat_obj(ctx, &req->statbuf);
-		qn_promise_settle(&fr->promise, 0, obj);
-	}
-	qn_fs_req_free(fr);
-}
-
-static JSValue js_uv_lstat(JSContext *ctx, JSValueConst this_val,
-                           int argc, JSValueConst *argv) {
-	const char *path = JS_ToCString(ctx, argv[0]);
-	if (!path) return JS_EXCEPTION;
-
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
-	fr->path = strdup(path);
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
-		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
-	}
-
-	int r = uv_fs_lstat(js_uv_loop(ctx), &fr->req, path, lstat_cb);
-	JS_FreeCString(ctx, path);
-
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "lstat", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
-	}
-	return promise;
-}
-
-/* ---- readdir ---- */
-
-static void readdir_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "scandir", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		qn_fs_req_free(fr);
-		return;
-	}
-
-	JSValue arr = JS_NewArray(ctx);
-	if (JS_IsException(arr)) {
-		qn_promise_settle(&fr->promise, 1, JS_EXCEPTION);
-		qn_fs_req_free(fr);
-		return;
-	}
-
-	uv_dirent_t ent;
-	uint32_t i = 0;
-	while (uv_fs_scandir_next(req, &ent) != UV_EOF) {
-		JS_DefinePropertyValueUint32(ctx, arr, i,
-			JS_NewString(ctx, ent.name), JS_PROP_C_W_E);
-		i++;
-	}
-
-	qn_promise_settle(&fr->promise, 0, arr);
-	qn_fs_req_free(fr);
-}
-
-static JSValue js_uv_readdir(JSContext *ctx, JSValueConst this_val,
-                             int argc, JSValueConst *argv) {
-	const char *path = JS_ToCString(ctx, argv[0]);
-	if (!path) return JS_EXCEPTION;
-
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
-	fr->path = strdup(path);
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
-		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
-	}
-
-	int r = uv_fs_scandir(js_uv_loop(ctx), &fr->req, path, 0, readdir_cb);
-	JS_FreeCString(ctx, path);
-
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "scandir", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
-	}
-	return promise;
-}
-
-/* ---- mkdir ---- */
-
-static void mkdir_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "mkdir", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		qn_promise_settle(&fr->promise, 0, JS_UNDEFINED);
-	}
-	qn_fs_req_free(fr);
-}
-
+/* mkdir(path, mode) → promise<undefined> */
 static JSValue js_uv_mkdir(JSContext *ctx, JSValueConst this_val,
-                           int argc, JSValueConst *argv) {
+                            int argc, JSValueConst *argv) {
 	const char *path = JS_ToCString(ctx, argv[0]);
 	if (!path) return JS_EXCEPTION;
 
 	int mode = 0777;
-	if (argc > 1)
+	if (argc > 1 && !JS_IsUndefined(argv[1]))
 		JS_ToInt32(ctx, &mode, argv[1]);
 
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
-	fr->path = strdup(path);
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
 		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
 		return JS_EXCEPTION;
 	}
 
-	int r = uv_fs_mkdir(js_uv_loop(ctx), &fr->req, path, mode, mkdir_cb);
+	int r = uv_fs_mkdir(js_uv_loop(ctx), &fr->req, path, mode, qn_fs_req_cb);
 	JS_FreeCString(ctx, path);
 
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "mkdir", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
 	}
-	return promise;
+
+	return qn_fsreq_init(ctx, fr);
 }
 
-/* ---- unlink ---- */
-
-static void unlink_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "unlink", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		qn_promise_settle(&fr->promise, 0, JS_UNDEFINED);
-	}
-	qn_fs_req_free(fr);
-}
-
+/* unlink(path) → promise<undefined> */
 static JSValue js_uv_unlink(JSContext *ctx, JSValueConst this_val,
-                            int argc, JSValueConst *argv) {
+                             int argc, JSValueConst *argv) {
 	const char *path = JS_ToCString(ctx, argv[0]);
 	if (!path) return JS_EXCEPTION;
 
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
-	fr->path = strdup(path);
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
 		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
 		return JS_EXCEPTION;
 	}
 
-	int r = uv_fs_unlink(js_uv_loop(ctx), &fr->req, path, unlink_cb);
+	int r = uv_fs_unlink(js_uv_loop(ctx), &fr->req, path, qn_fs_req_cb);
 	JS_FreeCString(ctx, path);
 
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "unlink", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
 	}
-	return promise;
+
+	return qn_fsreq_init(ctx, fr);
 }
 
-/* ---- rmdir ---- */
-
-static void rmdir_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "rmdir", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		qn_promise_settle(&fr->promise, 0, JS_UNDEFINED);
-	}
-	qn_fs_req_free(fr);
-}
-
+/* rmdir(path) → promise<undefined> */
 static JSValue js_uv_rmdir(JSContext *ctx, JSValueConst this_val,
-                           int argc, JSValueConst *argv) {
+                            int argc, JSValueConst *argv) {
 	const char *path = JS_ToCString(ctx, argv[0]);
 	if (!path) return JS_EXCEPTION;
 
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
-	fr->path = strdup(path);
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
 		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
 		return JS_EXCEPTION;
 	}
 
-	int r = uv_fs_rmdir(js_uv_loop(ctx), &fr->req, path, rmdir_cb);
+	int r = uv_fs_rmdir(js_uv_loop(ctx), &fr->req, path, qn_fs_req_cb);
 	JS_FreeCString(ctx, path);
 
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "rmdir", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
 	}
-	return promise;
+
+	return qn_fsreq_init(ctx, fr);
 }
 
-/* ---- rename ---- */
-
-static void rename_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "rename", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		qn_promise_settle(&fr->promise, 0, JS_UNDEFINED);
-	}
-	qn_fs_req_free(fr);
-}
-
+/* rename(old_path, new_path) → promise<undefined> */
 static JSValue js_uv_rename(JSContext *ctx, JSValueConst this_val,
-                            int argc, JSValueConst *argv) {
+                             int argc, JSValueConst *argv) {
 	const char *old_path = JS_ToCString(ctx, argv[0]);
 	if (!old_path) return JS_EXCEPTION;
 	const char *new_path = JS_ToCString(ctx, argv[1]);
@@ -782,54 +621,28 @@ static JSValue js_uv_rename(JSContext *ctx, JSValueConst this_val,
 		return JS_EXCEPTION;
 	}
 
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
 	if (!fr) {
 		JS_FreeCString(ctx, old_path);
 		JS_FreeCString(ctx, new_path);
 		return JS_EXCEPTION;
 	}
-	fr->path = strdup(old_path);
 
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
-		JS_FreeCString(ctx, old_path);
-		JS_FreeCString(ctx, new_path);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
-	}
-
-	int r = uv_fs_rename(js_uv_loop(ctx), &fr->req, old_path, new_path,
-	                      rename_cb);
+	int r = uv_fs_rename(js_uv_loop(ctx), &fr->req, old_path, new_path, qn_fs_req_cb);
 	JS_FreeCString(ctx, old_path);
 	JS_FreeCString(ctx, new_path);
 
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "rename", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
 	}
-	return promise;
+
+	return qn_fsreq_init(ctx, fr);
 }
 
-/* ---- symlink ---- */
-
-static void symlink_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "symlink", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		qn_promise_settle(&fr->promise, 0, JS_UNDEFINED);
-	}
-	qn_fs_req_free(fr);
-}
-
+/* symlink(target, path) → promise<undefined> */
 static JSValue js_uv_symlink(JSContext *ctx, JSValueConst this_val,
-                             int argc, JSValueConst *argv) {
+                              int argc, JSValueConst *argv) {
 	const char *target = JS_ToCString(ctx, argv[0]);
 	if (!target) return JS_EXCEPTION;
 	const char *path = JS_ToCString(ctx, argv[1]);
@@ -838,144 +651,104 @@ static JSValue js_uv_symlink(JSContext *ctx, JSValueConst this_val,
 		return JS_EXCEPTION;
 	}
 
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
 	if (!fr) {
 		JS_FreeCString(ctx, target);
 		JS_FreeCString(ctx, path);
 		return JS_EXCEPTION;
 	}
-	fr->path = strdup(path);
 
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
-		JS_FreeCString(ctx, target);
-		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
-	}
-
-	int r = uv_fs_symlink(js_uv_loop(ctx), &fr->req, target, path, 0,
-	                       symlink_cb);
+	int r = uv_fs_symlink(js_uv_loop(ctx), &fr->req, target, path, 0, qn_fs_req_cb);
 	JS_FreeCString(ctx, target);
 	JS_FreeCString(ctx, path);
 
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "symlink", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	return qn_fsreq_init(ctx, fr);
+}
+
+/* link(existing_path, new_path) → promise<undefined> */
+static JSValue js_uv_link(JSContext *ctx, JSValueConst this_val,
+                           int argc, JSValueConst *argv) {
+	const char *path = JS_ToCString(ctx, argv[0]);
+	if (!path) return JS_EXCEPTION;
+	const char *new_path = JS_ToCString(ctx, argv[1]);
+	if (!new_path) {
+		JS_FreeCString(ctx, path);
 		return JS_EXCEPTION;
 	}
-	return promise;
-}
 
-/* ---- readlink ---- */
-
-static void readlink_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "readlink", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		JSValue val = JS_NewString(ctx, (const char *)req->ptr);
-		qn_promise_settle(&fr->promise, 0, val);
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
+		JS_FreeCString(ctx, path);
+		JS_FreeCString(ctx, new_path);
+		return JS_EXCEPTION;
 	}
-	qn_fs_req_free(fr);
+
+	int r = uv_fs_link(js_uv_loop(ctx), &fr->req, path, new_path, qn_fs_req_cb);
+	JS_FreeCString(ctx, path);
+	JS_FreeCString(ctx, new_path);
+
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	return qn_fsreq_init(ctx, fr);
 }
 
+/* readlink(path) → promise<string> */
 static JSValue js_uv_readlink(JSContext *ctx, JSValueConst this_val,
-                              int argc, JSValueConst *argv) {
+                               int argc, JSValueConst *argv) {
 	const char *path = JS_ToCString(ctx, argv[0]);
 	if (!path) return JS_EXCEPTION;
 
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
-	fr->path = strdup(path);
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
 		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
 		return JS_EXCEPTION;
 	}
 
-	int r = uv_fs_readlink(js_uv_loop(ctx), &fr->req, path, readlink_cb);
+	int r = uv_fs_readlink(js_uv_loop(ctx), &fr->req, path, qn_fs_req_cb);
 	JS_FreeCString(ctx, path);
 
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "readlink", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
 	}
-	return promise;
+
+	return qn_fsreq_init(ctx, fr);
 }
 
-/* ---- realpath ---- */
-
-static void realpath_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "realpath", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		JSValue val = JS_NewString(ctx, (const char *)req->ptr);
-		qn_promise_settle(&fr->promise, 0, val);
-	}
-	qn_fs_req_free(fr);
-}
-
+/* realpath(path) → promise<string> */
 static JSValue js_uv_realpath(JSContext *ctx, JSValueConst this_val,
-                              int argc, JSValueConst *argv) {
+                               int argc, JSValueConst *argv) {
 	const char *path = JS_ToCString(ctx, argv[0]);
 	if (!path) return JS_EXCEPTION;
 
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
-	fr->path = strdup(path);
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
 		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
 		return JS_EXCEPTION;
 	}
 
-	int r = uv_fs_realpath(js_uv_loop(ctx), &fr->req, path, realpath_cb);
+	int r = uv_fs_realpath(js_uv_loop(ctx), &fr->req, path, qn_fs_req_cb);
 	JS_FreeCString(ctx, path);
 
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "realpath", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
 	}
-	return promise;
+
+	return qn_fsreq_init(ctx, fr);
 }
 
-/* ---- access ---- */
-
-static void access_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "access", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		qn_promise_settle(&fr->promise, 0, JS_UNDEFINED);
-	}
-	qn_fs_req_free(fr);
-}
-
+/* access(path, mode) → promise<undefined> */
 static JSValue js_uv_access(JSContext *ctx, JSValueConst this_val,
-                            int argc, JSValueConst *argv) {
+                             int argc, JSValueConst *argv) {
 	const char *path = JS_ToCString(ctx, argv[0]);
 	if (!path) return JS_EXCEPTION;
 
@@ -983,47 +756,26 @@ static JSValue js_uv_access(JSContext *ctx, JSValueConst this_val,
 	if (argc > 1)
 		JS_ToInt32(ctx, &mode, argv[1]);
 
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
-	fr->path = strdup(path);
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
 		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
 		return JS_EXCEPTION;
 	}
 
-	int r = uv_fs_access(js_uv_loop(ctx), &fr->req, path, mode, access_cb);
+	int r = uv_fs_access(js_uv_loop(ctx), &fr->req, path, mode, qn_fs_req_cb);
 	JS_FreeCString(ctx, path);
 
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "access", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
 	}
-	return promise;
+
+	return qn_fsreq_init(ctx, fr);
 }
 
-/* ---- chmod ---- */
-
-static void chmod_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "chmod", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		qn_promise_settle(&fr->promise, 0, JS_UNDEFINED);
-	}
-	qn_fs_req_free(fr);
-}
-
+/* chmod(path, mode) → promise<undefined> */
 static JSValue js_uv_chmod(JSContext *ctx, JSValueConst this_val,
-                           int argc, JSValueConst *argv) {
+                            int argc, JSValueConst *argv) {
 	const char *path = JS_ToCString(ctx, argv[0]);
 	if (!path) return JS_EXCEPTION;
 
@@ -1033,47 +785,27 @@ static JSValue js_uv_chmod(JSContext *ctx, JSValueConst this_val,
 		return JS_EXCEPTION;
 	}
 
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
-	fr->path = strdup(path);
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
 		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
 		return JS_EXCEPTION;
 	}
 
-	int r = uv_fs_chmod(js_uv_loop(ctx), &fr->req, path, mode, chmod_cb);
+	int r = uv_fs_chmod(js_uv_loop(ctx), &fr->req, path, mode, qn_fs_req_cb);
 	JS_FreeCString(ctx, path);
 
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "chmod", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
 	}
-	return promise;
+
+	return qn_fsreq_init(ctx, fr);
 }
 
-/* ---- utimes ---- */
-
-static void utimes_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "utimes", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		qn_promise_settle(&fr->promise, 0, JS_UNDEFINED);
-	}
-	qn_fs_req_free(fr);
-}
-
+/* utimes(path, atime, mtime) → promise<undefined>
+ * atime/mtime in seconds */
 static JSValue js_uv_utimes(JSContext *ctx, JSValueConst this_val,
-                            int argc, JSValueConst *argv) {
+                             int argc, JSValueConst *argv) {
 	const char *path = JS_ToCString(ctx, argv[0]);
 	if (!path) return JS_EXCEPTION;
 
@@ -1087,48 +819,26 @@ static JSValue js_uv_utimes(JSContext *ctx, JSValueConst this_val,
 		return JS_EXCEPTION;
 	}
 
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
-	fr->path = strdup(path);
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
 		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
 		return JS_EXCEPTION;
 	}
 
-	int r = uv_fs_utime(js_uv_loop(ctx), &fr->req, path, atime, mtime,
-	                     utimes_cb);
+	int r = uv_fs_utime(js_uv_loop(ctx), &fr->req, path, atime, mtime, qn_fs_req_cb);
 	JS_FreeCString(ctx, path);
 
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "utimes", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
 	}
-	return promise;
+
+	return qn_fsreq_init(ctx, fr);
 }
 
-/* ---- chown ---- */
-
-static void chown_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "chown", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		qn_promise_settle(&fr->promise, 0, JS_UNDEFINED);
-	}
-	qn_fs_req_free(fr);
-}
-
-static JSValue js_uv_chown(JSContext *ctx, JSValueConst this_val,
-                           int argc, JSValueConst *argv) {
+/* chown/lchown via magic: 0=chown, 1=lchown */
+static JSValue js_uv_xchown(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv, int magic) {
 	const char *path = JS_ToCString(ctx, argv[0]);
 	if (!path) return JS_EXCEPTION;
 
@@ -1142,104 +852,114 @@ static JSValue js_uv_chown(JSContext *ctx, JSValueConst this_val,
 		return JS_EXCEPTION;
 	}
 
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
-	fr->path = strdup(path);
-
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
 		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
 		return JS_EXCEPTION;
 	}
 
-	int r = uv_fs_chown(js_uv_loop(ctx), &fr->req, path, uid, gid, chown_cb);
+	int r;
+	if (magic)
+		r = uv_fs_lchown(js_uv_loop(ctx), &fr->req, path, uid, gid, qn_fs_req_cb);
+	else
+		r = uv_fs_chown(js_uv_loop(ctx), &fr->req, path, uid, gid, qn_fs_req_cb);
 	JS_FreeCString(ctx, path);
 
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "chown", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
 	}
-	return promise;
+
+	return qn_fsreq_init(ctx, fr);
 }
 
-/* ---- lchown ---- */
-
-static void lchown_cb(uv_fs_t *req) {
-	QNFsReq *fr = (QNFsReq *)req->data;
-	JSContext *ctx = fr->promise.ctx;
-
-	if (req->result < 0) {
-		JSValue err = make_fs_error(ctx, req->result, "lchown", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-	} else {
-		qn_promise_settle(&fr->promise, 0, JS_UNDEFINED);
+/* copyfile(src, dst) → promise<undefined> */
+static JSValue js_uv_copyfile(JSContext *ctx, JSValueConst this_val,
+                               int argc, JSValueConst *argv) {
+	const char *src = JS_ToCString(ctx, argv[0]);
+	if (!src) return JS_EXCEPTION;
+	const char *dst = JS_ToCString(ctx, argv[1]);
+	if (!dst) {
+		JS_FreeCString(ctx, src);
+		return JS_EXCEPTION;
 	}
-	qn_fs_req_free(fr);
+
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
+		JS_FreeCString(ctx, src);
+		JS_FreeCString(ctx, dst);
+		return JS_EXCEPTION;
+	}
+
+	int r = uv_fs_copyfile(js_uv_loop(ctx), &fr->req, src, dst, 0, qn_fs_req_cb);
+	JS_FreeCString(ctx, src);
+	JS_FreeCString(ctx, dst);
+
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
+	}
+
+	return qn_fsreq_init(ctx, fr);
 }
 
-static JSValue js_uv_lchown(JSContext *ctx, JSValueConst this_val,
-                            int argc, JSValueConst *argv) {
-	const char *path = JS_ToCString(ctx, argv[0]);
-	if (!path) return JS_EXCEPTION;
+/* mkdtemp(template) → promise<string> */
+static JSValue js_uv_mkdtemp(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv) {
+	const char *tpl = JS_ToCString(ctx, argv[0]);
+	if (!tpl) return JS_EXCEPTION;
 
-	int uid, gid;
-	if (JS_ToInt32(ctx, &uid, argv[1])) {
-		JS_FreeCString(ctx, path);
-		return JS_EXCEPTION;
-	}
-	if (JS_ToInt32(ctx, &gid, argv[2])) {
-		JS_FreeCString(ctx, path);
+	QNFsReq *fr = js_malloc(ctx, sizeof(*fr));
+	if (!fr) {
+		JS_FreeCString(ctx, tpl);
 		return JS_EXCEPTION;
 	}
 
-	QNFsReq *fr = qn_fs_req_alloc(ctx);
-	if (!fr) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
-	fr->path = strdup(path);
+	int r = uv_fs_mkdtemp(js_uv_loop(ctx), &fr->req, tpl, qn_fs_req_cb);
+	JS_FreeCString(ctx, tpl);
 
-	JSValue promise;
-	if (qn_promise_init(ctx, &fr->promise, &promise) < 0) {
-		JS_FreeCString(ctx, path);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
+	if (r != 0) {
+		js_free(ctx, fr);
+		return qn_throw_errno(ctx, r);
 	}
 
-	int r = uv_fs_lchown(js_uv_loop(ctx), &fr->req, path, uid, gid, lchown_cb);
-	JS_FreeCString(ctx, path);
-
-	if (r < 0) {
-		JSValue err = make_fs_error(ctx, r, "lchown", fr->path);
-		qn_promise_settle(&fr->promise, 1, err);
-		JS_FreeValue(ctx, promise);
-		qn_fs_req_free(fr);
-		return JS_EXCEPTION;
-	}
-	return promise;
+	return qn_fsreq_init(ctx, fr);
 }
 
 /* ==== module definition ==== */
 
 static const JSCFunctionListEntry js_uv_fs_funcs[] = {
-	JS_CFUNC_DEF("readFile", 2, js_uv_readFile),
-	JS_CFUNC_DEF("writeFile", 2, js_uv_writeFile),
-	JS_CFUNC_DEF("stat", 1, js_uv_stat),
-	JS_CFUNC_DEF("lstat", 1, js_uv_lstat),
-	JS_CFUNC_DEF("readdir", 1, js_uv_readdir),
-	JS_CFUNC_DEF("mkdir", 2, js_uv_mkdir),
-	JS_CFUNC_DEF("unlink", 1, js_uv_unlink),
-	JS_CFUNC_DEF("rmdir", 1, js_uv_rmdir),
-	JS_CFUNC_DEF("rename", 2, js_uv_rename),
-	JS_CFUNC_DEF("symlink", 2, js_uv_symlink),
-	JS_CFUNC_DEF("readlink", 1, js_uv_readlink),
-	JS_CFUNC_DEF("realpath", 1, js_uv_realpath),
-	JS_CFUNC_DEF("access", 2, js_uv_access),
-	JS_CFUNC_DEF("chmod", 2, js_uv_chmod),
-	JS_CFUNC_DEF("utimes", 3, js_uv_utimes),
-	JS_CFUNC_DEF("chown", 3, js_uv_chown),
-	JS_CFUNC_DEF("lchown", 3, js_uv_lchown),
+	/* fd primitives */
+	QN_CFUNC_DEF("open", 3, js_uv_open),
+	QN_CFUNC_DEF("close", 1, js_uv_close),
+	QN_CFUNC_DEF("read", 3, js_uv_read),
+	QN_CFUNC_DEF("write", 3, js_uv_write),
+	QN_CFUNC_DEF("fstat", 1, js_uv_fstat),
+	QN_CFUNC_DEF("ftruncate", 2, js_uv_ftruncate),
+	QN_CFUNC_DEF("fsync", 1, js_uv_fsync),
+	QN_CFUNC_DEF("fdatasync", 1, js_uv_fdatasync),
+	QN_CFUNC_DEF("fchmod", 2, js_uv_fchmod),
+	QN_CFUNC_DEF("fchown", 3, js_uv_fchown),
+	QN_CFUNC_DEF("futime", 3, js_uv_futime),
+	/* path operations */
+	QN_CFUNC_MAGIC_DEF("stat", 1, js_uv_stat, 0),
+	QN_CFUNC_MAGIC_DEF("lstat", 1, js_uv_stat, 1),
+	QN_CFUNC_DEF("readdir", 1, js_uv_readdir),
+	QN_CFUNC_DEF("mkdir", 2, js_uv_mkdir),
+	QN_CFUNC_DEF("unlink", 1, js_uv_unlink),
+	QN_CFUNC_DEF("rmdir", 1, js_uv_rmdir),
+	QN_CFUNC_DEF("rename", 2, js_uv_rename),
+	QN_CFUNC_DEF("symlink", 2, js_uv_symlink),
+	QN_CFUNC_DEF("link", 2, js_uv_link),
+	QN_CFUNC_DEF("readlink", 1, js_uv_readlink),
+	QN_CFUNC_DEF("realpath", 1, js_uv_realpath),
+	QN_CFUNC_DEF("access", 2, js_uv_access),
+	QN_CFUNC_DEF("chmod", 2, js_uv_chmod),
+	QN_CFUNC_DEF("utimes", 3, js_uv_utimes),
+	QN_CFUNC_MAGIC_DEF("chown", 3, js_uv_xchown, 0),
+	QN_CFUNC_MAGIC_DEF("lchown", 3, js_uv_xchown, 1),
+	QN_CFUNC_DEF("copyfile", 2, js_uv_copyfile),
+	QN_CFUNC_DEF("mkdtemp", 1, js_uv_mkdtemp),
 };
 
 static int js_uv_fs_init(JSContext *ctx, JSModuleDef *m) {

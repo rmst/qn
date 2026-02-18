@@ -190,12 +190,16 @@ $(BEARSSL_LIB):
 $(BIN_DIR)/obj/qn-tls.o: tls/qn-tls.c $(BEARSSL_LIB) quickjs-deps | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/bearssl/inc -c -o $@ $<
 
+# Build qn-uv-utils (shared utility infrastructure for libuv modules)
+$(BIN_DIR)/obj/qn-uv-utils.o: libuv/qn-uv-utils.c libuv/qn-uv-utils.h quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)/obj
+	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
+
 # Build qn-uv-fs (async filesystem operations via libuv)
-$(BIN_DIR)/obj/qn-uv-fs.o: libuv/qn-uv-fs.c quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)/obj
+$(BIN_DIR)/obj/qn-uv-fs.o: libuv/qn-uv-fs.c libuv/qn-uv-utils.h quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
 
 # Native C extensions for linking
-NATIVE_OBJS = $(BIN_DIR)/obj/sqlite3.o $(BIN_DIR)/obj/qjs-sqlite.o $(BIN_DIR)/obj/qn-native.o $(BIN_DIR)/obj/qn-socket.o $(BIN_DIR)/obj/qn-tls.o $(BIN_DIR)/obj/qn-uv-fs.o
+NATIVE_OBJS = $(BIN_DIR)/obj/sqlite3.o $(BIN_DIR)/obj/qjs-sqlite.o $(BIN_DIR)/obj/qn-native.o $(BIN_DIR)/obj/qn-socket.o $(BIN_DIR)/obj/qn-tls.o $(BIN_DIR)/obj/qn-uv-utils.o $(BIN_DIR)/obj/qn-uv-fs.o
 # Generate version info module for qn/qx --version
 # Uses FORCE + cmp to always check but only update when content changes,
 # avoiding unnecessary rebuilds of qn/qx.
