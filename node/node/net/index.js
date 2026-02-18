@@ -2,27 +2,33 @@
  * node:net - TCP networking module
  * @see https://nodejs.org/api/net.html
  *
- * Built on top of the qn_socket native module for POSIX socket syscalls
- * and the QuickJS os module for event loop integration (setReadHandler/setWriteHandler).
+ * Built on top of libuv streams (qn:uv-stream) for event-loop-integrated
+ * async I/O, and libuv DNS (qn_uv_dns) for name resolution.
  */
 
 import { EventEmitter } from 'node:events'
-import * as os from 'os'
 import {
-	socket as _socket, bind as _bind, listen as _listen,
-	accept as _accept, connect as _connect, connectFinish as _connectFinish,
-	setsockopt as _setsockopt, getsockname as _getsockname,
-	getpeername as _getpeername, shutdown as _shutdown,
-	send as _send, recv as _recv,
-	AF_INET, AF_INET6, SOCK_STREAM, SOL_SOCKET, IPPROTO_TCP,
-	SO_REUSEADDR, TCP_NODELAY, SHUT_WR, SHUT_RDWR, EAGAIN, EINPROGRESS,
-} from 'qn_socket'
+	tcpNew, tcpBind, listen as _listen, tcpConnect,
+	readStart, readStop, write as _write, shutdown as _shutdown, close as _close,
+	fileno, tcpNodelay, tcpKeepalive,
+	tcpGetsockname, tcpGetpeername,
+	setOnRead, setOnConnection, setOnConnect, setOnShutdown,
+	AF_INET, AF_INET6,
+} from 'qn/uv-stream'
 import { getaddrinfo as _getaddrinfo } from 'qn_uv_dns'
 
-export { AF_INET, AF_INET6, SOCK_STREAM }
+export { AF_INET, AF_INET6 }
 
-
-const BUFFER_SIZE = 65536
+/* Address format conversion: C module returns { family: 4|6, ip, port }
+ * Node.js net expects { address, port, family: "IPv4"|"IPv6" } */
+function formatAddr(raw) {
+	if (!raw) return null
+	return {
+		address: raw.ip,
+		port: raw.port,
+		family: raw.family === 6 ? 'IPv6' : 'IPv4',
+	}
+}
 
 /**
  * TCP Socket - represents a single TCP connection.
@@ -30,8 +36,7 @@ const BUFFER_SIZE = 65536
  * Events: 'connect', 'data', 'end', 'close', 'error', 'drain'
  */
 export class Socket extends EventEmitter {
-	#fd = -1
-	#readBuf = new ArrayBuffer(BUFFER_SIZE)
+	#handle = null
 	#writeBuf = []
 	#writing = false
 	#connecting = false
@@ -48,8 +53,8 @@ export class Socket extends EventEmitter {
 	constructor(options = {}) {
 		super()
 		this.#allowHalfOpen = options.allowHalfOpen || false
-		if (options._fd !== undefined) {
-			this.#fd = options._fd
+		if (options._handle !== undefined) {
+			this.#handle = options._handle
 			this.#connected = true
 			this.#setupRemoteInfo()
 			this.#startReading()
@@ -64,30 +69,36 @@ export class Socket extends EventEmitter {
 
 	#setupRemoteInfo() {
 		try {
-			const peer = _getpeername(this.#fd)
-			this.remoteAddress = peer.address
-			this.remotePort = peer.port
-			this.remoteFamily = peer.family === AF_INET6 ? 'IPv6' : 'IPv4'
+			const peer = formatAddr(tcpGetpeername(this.#handle))
+			if (peer) {
+				this.remoteAddress = peer.address
+				this.remotePort = peer.port
+				this.remoteFamily = peer.family
+			}
 		} catch (e) {
 			// ignore - may not be connected yet
 		}
 		try {
-			const local = _getsockname(this.#fd)
-			this.localAddress = local.address
-			this.localPort = local.port
+			const local = formatAddr(tcpGetsockname(this.#handle))
+			if (local) {
+				this.localAddress = local.address
+				this.localPort = local.port
+			}
 		} catch (e) {
 			// ignore
 		}
 	}
 
 	#startReading() {
-		os.setReadHandler(this.#fd, () => {
+		setOnRead(this.#handle, (buf, err) => {
 			if (this.#destroyed) return
-			const n = _recv(this.#fd, this.#readBuf, 0, BUFFER_SIZE)
-			if (n === -EAGAIN) return
-			if (n <= 0) {
-				// EOF or error
-				os.setReadHandler(this.#fd, null)
+			if (err) {
+				this.#emitError(err)
+				return
+			}
+			if (buf === null) {
+				// EOF
+				readStop(this.#handle)
 				this.#ended = true
 				this.emit('end')
 				if (!this.#allowHalfOpen) {
@@ -95,9 +106,9 @@ export class Socket extends EventEmitter {
 				}
 				return
 			}
-			const chunk = new Uint8Array(this.#readBuf.slice(0, n))
-			this.emit('data', chunk)
+			this.emit('data', buf)
 		})
+		readStart(this.#handle)
 	}
 
 	connect(options, callback) {
@@ -139,37 +150,27 @@ export class Socket extends EventEmitter {
 
 		const addr = addresses[0]
 		try {
-			this.#fd = _socket(addr.family, SOCK_STREAM)
+			this.#handle = tcpNew(addr.family)
 		} catch (e) {
 			this.#emitError(e)
 			return
 		}
 
 		try {
-			const ret = _connect(this.#fd, addr.address, port)
-			if (ret === -EINPROGRESS) {
-				os.setWriteHandler(this.#fd, () => {
-					os.setWriteHandler(this.#fd, null)
-					try {
-						_connectFinish(this.#fd)
-					} catch (e) {
-						this.#connecting = false
-						this.#emitError(e)
-						return
-					}
+			setOnConnect(this.#handle, (err) => {
+				if (this.#destroyed) return
+				if (err) {
 					this.#connecting = false
-					this.#connected = true
-					this.#setupRemoteInfo()
-					this.#startReading()
-					this.emit('connect')
-				})
-			} else {
+					this.#emitError(err)
+					return
+				}
 				this.#connecting = false
 				this.#connected = true
 				this.#setupRemoteInfo()
 				this.#startReading()
 				this.emit('connect')
-			}
+			})
+			tcpConnect(this.#handle, addr.address, port)
 		} catch (e) {
 			this.#emitError(e)
 		}
@@ -197,59 +198,24 @@ export class Socket extends EventEmitter {
 		return this.#writeBuf.length === 0
 	}
 
-	#flush() {
-		if (this.#writing || this.#writeBuf.length === 0 || this.#fd < 0) return
+	async #flush() {
+		if (this.#writing || this.#writeBuf.length === 0 || !this.#handle) return
 
 		this.#writing = true
-		const entry = this.#writeBuf[0]
-
-		const doWrite = () => {
-			if (this.#destroyed) return
-
-			while (this.#writeBuf.length > 0) {
-				const cur = this.#writeBuf[0]
-				const buf = cur.chunk.buffer instanceof ArrayBuffer
-					? cur.chunk.buffer
-					: new ArrayBuffer(cur.chunk.byteLength)
-				if (buf !== cur.chunk.buffer) {
-					new Uint8Array(buf).set(cur.chunk)
-				}
-				const offset = cur.chunk.byteOffset || 0
-				const n = _send(this.#fd, buf, offset, cur.chunk.byteLength)
-
-				if (n === -EAGAIN) {
-					os.setWriteHandler(this.#fd, () => {
-						os.setWriteHandler(this.#fd, null)
-						doWrite()
-					})
-					return
-				}
-
-				if (n < 0) {
-					this.#writing = false
-					this.#emitError(new Error('write error'))
-					return
-				}
-
-				if (n < cur.chunk.byteLength) {
-					cur.chunk = cur.chunk.subarray(n)
-					os.setWriteHandler(this.#fd, () => {
-						os.setWriteHandler(this.#fd, null)
-						doWrite()
-					})
-					return
-				}
-
-				// Fully written
+		while (this.#writeBuf.length > 0 && !this.#destroyed) {
+			const cur = this.#writeBuf[0]
+			try {
+				await _write(this.#handle, cur.chunk)
 				this.#writeBuf.shift()
 				if (cur.callback) cur.callback(null)
+			} catch (e) {
+				this.#writing = false
+				this.#emitError(e)
+				return
 			}
-
-			this.#writing = false
-			this.emit('drain')
 		}
-
-		doWrite()
+		this.#writing = false
+		if (!this.#destroyed) this.emit('drain')
 	}
 
 	end(data, encoding, callback) {
@@ -268,22 +234,32 @@ export class Socket extends EventEmitter {
 
 		if (callback) this.once('finish', callback)
 
-		// Wait for writes to finish, then shutdown
 		const doEnd = () => {
 			if (this.#writeBuf.length > 0) {
 				this.once('drain', doEnd)
 				return
 			}
-			if (this.#fd >= 0 && this.#connected) {
+			if (this.#handle && this.#connected) {
+				setOnShutdown(this.#handle, (err) => {
+					this.emit('finish')
+					if (this.#ended || !this.#allowHalfOpen) {
+						this.destroy()
+					}
+				})
 				try {
-					_shutdown(this.#fd, SHUT_WR)
+					_shutdown(this.#handle)
 				} catch (e) {
 					// ignore errors during shutdown
+					this.emit('finish')
+					if (this.#ended || !this.#allowHalfOpen) {
+						this.destroy()
+					}
 				}
-			}
-			this.emit('finish')
-			if (this.#ended || !this.#allowHalfOpen) {
-				this.destroy()
+			} else {
+				this.emit('finish')
+				if (this.#ended || !this.#allowHalfOpen) {
+					this.destroy()
+				}
 			}
 		}
 
@@ -295,11 +271,9 @@ export class Socket extends EventEmitter {
 		if (this.#destroyed) return this
 		this.#destroyed = true
 
-		if (this.#fd >= 0) {
-			os.setReadHandler(this.#fd, null)
-			os.setWriteHandler(this.#fd, null)
-			os.close(this.#fd)
-			this.#fd = -1
+		if (this.#handle) {
+			_close(this.#handle)
+			this.#handle = null
 		}
 
 		this.#connected = false
@@ -312,29 +286,23 @@ export class Socket extends EventEmitter {
 	}
 
 	setNoDelay(noDelay = true) {
-		if (this.#fd >= 0) {
-			_setsockopt(this.#fd, IPPROTO_TCP, TCP_NODELAY, noDelay ? 1 : 0)
+		if (this.#handle) {
+			tcpNodelay(this.#handle, noDelay)
 		}
 		return this
 	}
 
 	setKeepAlive(enable = false) {
-		if (this.#fd >= 0) {
-			const { SO_KEEPALIVE } = { SO_KEEPALIVE: 9 } // from socket constants
-			_setsockopt(this.#fd, SOL_SOCKET, SO_KEEPALIVE, enable ? 1 : 0)
+		if (this.#handle) {
+			tcpKeepalive(this.#handle, enable)
 		}
 		return this
 	}
 
 	address() {
-		if (this.#fd < 0) return null
+		if (!this.#handle) return null
 		try {
-			const addr = _getsockname(this.#fd)
-			return {
-				address: addr.address,
-				port: addr.port,
-				family: addr.family === AF_INET6 ? 'IPv6' : 'IPv4',
-			}
+			return formatAddr(tcpGetsockname(this.#handle))
 		} catch (e) {
 			return null
 		}
@@ -357,7 +325,7 @@ export class Socket extends EventEmitter {
  * Events: 'listening', 'connection', 'close', 'error'
  */
 export class Server extends EventEmitter {
-	#fd = -1
+	#handle = null
 	#listening = false
 	#closed = false
 	#connections = new Set()
@@ -398,22 +366,24 @@ export class Server extends EventEmitter {
 
 		try {
 			const family = host.includes(':') ? AF_INET6 : AF_INET
-			this.#fd = _socket(family, SOCK_STREAM)
-			_setsockopt(this.#fd, SOL_SOCKET, SO_REUSEADDR, 1)
-			_bind(this.#fd, host, port)
-			_listen(this.#fd, backlog)
-			this.#listening = true
+			this.#handle = tcpNew(family)
+			tcpBind(this.#handle, host, port)
 
-			os.setReadHandler(this.#fd, () => {
-				while (true) {
-					const result = _accept(this.#fd)
-					if (result === null) break
-					const sock = new Socket({ _fd: result.fd })
-					this.#connections.add(sock)
-					sock.on('close', () => this.#connections.delete(sock))
-					this.emit('connection', sock)
+			setOnConnection(this.#handle, (clientHandle) => {
+				if (clientHandle instanceof Error) {
+					if (this.listenerCount('error') > 0) {
+						this.emit('error', clientHandle)
+					}
+					return
 				}
+				const sock = new Socket({ _handle: clientHandle })
+				this.#connections.add(sock)
+				sock.on('close', () => this.#connections.delete(sock))
+				this.emit('connection', sock)
 			})
+
+			_listen(this.#handle, backlog)
+			this.#listening = true
 
 			queueMicrotask(() => this.emit('listening'))
 		} catch (e) {
@@ -430,14 +400,9 @@ export class Server extends EventEmitter {
 	}
 
 	address() {
-		if (this.#fd < 0) return null
+		if (!this.#handle) return null
 		try {
-			const addr = _getsockname(this.#fd)
-			return {
-				address: addr.address,
-				port: addr.port,
-				family: addr.family === AF_INET6 ? 'IPv6' : 'IPv4',
-			}
+			return formatAddr(tcpGetsockname(this.#handle))
 		} catch (e) {
 			return null
 		}
@@ -449,10 +414,9 @@ export class Server extends EventEmitter {
 
 		if (callback) this.once('close', callback)
 
-		if (this.#fd >= 0) {
-			os.setReadHandler(this.#fd, null)
-			os.close(this.#fd)
-			this.#fd = -1
+		if (this.#handle) {
+			_close(this.#handle)
+			this.#handle = null
 		}
 		this.#listening = false
 
