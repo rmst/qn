@@ -11,6 +11,10 @@
 
 #include <string.h>
 #include <fcntl.h>
+#include <errno.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 /* Get buffer pointer from a Uint8Array (Bellard QuickJS compatible).
  * quickjs-ng has JS_GetUint8Array but Bellard's QuickJS does not. */
@@ -479,10 +483,108 @@ fail:
 	return JS_EXCEPTION;
 }
 
+/* ==== Synchronous dispatch ====
+ *
+ * _fssync(opcode, ...args) → result
+ *
+ * Uses libuv's synchronous mode (NULL callback) for operations
+ * that must be synchronous (chmodSync, chownSync, etc.).
+ * Returns 0 on success, throws on error. */
+
+static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv) {
+	int32_t op;
+	if (JS_ToInt32(ctx, &op, argv[0]))
+		return JS_EXCEPTION;
+
+	JSValueConst *args = argv + 1;
+
+	uv_loop_t *loop = js_uv_loop(ctx);
+	uv_fs_t req;
+	int r;
+	const char *s1;
+	int32_t i1, i2;
+
+	(void)argc;
+
+	switch (op) {
+	case FS_CHMOD:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		if (JS_ToInt32(ctx, &i1, args[1])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
+		r = uv_fs_chmod(loop, &req, s1, i1, NULL);
+		JS_FreeCString(ctx, s1);
+		break;
+
+	case FS_CHOWN:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		if (JS_ToInt32(ctx, &i1, args[1])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
+		if (JS_ToInt32(ctx, &i2, args[2])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
+		r = uv_fs_chown(loop, &req, s1, i1, i2, NULL);
+		JS_FreeCString(ctx, s1);
+		break;
+
+	case FS_LCHOWN:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		if (JS_ToInt32(ctx, &i1, args[1])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
+		if (JS_ToInt32(ctx, &i2, args[2])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
+		r = uv_fs_lchown(loop, &req, s1, i1, i2, NULL);
+		JS_FreeCString(ctx, s1);
+		break;
+
+	default:
+		return JS_ThrowRangeError(ctx, "unknown fssync opcode: %d", op);
+	}
+
+	uv_fs_req_cleanup(&req);
+	if (r < 0)
+		return qn_throw_errno(ctx, r);
+	return JS_NewInt32(ctx, 0);
+}
+
+/* ==== Utility functions ====
+ *
+ * Small POSIX utilities that were previously in qn-native.c. */
+
+/* setNonBlock(fd) → 0 on success, throws on error */
+static JSValue js_uv_set_nonblock(JSContext *ctx, JSValueConst this_val,
+                                   int argc, JSValueConst *argv) {
+	int fd, flags;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+	flags = fcntl(fd, F_GETFL);
+	if (flags < 0)
+		return qn_throw_errno(ctx, -errno);
+	if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
+		return qn_throw_errno(ctx, -errno);
+	return JS_NewInt32(ctx, 0);
+}
+
+#if !defined(_WIN32)
+/* getpgid(pid) → pgid */
+static JSValue js_uv_getpgid(JSContext *ctx, JSValueConst this_val,
+                               int argc, JSValueConst *argv) {
+	int pid, ret;
+	if (JS_ToInt32(ctx, &pid, argv[0]))
+		return JS_EXCEPTION;
+	ret = getpgid(pid);
+	if (ret < 0)
+		return qn_throw_errno(ctx, -errno);
+	return JS_NewInt32(ctx, ret);
+}
+#endif
+
 /* ==== module definition ==== */
 
 static const JSCFunctionListEntry js_uv_fs_funcs[] = {
 	QN_CFUNC_DEF("_fsop", 5, js_uv_fsop),
+	QN_CFUNC_DEF("_fssync", 4, js_uv_fssync),
+	QN_CFUNC_DEF("setNonBlock", 1, js_uv_set_nonblock),
+#if !defined(_WIN32)
+	QN_CFUNC_DEF("getpgid", 1, js_uv_getpgid),
+#endif
 	/* Platform open flags (vary between Linux/macOS) */
 	QN_CONST(O_RDONLY),
 	QN_CONST(O_WRONLY),

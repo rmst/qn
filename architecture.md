@@ -12,11 +12,10 @@ Qn is built from ~17K LOC of own code plus three vendored C dependencies. Everyt
 
 **qx** (`qx/`) — ~1K LOC JS. Shell scripting with `$` function (similar to zx).
 
-**C native modules** — ~2.9K LOC C:
+**C native modules** — ~2.5K LOC C:
 - Sandboxed workers (`sandboxed-worker/`) — 1K LOC
 - TLS bindings (`tls/`) — 0.9K LOC
 - POSIX sockets (`socket/`) — 0.6K LOC
-- Filesystem extras (`native/`) — 0.4K LOC
 - Closure introspection (`introspect/`) — 49 LOC (bulk is in QuickJS patch)
 
 **Module resolution** ([`module_resolution/`](module_resolution/Readme.md)) — ~0.8K LOC C. NODE_PATH, node_modules walking, package.json resolution. For standalone binaries: `embedded://` namespace separation, compile-time import map, `file://` protocol for forced disk loading.

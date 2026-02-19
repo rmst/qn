@@ -1,7 +1,7 @@
 import * as std from 'std'
 import * as os from 'os'
 import { Buffer } from 'node:buffer'
-import { setNonBlock } from 'qn_native'
+import { setNonBlock } from 'qn:uv-fs'
 import {
 	parseStdio,
 	setupStdioPipes,

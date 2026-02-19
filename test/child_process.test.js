@@ -923,7 +923,7 @@ describe('node:child_process shim', () => {
 		writeFileSync(`${dir}/test.js`, `
 			import { spawn } from 'node:child_process'
 			import { readFileSync, writeFileSync } from 'node:fs'
-			import * as qn_native from 'qn_native'
+			import { getpgid } from 'qn_uv_fs'
 
 			const marker = '${marker}'
 			writeFileSync(marker, 'initial')
@@ -936,7 +936,7 @@ describe('node:child_process shim', () => {
 			await new Promise(r => setTimeout(r, 50))
 
 			// Child should be session leader (PGID == PID)
-			const isSessionLeader = qn_native.getpgid(child.pid) === child.pid
+			const isSessionLeader = getpgid(child.pid) === child.pid
 
 			// Wait for grandchild to start writing
 			await new Promise(r => setTimeout(r, 300))

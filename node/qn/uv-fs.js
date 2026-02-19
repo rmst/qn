@@ -6,12 +6,13 @@
  */
 
 import {
-	_fsop,
+	_fsop, _fssync,
 	OPEN, CLOSE, READ, WRITE, FSTAT, FTRUNCATE, FSYNC, FDATASYNC,
 	FCHMOD, FCHOWN, FUTIME, STAT, LSTAT, READDIR, MKDIR, UNLINK, RMDIR,
 	RENAME, SYMLINK, LINK, READLINK, REALPATH, ACCESS, CHMOD, UTIMES,
 	CHOWN, LCHOWN, COPYFILE, MKDTEMP,
 	O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, O_EXCL,
+	setNonBlock, getpgid,
 } from 'qn_uv_fs'
 
 /* Open flags parser (moved from C — uses platform constants) */
@@ -62,3 +63,11 @@ export const chown     = (path, uid, gid) => _fsop(CHOWN, path, uid, gid)
 export const lchown    = (path, uid, gid) => _fsop(LCHOWN, path, uid, gid)
 export const copyfile  = (src, dst) => _fsop(COPYFILE, src, dst)
 export const mkdtemp   = (template) => _fsop(MKDTEMP, template)
+
+/* Synchronous variants for chmodSync/chownSync/lchownSync */
+export const chmodSync  = (path, mode) => _fssync(CHMOD, path, mode)
+export const chownSync  = (path, uid, gid) => _fssync(CHOWN, path, uid, gid)
+export const lchownSync = (path, uid, gid) => _fssync(LCHOWN, path, uid, gid)
+
+/* Re-export utilities */
+export { setNonBlock, getpgid }

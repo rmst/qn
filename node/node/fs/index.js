@@ -1,7 +1,7 @@
 import * as std from 'std';
 import * as os from 'os';
 import { Buffer } from 'node:buffer';
-import { chmod as native_chmod, chown as native_chown, lchown as native_lchown } from 'qn_native';
+import { chmodSync as native_chmod, chownSync as native_chown, lchownSync as native_lchown } from 'qn:uv-fs';
 
 // Re-export glob functions from separate module
 export { globSync, glob } from './glob.js';
@@ -308,10 +308,7 @@ export function renameSync(oldPath, newPath) {
 }
 
 export function chmodSync(path, mode) {
-	const result = native_chmod(path, mode);
-	if (result !== 0) {
-		throw new Error(`Failed to chmod ${path}: error ${-result}`);
-	}
+	native_chmod(path, mode);
 }
 
 export function copyFileSync(src, dest, mode) {
@@ -501,17 +498,11 @@ export function utimesSync(path, atime, mtime) {
 }
 
 export function chownSync(path, uid, gid) {
-	const result = native_chown(path, uid, gid);
-	if (result !== 0) {
-		throw new Error(`Failed to chown ${path}: error ${-result}`);
-	}
+	native_chown(path, uid, gid);
 }
 
 export function lchownSync(path, uid, gid) {
-	const result = native_lchown(path, uid, gid);
-	if (result !== 0) {
-		throw new Error(`Failed to lchown ${path}: error ${-result}`);
-	}
+	native_lchown(path, uid, gid);
 }
 
 export { createReadStream, createWriteStream } from './streams.js';
