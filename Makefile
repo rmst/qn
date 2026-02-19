@@ -54,21 +54,30 @@ LIBUV_LIB := $(BIN_DIR)/libuv.a
 LIBUV_DIR := vendor/libuv
 LIBUV_CFLAGS := -Ivendor/libuv/include -Ivendor/libuv/src
 
-# libuv source files (core + unix + linux-specific)
+# libuv source files (core + unix platform-specific)
 LIBUV_SRCS = src/fs-poll.c src/idna.c src/inet.c src/random.c src/strscpy.c \
              src/strtok.c src/thread-common.c src/threadpool.c src/timer.c \
              src/uv-common.c src/uv-data-getter-setters.c src/version.c \
              src/unix/async.c src/unix/core.c src/unix/dl.c src/unix/fs.c \
              src/unix/getaddrinfo.c src/unix/getnameinfo.c src/unix/loop.c \
              src/unix/loop-watcher.c src/unix/pipe.c src/unix/poll.c \
-             src/unix/posix-hrtime.c src/unix/process.c \
-             src/unix/proctitle.c src/unix/random-devurandom.c \
-             src/unix/random-getrandom.c src/unix/random-sysctl-linux.c \
+             src/unix/process.c src/unix/proctitle.c \
+             src/unix/random-devurandom.c \
              src/unix/signal.c src/unix/stream.c src/unix/tcp.c \
-             src/unix/thread.c src/unix/tty.c src/unix/udp.c \
-             src/unix/linux.c src/unix/procfs-exepath.c \
-             src/unix/sysinfo-loadavg.c src/unix/sysinfo-memory.c \
-             src/unix/no-proctitle.c
+             src/unix/thread.c src/unix/tty.c src/unix/udp.c
+
+# Platform-specific libuv sources
+ifeq ($(PLATFORM),darwin)
+LIBUV_SRCS += src/unix/bsd-ifaddrs.c src/unix/kqueue.c \
+              src/unix/random-getentropy.c \
+              src/unix/darwin-proctitle.c src/unix/darwin.c src/unix/fsevents.c
+LIBUV_CFLAGS += -D_DARWIN_UNLIMITED_SELECT=1 -D_DARWIN_USE_64_BIT_INODE=1
+else
+LIBUV_SRCS += src/unix/linux.c src/unix/procfs-exepath.c \
+              src/unix/random-getrandom.c src/unix/random-sysctl-linux.c \
+              src/unix/sysinfo-loadavg.c src/unix/sysinfo-memory.c \
+              src/unix/posix-hrtime.c src/unix/no-proctitle.c
+endif
 
 # Program names
 QJSX_PROG = $(BIN_DIR)/qjsx
@@ -103,8 +112,9 @@ $(BIN_DIR)/obj:
 # Build libuv static library from source (no cmake needed)
 $(LIBUV_LIB): $(addprefix $(LIBUV_DIR)/,$(LIBUV_SRCS)) | $(BIN_DIR)
 	@echo "Building libuv..."
+	@rm -rf $(BIN_DIR)/obj/libuv
 	@mkdir -p $(BIN_DIR)/obj/libuv
-	@for f in $(LIBUV_SRCS); do \
+	@set -e; for f in $(LIBUV_SRCS); do \
 		oname=$$(echo $$f | tr '/' '_' | sed 's/\.c$$/.o/'); \
 		$(CC) $(CFLAGS_OPT) $(LIBUV_CFLAGS) -c -o $(BIN_DIR)/obj/libuv/$$oname $(LIBUV_DIR)/$$f; \
 	done
@@ -124,7 +134,7 @@ $(BIN_DIR)/obj/qjsx.o: $(BIN_DIR)/obj/qjsx.c module_resolution/module-resolution
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
 # Build qjsxc executable
-$(QJSXC_PROG): $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o $(BIN_DIR)/obj/introspect.o quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)
+$(QJSXC_PROG): $(BIN_DIR)/obj/qjsxc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o $(BIN_DIR)/obj/introspect.o $(BIN_DIR)/obj/qn-vm.o $(BIN_DIR)/obj/qn-uv-utils.o quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(BIN_DIR)/obj/qjsxc.o $(QUICKJS_OBJS) $(LIBUV_LIB) $(LIBS)
 	chmod +x $@
 	cp $(BIN_DIR)/quickjs/*.h $(BIN_DIR)/
