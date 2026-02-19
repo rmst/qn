@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer'
 import { spawn } from './spawn.js'
 import { NodeCompatibilityError } from './utils.js'
 import { promisify } from 'node:util'
+import { setTimeout as _setTimeout, clearTimeout as _clearTimeout } from 'qn_vm'
 
 /**
  * Execute a file asynchronously.
@@ -80,7 +81,7 @@ export function execFile(file, args, options, callback) {
 	const killSignal = options.killSignal || 'SIGTERM'
 
 	if (timeout > 0) {
-		timeoutId = os.setTimeout(() => {
+		timeoutId = _setTimeout(() => {
 			timedOut = true
 			child.kill(killSignal)
 			// Destroy streams to prevent blocking if descendants hold pipes open
@@ -90,7 +91,7 @@ export function execFile(file, args, options, callback) {
 
 		child.on('close', () => {
 			if (timeoutId !== null) {
-				os.clearTimeout(timeoutId)
+				_clearTimeout(timeoutId)
 				timeoutId = null
 			}
 		})

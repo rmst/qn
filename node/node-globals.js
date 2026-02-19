@@ -7,6 +7,10 @@
 
 import * as std from "std"
 import * as os from "os"
+import {
+	setTimeout as _setTimeout, clearTimeout as _clearTimeout,
+	setReadHandler, setWriteHandler,
+} from 'qn_vm'
 
 // DOMException (Web standard, used by fetch and AbortController)
 // Must be defined early before modules that use it are imported
@@ -25,15 +29,15 @@ export class NodeCompatibilityError extends Error {
 	}
 }
 
-// Timer globals
+// Timer globals (backed by libuv uv_timer_t via qn_vm)
 globalThis.setTimeout = (fn, delay, ...args) => {
 	if (args.length > 0) {
 		throw new NodeCompatibilityError('setTimeout does not support passing arguments to callback. Use an arrow function instead.')
 	}
-	return os.setTimeout(fn, delay)
+	return _setTimeout(fn, delay)
 }
 
-globalThis.clearTimeout = os.clearTimeout
+globalThis.clearTimeout = _clearTimeout
 
 const _intervals = new Map()
 let _intervalId = 1
@@ -46,9 +50,9 @@ globalThis.setInterval = (fn, delay, ...args) => {
 		if (!_intervals.has(id)) return
 		try { fn() } catch (e) { console.error(e) }
 		if (_intervals.has(id))
-			_intervals.set(id, os.setTimeout(tick, delay))
+			_intervals.set(id, _setTimeout(tick, delay))
 	}
-	_intervals.set(id, os.setTimeout(tick, delay))
+	_intervals.set(id, _setTimeout(tick, delay))
 	return { ref() {}, unref() {}, [Symbol.toPrimitive]() { return id } }
 }
 
@@ -56,7 +60,7 @@ globalThis.clearInterval = (handle) => {
 	const id = typeof handle === 'object' ? +handle : handle
 	const timer = _intervals.get(id)
 	if (timer !== undefined) {
-		os.clearTimeout(timer)
+		_clearTimeout(timer)
 		_intervals.delete(id)
 	}
 }
@@ -137,7 +141,7 @@ globalThis.ReadableStream = class ReadableStream {
 // queueMicrotask (Web standard, also in Node.js)
 // QuickJS doesn't have a separate microtask queue, but setTimeout(fn, 0)
 // integrates with the event loop and fires before the next I/O poll.
-globalThis.queueMicrotask = (fn) => os.setTimeout(fn, 0)
+globalThis.queueMicrotask = (fn) => _setTimeout(fn, 0)
 
 // Performance API
 globalThis.performance = {

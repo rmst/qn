@@ -79,6 +79,7 @@ describe('qn_socket native module', () => {
 		writeFileSync(`${dir}/test.js`, `
 			import * as sock from 'qn_socket'
 			import * as os from 'os'
+			import { setReadHandler, setWriteHandler } from 'qn_vm'
 
 			const sfd = sock.socket(sock.AF_INET, sock.SOCK_STREAM)
 			sock.setsockopt(sfd, sock.SOL_SOCKET, sock.SO_REUSEADDR, 1)
@@ -90,19 +91,19 @@ describe('qn_socket native module', () => {
 			const ret = sock.connect(cfd, '127.0.0.1', addr.port)
 
 			let accepted = null
-			os.setReadHandler(sfd, () => {
+			setReadHandler(sfd, () => {
 				accepted = sock.accept(sfd)
-				os.setReadHandler(sfd, null)
+				setReadHandler(sfd, null)
 			})
 
 			if (ret === -sock.EINPROGRESS) {
-				os.setWriteHandler(cfd, () => {
-					os.setWriteHandler(cfd, null)
+				setWriteHandler(cfd, () => {
+					setWriteHandler(cfd, null)
 					sock.connectFinish(cfd)
 				})
 			}
 
-			await os.sleepAsync(50)
+			await new Promise(r => setTimeout(r, 50))
 
 			console.log(accepted !== null ? 'connected' : 'fail')
 
@@ -111,7 +112,7 @@ describe('qn_socket native module', () => {
 			new Uint8Array(buf).set(msg)
 			sock.send(cfd, buf, 0, msg.byteLength)
 
-			await os.sleepAsync(50)
+			await new Promise(r => setTimeout(r, 50))
 
 			const recvBuf = new ArrayBuffer(1024)
 			const n = sock.recv(accepted.fd, recvBuf, 0, 1024)

@@ -1,5 +1,5 @@
 --- quickjs/qjsc.c	2026-02-18 15:49:15.799575407 +0000
-+++ bin/linux/obj/qjsxc.c	2026-02-18 15:58:19.182562505 +0000
++++ bin/linux/obj/qjsxc.c	2026-02-19 02:52:12.578181337 +0000
 @@ -1,5 +1,8 @@
  /*
 - * QuickJS command line compiler
@@ -290,7 +290,7 @@
  
      fprintf(fo, "/* File generated automatically by the QuickJS compiler. */\n"
              "\n"
-@@ -769,8 +869,45 @@
+@@ -769,8 +869,46 @@
  
      if (output_type != OUTPUT_C) {
          fprintf(fo, "#include \"quickjs-libc.h\"\n"
@@ -301,7 +301,8 @@
                  );
 +
 +        fprintf(fo, "#include \"module_resolution/module-resolution.h\"\n");
-+        fprintf(fo, "#include \"exit-handler.h\"\n\n");
++        fprintf(fo, "#include \"exit-handler.h\"\n");
++        fprintf(fo, "#include \"libuv/qn-vm.h\"\n\n");
 +
 +        fprintf(fo,
 +                "static JSModuleDef *qjsx_loader(JSContext *ctx, const char *name, void *opaque, JSValueConst attributes) {\n"
@@ -336,7 +337,7 @@
      } else {
          fprintf(fo, "#include <inttypes.h>\n"
                  "\n"
-@@ -784,14 +921,50 @@
+@@ -784,14 +922,50 @@
      }
  
      for(i = 0; i < dynamic_module_list.count; i++) {
@@ -390,7 +391,7 @@
          fprintf(fo,
                  "static JSContext *JS_NewCustomContext(JSRuntime *rt)\n"
                  "{\n"
-@@ -843,7 +1016,7 @@
+@@ -843,11 +1017,12 @@
  
          /* add the module loader if necessary */
          if (feature_bitmap & (1 << FE_MODULE_LOADER)) {
@@ -399,7 +400,12 @@
          }
  
          fprintf(fo,
-@@ -857,7 +1030,14 @@
+                 "  ctx = JS_NewCustomContext(rt);\n"
++                "  qn_vm_init(ctx);\n"
+                 "  js_std_add_helpers(ctx, argc, argv);\n");
+ 
+         for(i = 0; i < cname_list.count; i++) {
+@@ -857,7 +1032,15 @@
                          e->name, e->name);
              }
          }
@@ -407,6 +413,7 @@
 +        fprintf(fo,
 +                "  js_std_loop(ctx);\n"
 +                "  int exit_code = qjsx_call_exit_handler(ctx);\n"
++                "  qn_vm_free(rt);\n"
 +                "  js_std_free_handlers(rt);\n"
 +                "  JS_FreeContext(ctx);\n"
 +                "  JS_FreeRuntime(rt);\n"
@@ -415,7 +422,7 @@
      }
  
      JS_FreeContext(ctx);
-@@ -872,5 +1052,12 @@
+@@ -872,5 +1055,12 @@
      namelist_free(&cname_list);
      namelist_free(&cmodule_list);
      namelist_free(&init_module_list);

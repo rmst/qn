@@ -97,6 +97,7 @@ describe('qn_tls native module', () => {
 				import * as tls from 'node:tls'
 				import { socket, connect, connectFinish, getaddrinfo, AF_INET, SOCK_STREAM, EINPROGRESS } from 'qn_socket'
 				import * as os from 'os'
+			import { setReadHandler, setWriteHandler } from 'qn_vm'
 
 				tls.loadCACerts(${JSON.stringify(certFile)})
 				const addrs = getaddrinfo('127.0.0.1', ${port}, { family: AF_INET })
@@ -104,8 +105,8 @@ describe('qn_tls native module', () => {
 				const ret = connect(fd, addrs[0].address, ${port})
 				if (ret === -EINPROGRESS) {
 					await new Promise((resolve) => {
-						os.setWriteHandler(fd, () => {
-							os.setWriteHandler(fd, null)
+						setWriteHandler(fd, () => {
+							setWriteHandler(fd, null)
 							connectFinish(fd)
 							resolve()
 						})
@@ -284,6 +285,7 @@ describe('TLS server', { concurrency: true }, () => {
 			import * as tls from 'node:tls'
 			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
 			import * as os from 'os'
+			import { setReadHandler, setWriteHandler } from 'qn_vm'
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
 
@@ -294,10 +296,10 @@ describe('TLS server', { concurrency: true }, () => {
 			const addr = getsockname(fd)
 			console.log(addr.port)
 
-			os.setReadHandler(fd, async () => {
+			setReadHandler(fd, async () => {
 				const result = accept(fd)
 				if (!result) return
-				os.setReadHandler(fd, null)
+				setReadHandler(fd, null)
 
 				const conn = tls.accept(result.fd, cred)
 				await tls.handshake(conn, result.fd)
@@ -334,6 +336,7 @@ describe('TLS server', { concurrency: true }, () => {
 			import * as tls from 'node:tls'
 			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
 			import * as os from 'os'
+			import { setReadHandler, setWriteHandler } from 'qn_vm'
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
 
@@ -344,10 +347,10 @@ describe('TLS server', { concurrency: true }, () => {
 			const addr = getsockname(fd)
 			console.log(addr.port)
 
-			os.setReadHandler(fd, async () => {
+			setReadHandler(fd, async () => {
 				const result = accept(fd)
 				if (!result) return
-				os.setReadHandler(fd, null)
+				setReadHandler(fd, null)
 
 				const conn = tls.accept(result.fd, cred)
 				await tls.handshake(conn, result.fd)
@@ -409,6 +412,7 @@ describe('TLS server', { concurrency: true }, () => {
 			import * as tls from 'node:tls'
 			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
 			import * as os from 'os'
+			import { setReadHandler, setWriteHandler } from 'qn_vm'
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
 
@@ -420,7 +424,7 @@ describe('TLS server', { concurrency: true }, () => {
 			console.log(addr.port)
 
 			let count = 0
-			os.setReadHandler(fd, async () => {
+			setReadHandler(fd, async () => {
 				const result = accept(fd)
 				if (!result) return
 
@@ -438,7 +442,7 @@ describe('TLS server', { concurrency: true }, () => {
 				os.close(result.fd)
 
 				if (count >= 2) {
-					os.setReadHandler(fd, null)
+					setReadHandler(fd, null)
 					os.close(fd)
 				}
 			})
@@ -669,6 +673,7 @@ function writeRawServer(dir, rawResponseExpr) {
 		import * as tls from 'node:tls'
 		import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
 		import * as os from 'os'
+			import { setReadHandler, setWriteHandler } from 'qn_vm'
 
 		const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
 		const fd = socket(AF_INET, SOCK_STREAM)
@@ -677,10 +682,10 @@ function writeRawServer(dir, rawResponseExpr) {
 		listen(fd, 1)
 		console.log(getsockname(fd).port)
 
-		os.setReadHandler(fd, async () => {
+		setReadHandler(fd, async () => {
 			const result = accept(fd)
 			if (!result) return
-			os.setReadHandler(fd, null)
+			setReadHandler(fd, null)
 			const conn = tls.accept(result.fd, cred)
 			await tls.handshake(conn, result.fd)
 			// Read the request (and discard it)
@@ -727,6 +732,7 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 			import * as tls from 'node:tls'
 			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
 			import * as os from 'os'
+			import { setReadHandler, setWriteHandler } from 'qn_vm'
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
 			const fd = socket(AF_INET, SOCK_STREAM)
@@ -735,10 +741,10 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 			listen(fd, 1)
 			console.log(getsockname(fd).port)
 
-			os.setReadHandler(fd, async () => {
+			setReadHandler(fd, async () => {
 				const result = accept(fd)
 				if (!result) return
-				os.setReadHandler(fd, null)
+				setReadHandler(fd, null)
 				const conn = tls.accept(result.fd, cred)
 				await tls.handshake(conn, result.fd)
 				// Read the request then close immediately without responding
@@ -850,6 +856,7 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 			import * as tls from 'node:tls'
 			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
 			import * as os from 'os'
+			import { setReadHandler, setWriteHandler } from 'qn_vm'
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
 			const fd = socket(AF_INET, SOCK_STREAM)
@@ -860,7 +867,7 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 			console.log(port)
 
 			const handleClient = async () => {
-				os.setReadHandler(fd, async () => {
+				setReadHandler(fd, async () => {
 					const result = accept(fd)
 					if (!result) return
 					const conn = tls.accept(result.fd, cred)
@@ -941,6 +948,7 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 			import * as tls from 'node:tls'
 			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
 			import * as os from 'os'
+			import { setReadHandler, setWriteHandler } from 'qn_vm'
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
 			const fd = socket(AF_INET, SOCK_STREAM)
@@ -949,10 +957,10 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 			listen(fd, 1)
 			console.log(getsockname(fd).port)
 
-			os.setReadHandler(fd, async () => {
+			setReadHandler(fd, async () => {
 				const result = accept(fd)
 				if (!result) return
-				os.setReadHandler(fd, null)
+				setReadHandler(fd, null)
 				const conn = tls.accept(result.fd, cred)
 				await tls.handshake(conn, result.fd)
 				const buf = new ArrayBuffer(65536)
@@ -999,6 +1007,7 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 			import * as tls from 'node:tls'
 			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
 			import * as os from 'os'
+			import { setReadHandler, setWriteHandler } from 'qn_vm'
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
 			const fd = socket(AF_INET, SOCK_STREAM)
@@ -1007,10 +1016,10 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 			listen(fd, 1)
 			console.log(getsockname(fd).port)
 
-			os.setReadHandler(fd, async () => {
+			setReadHandler(fd, async () => {
 				const result = accept(fd)
 				if (!result) return
-				os.setReadHandler(fd, null)
+				setReadHandler(fd, null)
 				const conn = tls.accept(result.fd, cred)
 				await tls.handshake(conn, result.fd)
 				const buf = new ArrayBuffer(65536)

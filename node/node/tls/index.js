@@ -23,6 +23,7 @@ import {
 	readStart, readStop, write as _streamWrite,
 	close as _streamClose, setOnRead,
 } from 'qn/uv-stream'
+import { setReadHandler as _setReadHandler, setWriteHandler as _setWriteHandler } from 'qn_vm'
 
 export {
 	tlsLoadCACerts as loadCACerts,
@@ -70,12 +71,12 @@ function waitReadable(fd, signal) {
 	if (signal?.aborted) return Promise.reject(signal.reason)
 	return new Promise((resolve, reject) => {
 		const onAbort = () => {
-			os.setReadHandler(fd, null)
+			_setReadHandler(fd, null)
 			reject(signal.reason)
 		}
 		if (signal) signal.addEventListener('abort', onAbort, { once: true })
-		os.setReadHandler(fd, () => {
-			os.setReadHandler(fd, null)
+		_setReadHandler(fd, () => {
+			_setReadHandler(fd, null)
 			if (signal) signal.removeEventListener('abort', onAbort)
 			resolve()
 		})
@@ -86,12 +87,12 @@ function waitWritable(fd, signal) {
 	if (signal?.aborted) return Promise.reject(signal.reason)
 	return new Promise((resolve, reject) => {
 		const onAbort = () => {
-			os.setWriteHandler(fd, null)
+			_setWriteHandler(fd, null)
 			reject(signal.reason)
 		}
 		if (signal) signal.addEventListener('abort', onAbort, { once: true })
-		os.setWriteHandler(fd, () => {
-			os.setWriteHandler(fd, null)
+		_setWriteHandler(fd, () => {
+			_setWriteHandler(fd, null)
 			if (signal) signal.removeEventListener('abort', onAbort)
 			resolve()
 		})

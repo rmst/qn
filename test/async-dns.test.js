@@ -7,13 +7,14 @@ describe('getaddrinfoAsync native', () => {
 	testQnOnly('resolves localhost to 127.0.0.1', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import * as os from 'os'
+			import { setReadHandler } from 'qn_vm'
 			import { getaddrinfoAsync, AF_INET, EAGAIN } from 'qn_socket'
 			const fd = getaddrinfoAsync('localhost', 80, { family: AF_INET })
-			os.setReadHandler(fd, () => {
+			setReadHandler(fd, () => {
 				const buf = new ArrayBuffer(4096)
 				const n = os.read(fd, buf, 0, 4096)
 				if (n === -EAGAIN) return
-				os.setReadHandler(fd, null)
+				setReadHandler(fd, null)
 				os.close(fd)
 				const view = new Uint8Array(buf, 0, n)
 				const status = view[0]
@@ -37,13 +38,14 @@ describe('getaddrinfoAsync native', () => {
 	testQnOnly('resolves IP literal without blocking', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import * as os from 'os'
+			import { setReadHandler } from 'qn_vm'
 			import { getaddrinfoAsync, AF_INET, EAGAIN } from 'qn_socket'
 			const fd = getaddrinfoAsync('127.0.0.1', 80, { family: AF_INET })
-			os.setReadHandler(fd, () => {
+			setReadHandler(fd, () => {
 				const buf = new ArrayBuffer(4096)
 				const n = os.read(fd, buf, 0, 4096)
 				if (n === -EAGAIN) return
-				os.setReadHandler(fd, null)
+				setReadHandler(fd, null)
 				os.close(fd)
 				const view = new Uint8Array(buf, 0, n)
 				const status = view[0]
@@ -67,13 +69,14 @@ describe('getaddrinfoAsync native', () => {
 	testQnOnly('returns error for invalid hostname', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import * as os from 'os'
+			import { setReadHandler } from 'qn_vm'
 			import { getaddrinfoAsync, EAGAIN } from 'qn_socket'
 			const fd = getaddrinfoAsync('this.host.does.not.exist.invalid', 80)
-			os.setReadHandler(fd, () => {
+			setReadHandler(fd, () => {
 				const buf = new ArrayBuffer(4096)
 				const n = os.read(fd, buf, 0, 4096)
 				if (n === -EAGAIN) return
-				os.setReadHandler(fd, null)
+				setReadHandler(fd, null)
 				os.close(fd)
 				const view = new Uint8Array(buf, 0, n)
 				const status = view[0]
@@ -96,6 +99,7 @@ describe('getaddrinfoAsync native', () => {
 	testQnOnly('returns fd synchronously, result comes via event loop', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import * as os from 'os'
+			import { setReadHandler } from 'qn_vm'
 			import { getaddrinfoAsync, AF_INET, EAGAIN } from 'qn_socket'
 
 			const fd = getaddrinfoAsync('localhost', 80, { family: AF_INET })
@@ -103,11 +107,11 @@ describe('getaddrinfoAsync native', () => {
 			console.log('fd_valid:' + (fd >= 0))
 
 			let resolved = false
-			os.setReadHandler(fd, () => {
+			setReadHandler(fd, () => {
 				const buf = new ArrayBuffer(4096)
 				const n = os.read(fd, buf, 0, 4096)
 				if (n === -EAGAIN) return
-				os.setReadHandler(fd, null)
+				setReadHandler(fd, null)
 				os.close(fd)
 				resolved = true
 				console.log('resolved:true')

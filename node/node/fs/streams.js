@@ -2,6 +2,7 @@ import * as os from 'os'
 import * as std from 'std'
 import { Buffer } from 'node:buffer'
 import { EventEmitter } from 'node:events'
+import { setTimeout as _setTimeout } from 'qn_vm'
 
 /**
  * Readable stream for reading from a file path.
@@ -35,7 +36,7 @@ export class ReadStream extends EventEmitter {
 			}
 		} catch (e) {
 			// Defer error to next tick
-			os.setTimeout(() => {
+			_setTimeout(() => {
 				this.emit('error', e instanceof Error ? e : new Error(String(e)))
 			}, 0)
 			return
@@ -47,7 +48,7 @@ export class ReadStream extends EventEmitter {
 		}
 
 		// Defer 'open' and start reading on next tick
-		os.setTimeout(() => {
+		_setTimeout(() => {
 			this.emit('open', this.#fd)
 			if (!this.#destroyed) {
 				this.#startReading()
@@ -85,7 +86,7 @@ export class ReadStream extends EventEmitter {
 			this.emit('data', chunk)
 			// Schedule next read
 			if (!this.#paused && !this.#destroyed) {
-				os.setTimeout(() => this.#readChunk(), 0)
+				_setTimeout(() => this.#readChunk(), 0)
 			}
 		} else {
 			this.#finish()
@@ -157,13 +158,13 @@ export class WriteStream extends EventEmitter {
 				throw new Error(`Failed to open file for writing: ${path}`)
 			}
 		} catch (e) {
-			os.setTimeout(() => {
+			_setTimeout(() => {
 				this.emit('error', e instanceof Error ? e : new Error(String(e)))
 			}, 0)
 			return
 		}
 
-		os.setTimeout(() => {
+		_setTimeout(() => {
 			this.emit('open', this.#fd)
 		}, 0)
 	}
@@ -221,7 +222,7 @@ export class WriteStream extends EventEmitter {
 		this.#ending = true
 		if (callback) this.once('finish', callback)
 
-		os.setTimeout(() => {
+		_setTimeout(() => {
 			if (!this.#finished) {
 				this.#finished = true
 				this.emit('finish')

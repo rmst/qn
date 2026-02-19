@@ -2,6 +2,11 @@ import * as os from 'os'
 import * as std from 'std'
 import { EventEmitter } from 'node:events'
 import { Buffer } from 'node:buffer'
+import {
+	setTimeout as _setTimeout,
+	setReadHandler as _setReadHandler,
+	setWriteHandler as _setWriteHandler,
+} from 'qn_vm'
 
 /**
  * UTF-8 streaming decoder that handles incomplete multi-byte sequences.
@@ -187,7 +192,7 @@ export class Readable extends EventEmitter {
 	#setupReadHandler() {
 		if (this.#fd === null) return
 
-		os.setReadHandler(this.#fd, () => {
+		_setReadHandler(this.#fd, () => {
 			if (this.#destroyed) return
 
 			const buf = new Uint8Array(4096)
@@ -217,7 +222,7 @@ export class Readable extends EventEmitter {
 			} else {
 				// EOF
 				this.#ended = true
-				os.setReadHandler(this.#fd, null)
+				_setReadHandler(this.#fd, null)
 
 				// Flush any remaining decoder buffer
 				if (this.#decoder) {
@@ -236,7 +241,7 @@ export class Readable extends EventEmitter {
 	#handleError(err) {
 		this.#ended = true
 		if (this.#fd !== null) {
-			os.setReadHandler(this.#fd, null)
+			_setReadHandler(this.#fd, null)
 		}
 		this.emit('error', err instanceof Error ? err : new Error(String(err)))
 		this.#close()
@@ -290,7 +295,7 @@ export class Readable extends EventEmitter {
 		if (this.#destroyed) return
 
 		if (this.#fd !== null) {
-			os.setReadHandler(this.#fd, null)
+			_setReadHandler(this.#fd, null)
 		}
 
 		if (error) {
@@ -477,7 +482,7 @@ export class Writable extends EventEmitter {
 		if (this.#destroyed || this.#ending) {
 			const err = new Error('write after end')
 			if (callback) {
-				os.setTimeout(() => callback(err), 0)
+				_setTimeout(() => callback(err), 0)
 			}
 			this.emit('error', err)
 			return false
@@ -562,8 +567,8 @@ export class Writable extends EventEmitter {
 	#setupWriteHandler() {
 		if (this.#fd === null) return
 
-		os.setWriteHandler(this.#fd, () => {
-			os.setWriteHandler(this.#fd, null)
+		_setWriteHandler(this.#fd, () => {
+			_setWriteHandler(this.#fd, null)
 			this.#flush()
 		})
 	}
@@ -571,7 +576,7 @@ export class Writable extends EventEmitter {
 	#handleError(err) {
 		this.#destroyed = true
 		if (this.#fd !== null) {
-			os.setWriteHandler(this.#fd, null)
+			_setWriteHandler(this.#fd, null)
 		}
 		this.emit('error', err instanceof Error ? err : new Error(String(err)))
 		this.#close()
@@ -646,7 +651,7 @@ export class Writable extends EventEmitter {
 		this.#callbackQueue = []
 
 		if (this.#fd !== null) {
-			os.setWriteHandler(this.#fd, null)
+			_setWriteHandler(this.#fd, null)
 		}
 
 		if (error) {
