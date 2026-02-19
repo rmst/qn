@@ -27,7 +27,7 @@ Building Qn, like QuickJS, should take less than a minute.
 ```bash
 git clone --recurse-submodules https://github.com/rmst/qn.git
 cd qn
-make build  # Builds ./bin/qjsx, ./bin/qn, and ./bin/qjsxc
+make build  # Builds ./bin/qn, ./bin/qx, and ./bin/qnc
 ```
 
 
@@ -56,12 +56,12 @@ NODE_PATH=./my_modules:./lib ./bin/qjsx script.js
 
 ### Building Standalone Applications
 
-`qjsxc` can be used to compile JavaScript applications into standalone executables with embedded modules.
+`qnc` can be used to compile JavaScript applications into standalone executables with embedded modules.
 
 #### Basic Usage
 ```bash
 # Compile an application and embed all modules imported by main.js
-NODE_PATH=./my_modules ./bin/qjsxc -o my-app main.js
+NODE_PATH=./my_modules ./bin/qnc -o my-app main.js
 
 # The resulting binary is a standalone executable
 ./my-app                          # (runs your application)
@@ -72,7 +72,7 @@ Use the `-D` flag to embed modules that aren't directly imported but should be a
 
 ```bash
 # Embed modules for dynamic loading
-NODE_PATH=./libs ./bin/qjsxc -D utils -D config -o runtime bootstrap.js
+NODE_PATH=./libs ./bin/qnc -D utils -D config -o runtime bootstrap.js
 
 # External scripts can now import these modules
 ./runtime external-script.js      # Can use import { ... } from "utils"
@@ -84,10 +84,10 @@ This is how `qn` is built - it compiles a minimal bootstrap with all node module
 
 See [architecture.md](architecture.md) for an overview of own code and vendored dependencies (QuickJS, SQLite, BearSSL).
 
-The following files are used to compile the `qjsx` binary:
+Key source files:
 
+- `qnc.c` — standalone compiler (replaces the former `qjsxc.patch` applied to `quickjs/qjsc.c`)
 - `quickjs.patch` is applied to `quickjs/quickjs.c` (import error locations)
 - `qjsx.patch` is applied to `quickjs/qjs.c`
-- `qjsxc.patch` is applied to `quickjs/qjsc.c`
 - `quickjs-libc.patch` is applied to `quickjs/quickjs-libc.c`
 - `module_resolution/module-resolution.h` contains shared module resolution logic (NODE_PATH, node_modules, package.json)

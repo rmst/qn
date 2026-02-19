@@ -5,7 +5,7 @@
  * Minimal zx-compatible shell scripting for QuickJS.
  * This bootstrap provides the $ function and Node.js compatibility modules.
  *
- * All modules are embedded at compile time using qjsxc's -D flag.
+ * All modules are embedded at compile time using qnc's -D flag.
  */
 
 import * as std from "std"

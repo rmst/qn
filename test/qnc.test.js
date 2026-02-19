@@ -1,9 +1,9 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
 import { writeFileSync, mkdirSync } from 'node:fs'
-import { test, $, QJSXC } from './util.js'
+import { test, $, QNC } from './util.js'
 
-describe('qjsxc compiler', () => {
+describe('qnc compiler', () => {
 	describe('standalone compilation', () => {
 		test('compiles and runs with NODE_PATH imports', ({ dir }) => {
 			mkdirSync(`${dir}/modules/math`, { recursive: true })
@@ -18,17 +18,17 @@ describe('qjsxc compiler', () => {
 				import { add, PI } from "math"
 				import { greet } from "utils"
 				console.log(JSON.stringify({
-					greeting: greet("qjsxc"),
+					greeting: greet("qnc"),
 					sum: add(2, 3),
 					pi: PI
 				}))
 			`)
 
-			$`NODE_PATH=${dir}/modules ${QJSXC()} -o ${dir}/app ${dir}/app.js`
+			$`NODE_PATH=${dir}/modules ${QNC()} -o ${dir}/app ${dir}/app.js`
 			const output = $`${dir}/app`
 
 			assert.deepStrictEqual(JSON.parse(output.trim()), {
-				greeting: "Hello, qjsxc",
+				greeting: "Hello, qnc",
 				sum: 5,
 				pi: 3.14159
 			})
@@ -41,7 +41,7 @@ describe('qjsxc compiler', () => {
 				console.log(JSON.stringify({ msg }))
 			`)
 
-			$`${QJSXC()} -o ${dir}/main ${dir}/main.js`
+			$`${QNC()} -o ${dir}/main ${dir}/main.js`
 			const output = $`${dir}/main`
 
 			assert.deepStrictEqual(JSON.parse(output.trim()), { msg: "from helper" })
@@ -70,7 +70,7 @@ describe('qjsxc compiler', () => {
 				console.log(JSON.stringify({ result: greet("dynamic") }))
 			`)
 
-			$`${QJSXC()} -o ${dir}/runtime ${dir}/runtime.js`
+			$`${QNC()} -o ${dir}/runtime ${dir}/runtime.js`
 			const output = $`NODE_PATH=${dir}/modules ${dir}/runtime ${dir}/external.js`
 
 			assert.deepStrictEqual(JSON.parse(output.trim()), { result: "Hello, dynamic" })
@@ -94,7 +94,7 @@ describe('qjsxc compiler', () => {
 				console.log(JSON.stringify({ value }))
 			`)
 
-			$`${QJSXC()} -o ${dir}/runtime ${dir}/runtime.js`
+			$`${QNC()} -o ${dir}/runtime ${dir}/runtime.js`
 			const output = $`${dir}/runtime ${dir}/script.js`
 
 			assert.deepStrictEqual(JSON.parse(output.trim()), { value: 42 })

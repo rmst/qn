@@ -11,7 +11,7 @@ const BIN = join(ROOT, 'bin', platform())
 
 export const QJSX = () => join(BIN, 'qjsx')
 export const QN = () => join(BIN, 'qn')
-export const QJSXC = () => join(BIN, 'qjsxc')
+export const QNC = () => join(BIN, 'qnc')
 export const QX = () => join(BIN, 'qx')
 
 /**

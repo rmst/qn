@@ -3,11 +3,11 @@
  * QJSX-Node Bootstrap
  *
  * This is a minimal bootstrap file that acts as an interpreter for user scripts.
- * When compiled with qjsxc using the -D flag for all node modules, it creates
+ * When compiled with qnc using the -D flag for all node modules, it creates
  * a standalone executable that can run any JavaScript file with embedded Node.js
  * compatibility modules.
  *
- * All node modules are embedded at compile time using qjsxc's -D flag, so they
+ * All node modules are embedded at compile time using qnc's -D flag, so they
  * are available to dynamically loaded scripts without needing external files.
  */
 

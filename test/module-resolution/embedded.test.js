@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync, realpathSync } from 'node:fs'
-import { QN, QJSXC } from '../util.js'
+import { QN, QNC } from '../util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), 'embedded-test-')))
 
@@ -32,7 +32,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { double } from './lib/utils.js';
 			console.log(double(21));
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, '42')
 	})
@@ -44,7 +44,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { v } from 'mylib';
 			console.log(v);
 		`)
-		$`NODE_PATH=${dir}/src/modules ${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`NODE_PATH=${dir}/src/modules ${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, 'from NODE_PATH')
 	})
@@ -59,7 +59,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			}
 			main();
 		`)
-		$`NODE_PATH=${dir}/src/modules ${QJSXC()} -D dynmod -o ${dir}/app ${dir}/src/main.js`
+		$`NODE_PATH=${dir}/src/modules ${QNC()} -D dynmod -o ${dir}/app ${dir}/src/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, 'dynamic embedded')
 	})
@@ -74,7 +74,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { v } from 'mypkg';
 			console.log(v);
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, 'standalone exports')
 	})
@@ -86,7 +86,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { v } from 'simplepkg';
 			console.log(v);
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, 'standalone index')
 	})
@@ -104,7 +104,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { util } from 'pkg/utils';
 			console.log(root, util);
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, 'root util')
 	})
@@ -123,7 +123,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { v } from 'inner';
 			console.log(result, v);
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, 'outer+nested top-level')
 	})
@@ -142,7 +142,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { inc } from 'mypkg';
 			console.log(inc(41));
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, '42')
 	})
@@ -157,7 +157,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { v } from '@myorg/pkg';
 			console.log(v);
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, 'scoped standalone')
 	})
@@ -172,7 +172,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { src as s2 } from 'nmpkg';
 			console.log(s1, s2);
 		`)
-		$`NODE_PATH=${dir}/src/libs ${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`NODE_PATH=${dir}/src/libs ${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, 'NODE_PATH node_modules')
 	})
@@ -189,7 +189,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { a } from 'pkg-a';
 			console.log(a);
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, 'from-a+from-b')
 	})
@@ -211,7 +211,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { av } from 'pkg-a';
 			console.log(av);
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, 'a+b+deep')
 	})
@@ -230,7 +230,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { result } from 'mylib';
 			console.log(result);
 		`)
-		$`cd ${dir}/src && NODE_PATH=. ${QJSXC()} -o ${dir}/app main.js`
+		$`cd ${dir}/src && NODE_PATH=. ${QNC()} -o ${dir}/app main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, 'from core via index')
 	})
@@ -246,7 +246,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { v } from 'mylib';
 			console.log(v);
 		`)
-		$`NODE_PATH=${dir}/src/modules ${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`NODE_PATH=${dir}/src/modules ${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, '20')
 	})
@@ -266,7 +266,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { absInc } from './via-abs.js';
 			console.log(inc(), absInc());
 		`)
-		$`cd ${dir}/src && ${QJSXC()} -o ${dir}/app main.js`
+		$`cd ${dir}/src && ${QNC()} -o ${dir}/app main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, '1 2')
 	})
@@ -291,7 +291,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { bInc } from 'pkg-b';
 			console.log(aInc(), bInc());
 		`)
-		$`cd ${dir}/src && NODE_PATH=libs ${QJSXC()} -o ${dir}/app main.js`
+		$`cd ${dir}/src && NODE_PATH=libs ${QNC()} -o ${dir}/app main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, '1 2')
 	})
@@ -303,7 +303,7 @@ describe('Standalone compiled binaries (source tree deleted after compilation)',
 			import { v } from '../shared.js';
 			console.log(v);
 		`)
-		$`cd ${dir}/src && ${QJSXC()} -o ${dir}/app sub/main.js`
+		$`cd ${dir}/src && ${QNC()} -o ${dir}/app sub/main.js`
 		rmSync(`${dir}/src`, { recursive: true })
 		assert.strictEqual($`${dir}/app`, 'from parent')
 	})
@@ -389,7 +389,7 @@ describe('Compiled binary namespace separation', () => {
 			}
 			main();
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		// Create a file AFTER compilation - not embedded
 		writeFileSync(`${dir}/plugin.js`, `export const v = "loaded from disk";`)
 		assert.strictEqual($`${dir}/app ${dir}/plugin.js`, 'loaded from disk')
@@ -402,7 +402,7 @@ describe('Compiled binary namespace separation', () => {
 			import { v } from 'mypkg';
 			console.log(v);
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		// Overwrite the source file with different content
 		writeFileSync(`${dir}/src/node_modules/mypkg/index.js`, `export const v = "disk";`)
 		// Bare import should still resolve to the embedded version
@@ -425,7 +425,7 @@ describe('Compiled binary namespace separation', () => {
 			}
 			main();
 		`)
-		$`cd ${dir}/src && ${QJSXC()} -o ${dir}/app main.js`
+		$`cd ${dir}/src && ${QNC()} -o ${dir}/app main.js`
 		// Overwrite with different content after compilation
 		writeFileSync(`${dir}/src/lib/utils.js`, `export const v = "disk";`)
 		// Import using the exact path that matches the embedded key
@@ -450,7 +450,7 @@ describe('Compiled binary namespace separation', () => {
 			}
 			main();
 		`)
-		$`cd ${dir}/src && ${QJSXC()} -o ${dir}/app main.js`
+		$`cd ${dir}/src && ${QNC()} -o ${dir}/app main.js`
 		writeFileSync(`${dir}/external/lib.js`, `export const v = "disk";`)
 		// Without file://: embedded version wins (shadowed)
 		// With file://: disk version is loaded
@@ -473,7 +473,7 @@ describe('Compiled binary namespace separation', () => {
 			}
 			main();
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		writeFileSync(`${dir}/disk.js`, `export const v = "disk";`)
 		assert.strictEqual($`${dir}/app ${dir}/disk.js`, 'embedded disk')
 	})
@@ -493,7 +493,7 @@ describe('file:// protocol for explicit disk imports', () => {
 			}
 			main();
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		writeFileSync(`${dir}/disk.js`, `export const v = "via file://";`)
 		assert.strictEqual($`${dir}/app ${dir}/disk.js`, 'via file://')
 	})
@@ -511,7 +511,7 @@ describe('file:// protocol for explicit disk imports', () => {
 			}
 			main();
 		`)
-		$`NODE_PATH=${dir}/src/modules ${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`NODE_PATH=${dir}/src/modules ${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		// Overwrite the file with different content
 		writeFileSync(`${dir}/src/modules/mymod.js`, `export const v = "disk version";`)
 		assert.strictEqual($`${dir}/app`, 'embedded version disk version')
@@ -532,7 +532,7 @@ describe('file:// protocol for explicit disk imports', () => {
 			}
 			main();
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/src/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/src/main.js`
 		assert.strictEqual($`${dir}/app`, 'disk helper')
 	})
 })

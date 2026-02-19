@@ -2,7 +2,7 @@
  * QJSX Module Resolution System
  *
  * Shared module resolution functions for Node.js-style module resolution.
- * Used by both qjsx (interpreter) and qjsxc (compiler).
+ * Used by both qjsx (interpreter) and qnc (compiler).
  *
  * Features:
  * - NODE_PATH environment variable support (colon-separated search directories)
@@ -281,7 +281,7 @@ typedef void (*QJSXImportRecordFn)(const char *base, const char *specifier, cons
  * Context for module resolution, passed via opaque parameter.
  *
  * Interpreter (qjsx):     embedded_modules=NULL, compile_mode=0
- * Compiler (qjsxc):       compile_mode=1, record_import set
+ * Compiler (qnc):       compile_mode=1, record_import set
  * Runtime standalone:      embedded_modules set, import_map set
  */
 typedef struct {
@@ -958,7 +958,7 @@ static char *compile_mode_normalize(JSContext *ctx, const char *base_name,
  *
  * Three modes of operation:
  *   1. Interpreter (qjsx): filesystem-only resolution
- *   2. Compiler (qjsxc): filesystem resolution + embedded:// prefix
+ *   2. Compiler (qnc): filesystem resolution + embedded:// prefix
  *   3. Runtime standalone: import map + embedded list + disk fallback
  *
  * Embedded modules are prefixed with "embedded://" to separate them from disk

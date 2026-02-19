@@ -1,6 +1,6 @@
 # Module Resolution
 
-Shared module resolution for the qjsx interpreter, the qjsxc compiler, and standalone compiled binaries. Implemented in `module-resolution.h`.
+Shared module resolution for the qjsx interpreter, the qnc compiler, and standalone compiled binaries. Implemented in `module-resolution.h`.
 
 ## Import Specifiers
 
@@ -43,7 +43,7 @@ Relative imports resolve against the **real location** (after symlink resolution
 
 ## Standalone Compiled Binaries
 
-`qjsxc` compiles JavaScript into standalone executables. All imported modules are embedded in the binary. The module resolution system handles three distinct contexts:
+`qnc` compiles JavaScript into standalone executables. All imported modules are embedded in the binary. The module resolution system handles three distinct contexts:
 
 ### Namespaces
 
@@ -54,7 +54,7 @@ Embedded and disk modules live in separate namespaces in QuickJS's module cache:
 
 These can never collide, even if they refer to the same original file.
 
-### Compile time (qjsxc)
+### Compile time (qnc)
 
 The compiler resolves all imports on the filesystem and assigns each module an `embedded://` prefixed name:
 
@@ -86,7 +86,7 @@ At runtime, any script (embedded or disk) importing `<name>` as a bare import ca
 
 ```bash
 # Embed node:fs for dynamic use by external scripts
-NODE_PATH=./node qjsxc -D node:fs -o runtime bootstrap.js
+NODE_PATH=./node qnc -D node:fs -o runtime bootstrap.js
 
 # External scripts can now import it
 ./runtime user-script.js  # can use: import { readFileSync } from "node:fs"

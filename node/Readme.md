@@ -5,7 +5,7 @@ Standalone QuickJS executable with embedded Node.js-compatible modules.
 ## Building
 
 Built automatically via `make build`. The build:
-- Compiles `node/bootstrap.js` with `qjsxc`
+- Compiles `node/bootstrap.js` with `qnc`
 - Embeds all modules from `node/node/` directory
 - Uses `NODE_PATH=./node` for module resolution
 

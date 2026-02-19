@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync, realpathSync } from 'node:fs'
-import { QN, QJSXC } from '../util.js'
+import { QN, QNC } from '../util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), 'symlink-test-')))
 
@@ -405,7 +405,7 @@ describe('Symlink Resolution with Compilation', () => {
 		symlinkSync(`${dir}/real/main.js`, `${dir}/linked/main.js`)
 
 		// Compile via symlink path
-		$`${QJSXC()} -o ${dir}/app ${dir}/linked/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/linked/main.js`
 
 		// Run compiled binary
 		const output = $`${dir}/app`

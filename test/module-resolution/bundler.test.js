@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync, realpathSync } from 'node:fs'
-import { QN, QJSXC } from '../util.js'
+import { QN, QNC } from '../util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), 'module-res-test-')))
 
@@ -404,7 +404,7 @@ describe('Bundler Mode Compilation', () => {
 			import { greet } from 'node:mymod';
 			console.log(greet());
 		`)
-		$`NODE_PATH=${dir} ${QJSXC()} -o ${dir}/app ${dir}/main.js`
+		$`NODE_PATH=${dir} ${QNC()} -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, 'hello')
 	})
@@ -419,7 +419,7 @@ describe('Bundler Mode Compilation', () => {
 			}
 			main();
 		`)
-		$`NODE_PATH=${dir} ${QJSXC()} -D mylibs:dynamic -o ${dir}/app ${dir}/main.js`
+		$`NODE_PATH=${dir} ${QNC()} -D mylibs:dynamic -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, '99')
 	})
@@ -431,7 +431,7 @@ describe('Bundler Mode Compilation', () => {
 			import { helper } from './lib/helper.js';
 			console.log(helper(21));
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, '42')
 	})
@@ -443,7 +443,7 @@ describe('Bundler Mode Compilation', () => {
 			import { val } from 'myutil';
 			console.log(val);
 		`)
-		$`NODE_PATH=${dir}/modules ${QJSXC()} -o ${dir}/app ${dir}/main.js`
+		$`NODE_PATH=${dir}/modules ${QNC()} -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, 'bare import works')
 	})
@@ -458,7 +458,7 @@ describe('Bundler Mode Compilation', () => {
 			import { v } from 'mypkg';
 			console.log(v);
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, 'compiled nm')
 	})
@@ -476,7 +476,7 @@ describe('Bundler Mode Compilation', () => {
 			import { util } from 'pkg/utils';
 			console.log(root, util);
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, 'root util')
 	})
@@ -492,7 +492,7 @@ describe('Bundler Mode Compilation', () => {
 			import { v } from 'linkpkg';
 			console.log(v);
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, 'symlinked pkg')
 	})
@@ -509,7 +509,7 @@ describe('Bundler Mode Compilation', () => {
 			import { result } from 'outer';
 			console.log(result);
 		`)
-		$`${QJSXC()} -o ${dir}/app ${dir}/main.js`
+		$`${QNC()} -o ${dir}/app ${dir}/main.js`
 		const output = $`${dir}/app`
 		assert.strictEqual(output, 'outer+inner')
 	})
