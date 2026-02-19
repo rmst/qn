@@ -2,14 +2,18 @@
  * Shared utilities for bootstrap files (qn and qx)
  */
 
-import * as os from "os"
+import { statSync, S_IFMT, S_IFDIR } from "qn:uv-fs"
 import { resolve } from "node:path"
 import * as std from "std"
 
 /** Check if a path is a directory */
 export function isDirectory(path) {
-	const [stat, err] = os.stat(path)
-	return err === 0 && (stat.mode & os.S_IFMT) === os.S_IFDIR
+	try {
+		const st = statSync(path)
+		return (st.mode & S_IFMT) === S_IFDIR
+	} catch {
+		return false
+	}
 }
 
 /**

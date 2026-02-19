@@ -394,6 +394,39 @@ static void check_cb(uv_check_t *handle) {
 }
 
 /* --------------------------------------------------------------------------
+ * randomFill(size) → Uint8Array
+ *
+ * Fills a new buffer with cryptographically strong random bytes via uv_random()
+ * (getrandom(2) on Linux, getentropy() on macOS, BCryptGenRandom on Windows).
+ * Replaces the /dev/urandom approach in node:crypto.
+ *
+ * Uses NULL loop for synchronous operation (same as txiki.js).
+ * Node.js uses OpenSSL's RAND_bytes instead since it already bundles OpenSSL.
+ * -------------------------------------------------------------------------- */
+
+static JSValue js_vm_randomFill(JSContext *ctx, JSValueConst this_val,
+                                 int argc, JSValueConst *argv) {
+	int64_t size;
+	if (JS_ToInt64(ctx, &size, argv[0]))
+		return JS_EXCEPTION;
+	if (size < 0 || size > 256 * 1024)
+		return JS_ThrowRangeError(ctx, "size must be 0..262144");
+
+	uint8_t *buf = js_malloc(ctx, size ? size : 1);
+	if (!buf) return JS_EXCEPTION;
+
+	if (size > 0) {
+		int r = uv_random(NULL, NULL, buf, (size_t)size, 0, NULL);
+		if (r != 0) {
+			js_free(ctx, buf);
+			return qn_throw_errno(ctx, r);
+		}
+	}
+
+	return qn_new_uint8array(ctx, buf, (size_t)size);
+}
+
+/* --------------------------------------------------------------------------
  * JS module: qn_vm
  * -------------------------------------------------------------------------- */
 
@@ -402,6 +435,7 @@ static const JSCFunctionListEntry vm_funcs[] = {
 	QN_CFUNC_DEF("clearTimeout", 1, js_vm_clearTimeout),
 	QN_CFUNC_MAGIC_DEF("setReadHandler", 2, js_vm_setRWHandler, 0),
 	QN_CFUNC_MAGIC_DEF("setWriteHandler", 2, js_vm_setRWHandler, 1),
+	QN_CFUNC_DEF("randomFill", 1, js_vm_randomFill),
 };
 
 static int js_vm_module_init(JSContext *ctx, JSModuleDef *m) {

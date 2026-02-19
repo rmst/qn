@@ -4,8 +4,7 @@
  * sha256-uint8array.ts
  */
 
-import * as std from 'std'
-import * as os from 'os'
+import { randomFill } from 'qn_vm'
 import { Buffer } from 'node:buffer'
 
 
@@ -265,7 +264,7 @@ function isBE() {
 
 /**
  * Generate cryptographically strong random bytes.
- * Reads from /dev/urandom on Unix systems.
+ * Uses libuv's uv_random() (getrandom/getentropy/BCryptGenRandom).
  * @param {number} size - Number of bytes to generate
  * @returns {Buffer}
  */
@@ -273,22 +272,7 @@ export function randomBytes(size) {
 	if (typeof size !== 'number' || size < 0 || size !== Math.floor(size)) {
 		throw new TypeError(`The "size" argument must be a non-negative integer. Received ${size}`)
 	}
-	const buf = new ArrayBuffer(size)
-	const fd = os.open('/dev/urandom', os.O_RDONLY)
-	if (fd < 0) {
-		throw new Error('Failed to open /dev/urandom')
-	}
-	try {
-		let offset = 0
-		while (offset < size) {
-			const n = os.read(fd, buf, offset, size - offset)
-			if (n <= 0) throw new Error('Failed to read from /dev/urandom')
-			offset += n
-		}
-	} finally {
-		os.close(fd)
-	}
-	return Buffer.from(buf)
+	return Buffer.from(randomFill(size))
 }
 
 /**

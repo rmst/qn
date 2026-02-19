@@ -2,7 +2,7 @@
  * Glob pattern matching for node:fs
  */
 
-import * as os from 'os'
+import { statSync } from 'qn:uv-fs'
 import picomatch from '../glob/index.js'
 // Use relative import to avoid circular dependency with node:fs
 import { readdirSync, lstatSync } from './index.js'
@@ -17,7 +17,7 @@ import { readdirSync, lstatSync } from './index.js'
  * @returns {string[]|Dirent[]} Array of matching paths
  */
 export function globSync(pattern, options = {}) {
-	const cwd = options.cwd || (typeof process !== 'undefined' ? process.cwd() : os.getcwd()[0])
+	const cwd = options.cwd || process.cwd()
 	const exclude = options.exclude
 	const withFileTypes = options.withFileTypes || false
 
@@ -124,15 +124,16 @@ export function globSync(pattern, options = {}) {
 	}
 
 	// Start walking from each base directory
-	const originalCwd = os.getcwd()[0]
+	const originalCwd = process.cwd()
 	try {
-		os.chdir(cwd)
+		process.chdir(cwd)
 
 		for (const baseDir of baseDirs) {
 			const startDir = baseDir === '' ? '.' : baseDir
 			// Check if base directory exists before walking
-			const [, err] = os.stat(startDir)
-			if (err === 0) {
+			let exists = true
+			try { statSync(startDir) } catch { exists = false }
+			if (exists) {
 				if (baseDir && baseDir !== '.') {
 					// Start walking from base, but include base in relative path
 					walk(startDir, baseDir)
@@ -142,7 +143,7 @@ export function globSync(pattern, options = {}) {
 			}
 		}
 	} finally {
-		os.chdir(originalCwd)
+		process.chdir(originalCwd)
 	}
 
 	return results

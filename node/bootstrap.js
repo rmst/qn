@@ -12,12 +12,12 @@
  */
 
 import * as std from "std"
-import * as os from "os"
 import "node-globals"
 import { resolve } from "node:path"
 import { globSync } from "node:fs"
 import { commit, buildTime } from "qn:version-info"
 import { isDirectory, resolveDirectoryEntry } from "./qn/bootstrap-utils.js"
+import { statSync, S_IFMT, S_IFREG } from "qn:uv-fs"
 
 /** Check if a pattern contains glob special characters */
 function isGlobPattern(pattern) {
@@ -26,8 +26,12 @@ function isGlobPattern(pattern) {
 
 /** Check if a file exists */
 function fileExists(path) {
-	const [stat, err] = os.stat(path)
-	return err === 0 && (stat.mode & os.S_IFMT) === os.S_IFREG
+	try {
+		const st = statSync(path)
+		return (st.mode & S_IFMT) === S_IFREG
+	} catch {
+		return false
+	}
 }
 
 /**
@@ -70,7 +74,7 @@ const GREEN = '\x1b[32m'
 async function runTestsParallel(testFiles, concurrency) {
 	const { spawn } = await import('node:child_process')
 	const qnBin = scriptArgs[0]
-	const [cwd] = os.getcwd()
+	const cwd = process.cwd()
 
 	if (concurrency <= 0) concurrency = getCpuCount()
 

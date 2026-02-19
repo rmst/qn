@@ -3,7 +3,7 @@
  * Implements POSIX path operations
  */
 
-import * as os from 'os'
+// Note: process.cwd() / process.chdir() come from node:process (node-globals)
 
 export const sep = '/'
 export const delimiter = ':'
@@ -151,11 +151,7 @@ function normalizeNoTrailing(path) {
  * @returns {string}
  */
 function getCwd() {
-	const [dir, error] = os.getcwd()
-	if (error !== 0) {
-		throw new Error("Couldn't get working directory")
-	}
-	return dir
+	return process.cwd()
 }
 
 /**

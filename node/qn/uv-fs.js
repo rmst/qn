@@ -1,8 +1,9 @@
 /*
- * qn:uv-fs - Typed JS wrappers over the single-dispatch C _fsop function.
+ * qn:uv-fs - Typed JS wrappers over the single-dispatch C _fsop/_fssync functions.
  *
  * This module is the JS-side API for qn_uv_fs. It provides named functions
- * that call _fsop(opcode, ...args). Open flags parsing lives here in JS.
+ * that call _fsop(opcode, ...args) for async and _fssync(opcode, ...args) for sync.
+ * Open flags parsing lives here in JS.
  */
 
 import {
@@ -12,11 +13,13 @@ import {
 	RENAME, SYMLINK, LINK, READLINK, REALPATH, ACCESS, CHMOD, UTIMES,
 	CHOWN, LCHOWN, COPYFILE, MKDTEMP,
 	O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, O_EXCL,
+	S_IFMT, S_IFREG, S_IFDIR, S_IFLNK, S_IFBLK, S_IFCHR, S_IFIFO, S_IFSOCK,
 	setNonBlock, getpgid,
 } from 'qn_uv_fs'
 
 /* Open flags parser (moved from C — uses platform constants) */
 function parseOpenFlags(str) {
+	if (typeof str === 'number') return str
 	let flags = 0, rd = 0, wr = 0
 	for (let i = 0; i < str.length; i++) {
 		switch (str[i]) {
@@ -30,6 +33,8 @@ function parseOpenFlags(str) {
 	flags |= rd ? (wr ? O_RDWR : O_RDONLY) : (wr ? O_WRONLY : 0)
 	return flags
 }
+
+/* ---- Async (promise-returning) ---- */
 
 /* fd primitives */
 export const open      = (path, flags, mode) => _fsop(OPEN, parseOpenFlags(flags), mode ?? 0o666, path)
@@ -64,10 +69,37 @@ export const lchown    = (path, uid, gid) => _fsop(LCHOWN, path, uid, gid)
 export const copyfile  = (src, dst) => _fsop(COPYFILE, src, dst)
 export const mkdtemp   = (template) => _fsop(MKDTEMP, template)
 
-/* Synchronous variants for chmodSync/chownSync/lchownSync */
-export const chmodSync  = (path, mode) => _fssync(CHMOD, path, mode)
-export const chownSync  = (path, uid, gid) => _fssync(CHOWN, path, uid, gid)
-export const lchownSync = (path, uid, gid) => _fssync(LCHOWN, path, uid, gid)
+/* ---- Synchronous ---- */
 
-/* Re-export utilities */
-export { setNonBlock, getpgid }
+export const openSync      = (path, flags, mode) => _fssync(OPEN, parseOpenFlags(flags), mode ?? 0o666, path)
+export const closeSync     = (fd) => _fssync(CLOSE, fd)
+export const statSync      = (path) => _fssync(STAT, path)
+export const lstatSync     = (path) => _fssync(LSTAT, path)
+export const fstatSync     = (fd) => _fssync(FSTAT, fd)
+export const readdirSync   = (path) => _fssync(READDIR, path)
+export const mkdirSync     = (path, mode) => _fssync(MKDIR, path, mode)
+export const unlinkSync    = (path) => _fssync(UNLINK, path)
+export const rmdirSync     = (path) => _fssync(RMDIR, path)
+export const renameSync    = (oldPath, newPath) => _fssync(RENAME, oldPath, newPath)
+export const symlinkSync   = (target, path) => _fssync(SYMLINK, target, path)
+export const linkSync      = (path, newPath) => _fssync(LINK, path, newPath)
+export const readlinkSync  = (path) => _fssync(READLINK, path)
+export const realpathSync  = (path) => _fssync(REALPATH, path)
+export const accessSync    = (path, mode) => _fssync(ACCESS, path, mode)
+export const chmodSync     = (path, mode) => _fssync(CHMOD, path, mode)
+export const utimesSync    = (path, atime, mtime) => _fssync(UTIMES, path, atime, mtime)
+export const chownSync     = (path, uid, gid) => _fssync(CHOWN, path, uid, gid)
+export const lchownSync    = (path, uid, gid) => _fssync(LCHOWN, path, uid, gid)
+export const copyfileSync  = (src, dst) => _fssync(COPYFILE, src, dst)
+export const mkdtempSync   = (template) => _fssync(MKDTEMP, template)
+export const ftruncateSync = (fd, len) => _fssync(FTRUNCATE, fd, len)
+export const fchmodSync    = (fd, mode) => _fssync(FCHMOD, fd, mode)
+export const fchownSync    = (fd, uid, gid) => _fssync(FCHOWN, fd, uid, gid)
+export const futimeSync    = (fd, atime, mtime) => _fssync(FUTIME, fd, atime, mtime)
+export const fsyncSync     = (fd) => _fssync(FSYNC, fd)
+export const fdatasyncSync = (fd) => _fssync(FDATASYNC, fd)
+
+/* Re-export constants and utilities */
+export { O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, O_EXCL }
+export { S_IFMT, S_IFREG, S_IFDIR, S_IFLNK, S_IFBLK, S_IFCHR, S_IFIFO, S_IFSOCK }
+export { setNonBlock, getpgid, parseOpenFlags }

@@ -12,6 +12,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sys/stat.h>
 #if !defined(_WIN32)
 #include <unistd.h>
 #endif
@@ -499,20 +500,25 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 
 	JSValueConst *args = argv + 1;
 
-	uv_loop_t *loop = js_uv_loop(ctx);
+	/* NULL loop + NULL callback = synchronous execution.
+	 * Same pattern as Node.js (SyncCallAndThrowIf) and txiki.js. */
 	uv_fs_t req;
 	int r;
-	const char *s1;
-	int32_t i1, i2;
+	const char *s1 = NULL, *s2 = NULL;
+	int32_t i1, i2, i3;
+	double d1, d2;
+	JSValue result = JS_UNDEFINED;
 
 	(void)argc;
 
 	switch (op) {
+
+	/* -- path ops returning 0 -- */
 	case FS_CHMOD:
 		s1 = JS_ToCString(ctx, args[0]);
 		if (!s1) return JS_EXCEPTION;
 		if (JS_ToInt32(ctx, &i1, args[1])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
-		r = uv_fs_chmod(loop, &req, s1, i1, NULL);
+		r = uv_fs_chmod(NULL, &req, s1, i1, NULL);
 		JS_FreeCString(ctx, s1);
 		break;
 
@@ -521,7 +527,7 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 		if (!s1) return JS_EXCEPTION;
 		if (JS_ToInt32(ctx, &i1, args[1])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
 		if (JS_ToInt32(ctx, &i2, args[2])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
-		r = uv_fs_chown(loop, &req, s1, i1, i2, NULL);
+		r = uv_fs_chown(NULL, &req, s1, i1, i2, NULL);
 		JS_FreeCString(ctx, s1);
 		break;
 
@@ -530,8 +536,223 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 		if (!s1) return JS_EXCEPTION;
 		if (JS_ToInt32(ctx, &i1, args[1])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
 		if (JS_ToInt32(ctx, &i2, args[2])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
-		r = uv_fs_lchown(loop, &req, s1, i1, i2, NULL);
+		r = uv_fs_lchown(NULL, &req, s1, i1, i2, NULL);
 		JS_FreeCString(ctx, s1);
+		break;
+
+	case FS_MKDIR:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		i1 = 0777;
+		if (argc > 2 && !JS_IsUndefined(args[1]))
+			if (JS_ToInt32(ctx, &i1, args[1])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
+		r = uv_fs_mkdir(NULL, &req, s1, i1, NULL);
+		JS_FreeCString(ctx, s1);
+		break;
+
+	case FS_UNLINK:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		r = uv_fs_unlink(NULL, &req, s1, NULL);
+		JS_FreeCString(ctx, s1);
+		break;
+
+	case FS_RMDIR:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		r = uv_fs_rmdir(NULL, &req, s1, NULL);
+		JS_FreeCString(ctx, s1);
+		break;
+
+	case FS_RENAME:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		s2 = JS_ToCString(ctx, args[1]);
+		if (!s2) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
+		r = uv_fs_rename(NULL, &req, s1, s2, NULL);
+		JS_FreeCString(ctx, s1);
+		JS_FreeCString(ctx, s2);
+		break;
+
+	case FS_SYMLINK:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		s2 = JS_ToCString(ctx, args[1]);
+		if (!s2) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
+		r = uv_fs_symlink(NULL, &req, s1, s2, 0, NULL);
+		JS_FreeCString(ctx, s1);
+		JS_FreeCString(ctx, s2);
+		break;
+
+	case FS_LINK:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		s2 = JS_ToCString(ctx, args[1]);
+		if (!s2) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
+		r = uv_fs_link(NULL, &req, s1, s2, NULL);
+		JS_FreeCString(ctx, s1);
+		JS_FreeCString(ctx, s2);
+		break;
+
+	case FS_COPYFILE:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		s2 = JS_ToCString(ctx, args[1]);
+		if (!s2) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
+		r = uv_fs_copyfile(NULL, &req, s1, s2, 0, NULL);
+		JS_FreeCString(ctx, s1);
+		JS_FreeCString(ctx, s2);
+		break;
+
+	case FS_UTIMES:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		if (JS_ToFloat64(ctx, &d1, args[1])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
+		if (JS_ToFloat64(ctx, &d2, args[2])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
+		r = uv_fs_utime(NULL, &req, s1, d1, d2, NULL);
+		JS_FreeCString(ctx, s1);
+		break;
+
+	case FS_ACCESS:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		i1 = 0; /* F_OK */
+		if (argc > 2 && !JS_IsUndefined(args[1]))
+			if (JS_ToInt32(ctx, &i1, args[1])) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
+		r = uv_fs_access(NULL, &req, s1, i1, NULL);
+		JS_FreeCString(ctx, s1);
+		break;
+
+	/* -- ops returning stat object -- */
+	case FS_STAT:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		r = uv_fs_stat(NULL, &req, s1, NULL);
+		JS_FreeCString(ctx, s1);
+		if (r >= 0)
+			result = make_stat_obj(ctx, &req.statbuf);
+		break;
+
+	case FS_LSTAT:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		r = uv_fs_lstat(NULL, &req, s1, NULL);
+		JS_FreeCString(ctx, s1);
+		if (r >= 0)
+			result = make_stat_obj(ctx, &req.statbuf);
+		break;
+
+	case FS_FSTAT:
+		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		r = uv_fs_fstat(NULL, &req, i1, NULL);
+		if (r >= 0)
+			result = make_stat_obj(ctx, &req.statbuf);
+		break;
+
+	/* -- ops returning string -- */
+	case FS_READLINK:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		r = uv_fs_readlink(NULL, &req, s1, NULL);
+		JS_FreeCString(ctx, s1);
+		if (r >= 0)
+			result = JS_NewString(ctx, req.ptr);
+		break;
+
+	case FS_REALPATH:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		r = uv_fs_realpath(NULL, &req, s1, NULL);
+		JS_FreeCString(ctx, s1);
+		if (r >= 0)
+			result = JS_NewString(ctx, req.ptr);
+		break;
+
+	/* -- readdir returning string array -- */
+	case FS_READDIR: {
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		r = uv_fs_scandir(NULL, &req, s1, 0, NULL);
+		JS_FreeCString(ctx, s1);
+		if (r >= 0) {
+			JSValue arr = JS_NewArray(ctx);
+			uv_dirent_t ent;
+			uint32_t idx = 0;
+			while (uv_fs_scandir_next(&req, &ent) != UV_EOF) {
+				JS_DefinePropertyValueUint32(ctx, arr, idx,
+					JS_NewString(ctx, ent.name), JS_PROP_C_W_E);
+				idx++;
+			}
+			result = arr;
+		}
+		break;
+	}
+
+	/* -- open returning fd -- */
+	case FS_OPEN:
+		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION; /* flags */
+		if (JS_ToInt32(ctx, &i2, args[1])) return JS_EXCEPTION; /* mode */
+		s1 = JS_ToCString(ctx, args[2]);                        /* path */
+		if (!s1) return JS_EXCEPTION;
+		r = uv_fs_open(NULL, &req, s1, i1, i2, NULL);
+		JS_FreeCString(ctx, s1);
+		if (r >= 0)
+			result = JS_NewInt32(ctx, r);
+		break;
+
+	/* -- close -- */
+	case FS_CLOSE:
+		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		r = uv_fs_close(NULL, &req, i1, NULL);
+		break;
+
+	/* -- mkdtemp returning path string -- */
+	case FS_MKDTEMP:
+		s1 = JS_ToCString(ctx, args[0]);
+		if (!s1) return JS_EXCEPTION;
+		r = uv_fs_mkdtemp(NULL, &req, s1, NULL);
+		JS_FreeCString(ctx, s1);
+		if (r >= 0)
+			result = JS_NewString(ctx, req.path);
+		break;
+
+	/* -- fd ops -- */
+	case FS_FTRUNCATE:
+		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		{ int64_t len = 0;
+		  if (argc > 2 && !JS_IsUndefined(args[1]))
+			if (JS_ToInt64(ctx, &len, args[1])) return JS_EXCEPTION;
+		  r = uv_fs_ftruncate(NULL, &req, i1, len, NULL); }
+		break;
+
+	case FS_FCHMOD:
+		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		if (JS_ToInt32(ctx, &i2, args[1])) return JS_EXCEPTION;
+		r = uv_fs_fchmod(NULL, &req, i1, i2, NULL);
+		break;
+
+	case FS_FCHOWN:
+		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		if (JS_ToInt32(ctx, &i2, args[1])) return JS_EXCEPTION;
+		if (JS_ToInt32(ctx, &i3, args[2])) return JS_EXCEPTION;
+		r = uv_fs_fchown(NULL, &req, i1, i2, i3, NULL);
+		break;
+
+	case FS_FUTIME:
+		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		if (JS_ToFloat64(ctx, &d1, args[1])) return JS_EXCEPTION;
+		if (JS_ToFloat64(ctx, &d2, args[2])) return JS_EXCEPTION;
+		r = uv_fs_futime(NULL, &req, i1, d1, d2, NULL);
+		break;
+
+	case FS_FSYNC:
+		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		r = uv_fs_fsync(NULL, &req, i1, NULL);
+		break;
+
+	case FS_FDATASYNC:
+		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		r = uv_fs_fdatasync(NULL, &req, i1, NULL);
 		break;
 
 	default:
@@ -541,7 +762,8 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 	uv_fs_req_cleanup(&req);
 	if (r < 0)
 		return qn_throw_errno(ctx, r);
-	return JS_NewInt32(ctx, 0);
+	/* If a result was built (stat, readdir, etc.), return it; otherwise 0 */
+	return JS_IsUndefined(result) ? JS_NewInt32(ctx, 0) : result;
 }
 
 /* ==== Utility functions ====
@@ -593,6 +815,15 @@ static const JSCFunctionListEntry js_uv_fs_funcs[] = {
 	QN_CONST(O_TRUNC),
 	QN_CONST(O_APPEND),
 	QN_CONST(O_EXCL),
+	/* Stat mode type constants */
+	QN_CONST(S_IFMT),
+	QN_CONST(S_IFREG),
+	QN_CONST(S_IFDIR),
+	QN_CONST(S_IFLNK),
+	QN_CONST(S_IFBLK),
+	QN_CONST(S_IFCHR),
+	QN_CONST(S_IFIFO),
+	QN_CONST(S_IFSOCK),
 	/* Opcode constants */
 	QN_CONST2("OPEN", FS_OPEN),
 	QN_CONST2("CLOSE", FS_CLOSE),
