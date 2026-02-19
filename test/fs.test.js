@@ -462,15 +462,16 @@ describe('node:fs shim', () => {
 		writeFileSync(`${dir}/input.txt`, 'file descriptor test')
 		writeFileSync(`${dir}/test.js`, `
 			import { openSync, closeSync } from 'node:fs'
-			const fd = openSync('${dir}/input.txt', 'r')
-			const fdIsNumber = typeof fd === 'number'
-			const fdPositive = fd >= 0
-			closeSync(fd)
-			console.log(JSON.stringify({ fdIsNumber, fdPositive }))
+			const fh = openSync('${dir}/input.txt', 'r')
+			const isObject = typeof fh === 'object' && fh !== null
+			const hasFd = typeof fh.fd === 'number' && fh.fd >= 0
+			closeSync(fh)
+			const fdAfterClose = fh.fd
+			console.log(JSON.stringify({ isObject, hasFd, fdAfterClose }))
 		`)
 
 		const output = $`${bin} ${dir}/test.js`
-		assert.deepStrictEqual(JSON.parse(output), { fdIsNumber: true, fdPositive: true })
+		assert.deepStrictEqual(JSON.parse(output), { isObject: true, hasFd: true, fdAfterClose: -1 })
 	})
 
 	testQnOnly('globSync matches files in current directory', ({ bin, dir }) => {

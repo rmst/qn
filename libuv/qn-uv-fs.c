@@ -33,6 +33,93 @@ static uint8_t *qn_get_uint8array(JSContext *ctx, size_t *psize, JSValueConst ob
 	return buf + byte_offset;
 }
 
+/* ---- QNFile: GC-safe file descriptor wrapper ---- */
+
+static JSClassID qn_file_class_id;
+
+typedef struct {
+	int fd;
+} QNFile;
+
+static void qn_file_finalizer(JSRuntime *rt, JSValue val) {
+	QNFile *f = JS_GetOpaque(val, qn_file_class_id);
+	if (f) {
+		if (f->fd != -1) {
+			uv_fs_t req;
+			uv_fs_close(NULL, &req, f->fd, NULL);
+			uv_fs_req_cleanup(&req);
+		}
+		js_free_rt(rt, f);
+	}
+}
+
+static JSClassDef qn_file_class = {
+	"FileHandle",
+	.finalizer = qn_file_finalizer,
+};
+
+static JSValue qn_new_file(JSContext *ctx, int fd) {
+	QNFile *f = js_malloc(ctx, sizeof(*f));
+	if (!f) return JS_EXCEPTION;
+	f->fd = fd;
+	JSValue obj = JS_NewObjectClass(ctx, qn_file_class_id);
+	if (JS_IsException(obj)) {
+		js_free(ctx, f);
+		return JS_EXCEPTION;
+	}
+	JS_SetOpaque(obj, f);
+	return obj;
+}
+
+/* .fd getter — exposes the raw fd number to JS */
+static JSValue qn_file_get_fd(JSContext *ctx, JSValueConst this_val) {
+	QNFile *f = JS_GetOpaque2(ctx, this_val, qn_file_class_id);
+	if (!f) return JS_EXCEPTION;
+	return JS_NewInt32(ctx, f->fd);
+}
+
+static const JSCFunctionListEntry qn_file_proto_funcs[] = {
+	QN_CGETSET_DEF("fd", qn_file_get_fd, NULL),
+};
+
+/* Extract fd from a QNFile object or raw integer.
+ * Returns the fd on success, -1 on error (JS exception set). */
+static int qn_get_fd(JSContext *ctx, JSValueConst val) {
+	if (JS_IsNumber(val)) {
+		int32_t fd;
+		if (JS_ToInt32(ctx, &fd, val))
+			return -1;
+		return fd;
+	}
+	QNFile *f = JS_GetOpaque2(ctx, val, qn_file_class_id);
+	if (!f) return -1;
+	if (f->fd == -1) {
+		JS_ThrowTypeError(ctx, "file descriptor already closed");
+		return -1;
+	}
+	return f->fd;
+}
+
+/* Extract fd from QNFile and mark it as closed (prevents finalizer double-close).
+ * For raw integers, just returns the value unchanged. */
+static int qn_close_fd(JSContext *ctx, JSValueConst val) {
+	if (JS_IsNumber(val)) {
+		int32_t fd;
+		if (JS_ToInt32(ctx, &fd, val))
+			return -1;
+		return fd;
+	}
+	QNFile *f = JS_GetOpaque2(ctx, val, qn_file_class_id);
+	if (!f) return -1;
+	if (f->fd == -1) {
+		JS_ThrowTypeError(ctx, "file descriptor already closed");
+		return -1;
+	}
+	int fd = f->fd;
+	f->fd = -1;
+	return fd;
+}
+
 /* ---- fs request struct ---- */
 
 typedef struct {
@@ -114,6 +201,9 @@ static void qn_fs_req_cb(uv_fs_t *req) {
 
 	switch (req->fs_type) {
 		case UV_FS_OPEN:
+			arg = qn_new_file(ctx, req->result);
+			break;
+
 		case UV_FS_READ:
 		case UV_FS_WRITE:
 			arg = JS_NewInt32(ctx, req->result);
@@ -237,13 +327,15 @@ static JSValue js_uv_fsop(JSContext *ctx, JSValueConst this_val,
 
 	/* -- close(fd) -- */
 	case FS_CLOSE:
-		if (JS_ToInt32(ctx, &i1, args[0])) goto fail;
+		i1 = qn_close_fd(ctx, args[0]);
+		if (i1 < 0) goto fail;
 		r = uv_fs_close(loop, &fr->req, i1, qn_fs_req_cb);
 		break;
 
 	/* -- read(fd, buffer, position) -- */
 	case FS_READ:
-		if (JS_ToInt32(ctx, &i1, args[0])) goto fail;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) goto fail;
 		buf = qn_get_uint8array(ctx, &bufsize, args[1]);
 		if (!buf) goto fail;
 		i64 = -1;
@@ -256,7 +348,8 @@ static JSValue js_uv_fsop(JSContext *ctx, JSValueConst this_val,
 
 	/* -- write(fd, buffer, position) -- */
 	case FS_WRITE:
-		if (JS_ToInt32(ctx, &i1, args[0])) goto fail;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) goto fail;
 		buf = qn_get_uint8array(ctx, &bufsize, args[1]);
 		if (!buf) goto fail;
 		i64 = -1;
@@ -269,12 +362,14 @@ static JSValue js_uv_fsop(JSContext *ctx, JSValueConst this_val,
 
 	/* -- fd-only ops: fstat, fsync, fdatasync, close already handled -- */
 	case FS_FSTAT:
-		if (JS_ToInt32(ctx, &i1, args[0])) goto fail;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) goto fail;
 		r = uv_fs_fstat(loop, &fr->req, i1, qn_fs_req_cb);
 		break;
 
 	case FS_FTRUNCATE:
-		if (JS_ToInt32(ctx, &i1, args[0])) goto fail;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) goto fail;
 		i64 = 0;
 		if (nargs > 1 && !JS_IsUndefined(args[1]))
 			if (JS_ToInt64(ctx, &i64, args[1])) goto fail;
@@ -282,30 +377,35 @@ static JSValue js_uv_fsop(JSContext *ctx, JSValueConst this_val,
 		break;
 
 	case FS_FSYNC:
-		if (JS_ToInt32(ctx, &i1, args[0])) goto fail;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) goto fail;
 		r = uv_fs_fsync(loop, &fr->req, i1, qn_fs_req_cb);
 		break;
 
 	case FS_FDATASYNC:
-		if (JS_ToInt32(ctx, &i1, args[0])) goto fail;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) goto fail;
 		r = uv_fs_fdatasync(loop, &fr->req, i1, qn_fs_req_cb);
 		break;
 
 	case FS_FCHMOD:
-		if (JS_ToInt32(ctx, &i1, args[0])) goto fail;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) goto fail;
 		if (JS_ToInt32(ctx, &i2, args[1])) goto fail;
 		r = uv_fs_fchmod(loop, &fr->req, i1, i2, qn_fs_req_cb);
 		break;
 
 	case FS_FCHOWN:
-		if (JS_ToInt32(ctx, &i1, args[0])) goto fail;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) goto fail;
 		if (JS_ToInt32(ctx, &i2, args[1])) goto fail;
 		if (JS_ToInt32(ctx, &i3, args[2])) goto fail;
 		r = uv_fs_fchown(loop, &fr->req, i1, i2, i3, qn_fs_req_cb);
 		break;
 
 	case FS_FUTIME:
-		if (JS_ToInt32(ctx, &i1, args[0])) goto fail;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) goto fail;
 		if (JS_ToFloat64(ctx, &d1, args[1])) goto fail;
 		if (JS_ToFloat64(ctx, &d2, args[2])) goto fail;
 		r = uv_fs_futime(loop, &fr->req, i1, d1, d2, qn_fs_req_cb);
@@ -518,7 +618,8 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 
 	/* -- read(fd, Uint8Array, position) → bytes_read -- */
 	case FS_READ:
-		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) return JS_EXCEPTION;
 		buf = qn_get_uint8array(ctx, &bufsize, args[1]);
 		if (!buf) return JS_EXCEPTION;
 		i64 = -1;
@@ -532,7 +633,8 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 
 	/* -- write(fd, Uint8Array, position) → bytes_written -- */
 	case FS_WRITE:
-		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) return JS_EXCEPTION;
 		buf = qn_get_uint8array(ctx, &bufsize, args[1]);
 		if (!buf) return JS_EXCEPTION;
 		i64 = -1;
@@ -674,7 +776,8 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 		break;
 
 	case FS_FSTAT:
-		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) return JS_EXCEPTION;
 		r = uv_fs_fstat(NULL, &req, i1, NULL);
 		if (r >= 0)
 			result = make_stat_obj(ctx, &req.statbuf);
@@ -719,7 +822,7 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 		break;
 	}
 
-	/* -- open returning fd -- */
+	/* -- open returning QNFile -- */
 	case FS_OPEN:
 		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION; /* flags */
 		if (JS_ToInt32(ctx, &i2, args[1])) return JS_EXCEPTION; /* mode */
@@ -728,12 +831,13 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 		r = uv_fs_open(NULL, &req, s1, i1, i2, NULL);
 		JS_FreeCString(ctx, s1);
 		if (r >= 0)
-			result = JS_NewInt32(ctx, r);
+			result = qn_new_file(ctx, r);
 		break;
 
 	/* -- close -- */
 	case FS_CLOSE:
-		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		i1 = qn_close_fd(ctx, args[0]);
+		if (i1 < 0) return JS_EXCEPTION;
 		r = uv_fs_close(NULL, &req, i1, NULL);
 		break;
 
@@ -749,7 +853,8 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 
 	/* -- fd ops -- */
 	case FS_FTRUNCATE:
-		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) return JS_EXCEPTION;
 		{ int64_t len = 0;
 		  if (argc > 2 && !JS_IsUndefined(args[1]))
 			if (JS_ToInt64(ctx, &len, args[1])) return JS_EXCEPTION;
@@ -757,32 +862,37 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 		break;
 
 	case FS_FCHMOD:
-		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) return JS_EXCEPTION;
 		if (JS_ToInt32(ctx, &i2, args[1])) return JS_EXCEPTION;
 		r = uv_fs_fchmod(NULL, &req, i1, i2, NULL);
 		break;
 
 	case FS_FCHOWN:
-		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) return JS_EXCEPTION;
 		if (JS_ToInt32(ctx, &i2, args[1])) return JS_EXCEPTION;
 		if (JS_ToInt32(ctx, &i3, args[2])) return JS_EXCEPTION;
 		r = uv_fs_fchown(NULL, &req, i1, i2, i3, NULL);
 		break;
 
 	case FS_FUTIME:
-		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) return JS_EXCEPTION;
 		if (JS_ToFloat64(ctx, &d1, args[1])) return JS_EXCEPTION;
 		if (JS_ToFloat64(ctx, &d2, args[2])) return JS_EXCEPTION;
 		r = uv_fs_futime(NULL, &req, i1, d1, d2, NULL);
 		break;
 
 	case FS_FSYNC:
-		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) return JS_EXCEPTION;
 		r = uv_fs_fsync(NULL, &req, i1, NULL);
 		break;
 
 	case FS_FDATASYNC:
-		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		i1 = qn_get_fd(ctx, args[0]);
+		if (i1 < 0) return JS_EXCEPTION;
 		r = uv_fs_fdatasync(NULL, &req, i1, NULL);
 		break;
 
@@ -805,7 +915,8 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 static JSValue js_uv_set_nonblock(JSContext *ctx, JSValueConst this_val,
                                    int argc, JSValueConst *argv) {
 	int fd, flags;
-	if (JS_ToInt32(ctx, &fd, argv[0]))
+	fd = qn_get_fd(ctx, argv[0]);
+	if (fd < 0)
 		return JS_EXCEPTION;
 	flags = fcntl(fd, F_GETFL);
 	if (flags < 0)
@@ -890,6 +1001,14 @@ static const JSCFunctionListEntry js_uv_fs_funcs[] = {
 };
 
 static int js_uv_fs_init(JSContext *ctx, JSModuleDef *m) {
+	/* Register QNFile class with prototype */
+	JS_NewClassID(&qn_file_class_id);
+	JS_NewClass(JS_GetRuntime(ctx), qn_file_class_id, &qn_file_class);
+	JSValue proto = JS_NewObject(ctx);
+	JS_SetPropertyFunctionList(ctx, proto, qn_file_proto_funcs,
+	                           countof(qn_file_proto_funcs));
+	JS_SetClassProto(ctx, qn_file_class_id, proto);
+
 	return JS_SetModuleExportList(ctx, m, js_uv_fs_funcs,
 	                              countof(js_uv_fs_funcs));
 }

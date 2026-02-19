@@ -14,10 +14,12 @@ export function parseStdio(stdio) {
 		return ['ignore', 'ignore', 'ignore']
 	}
 	if (Array.isArray(stdio)) {
+		/* Extract raw fd from QNFile objects (returned by openSync) */
+		const unwrap = v => (v != null && typeof v === 'object' && typeof v.fd === 'number') ? v.fd : v
 		return [
-			stdio[0] ?? 'pipe',
-			stdio[1] ?? 'pipe',
-			stdio[2] ?? 'pipe',
+			unwrap(stdio[0]) ?? 'pipe',
+			unwrap(stdio[1]) ?? 'pipe',
+			unwrap(stdio[2]) ?? 'pipe',
 		]
 	}
 	throw new TypeError(`Invalid stdio option: ${stdio}`)
