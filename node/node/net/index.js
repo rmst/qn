@@ -61,6 +61,9 @@ export class Socket extends EventEmitter {
 		}
 	}
 
+	/** Expose internal handle for TLS integration (matches Node.js convention). */
+	get _handle() { return this.#handle }
+
 	get readyState() {
 		if (this.#connecting) return 'opening'
 		if (this.#connected) return 'open'
@@ -456,13 +459,6 @@ export function createConnection(options, callback) {
 }
 
 export const connect = createConnection
-
-/*
- * Keep qn_socket embedded in the binary so that test scripts and legacy code
- * can still `import ... from 'qn_socket'`. This import will be removed once
- * all tests are migrated to node:net.
- */
-import 'qn_socket'
 
 export default {
 	Socket,

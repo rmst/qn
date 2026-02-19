@@ -1,5 +1,5 @@
 --- quickjs/qjsc.c	2026-02-18 15:49:15.799575407 +0000
-+++ bin/linux/obj/qjsxc.c	2026-02-19 02:52:12.578181337 +0000
++++ bin/linux/obj/qjsxc.c	2026-02-19 09:10:18.232745199 +0000
 @@ -1,5 +1,8 @@
  /*
 - * QuickJS command line compiler
@@ -391,7 +391,20 @@
          fprintf(fo,
                  "static JSContext *JS_NewCustomContext(JSRuntime *rt)\n"
                  "{\n"
-@@ -843,11 +1017,12 @@
+@@ -823,10 +997,10 @@
+         for(i = 0; i < cname_list.count; i++) {
+             namelist_entry_t *e = &cname_list.array[i];
+             if (e->flags == CNAME_TYPE_MODULE) {
+-                fprintf(fo, "  js_std_eval_binary(ctx, %s, %s_size, 1);\n",
++                fprintf(fo, "  qn_vm_eval_binary(ctx, %s, %s_size, 1);\n",
+                         e->name, e->name);
+             } else if (e->flags == CNAME_TYPE_JSON_MODULE) {
+-                fprintf(fo, "  js_std_eval_binary_json_module(ctx, %s, %s_size, (const char *)%s_module_name);\n",
++                fprintf(fo, "  qn_vm_eval_binary_json_module(ctx, %s, %s_size, (const char *)%s_module_name);\n",
+                         e->name, e->name, e->name);
+             }
+         }
+@@ -843,21 +1017,30 @@
  
          /* add the module loader if necessary */
          if (feature_bitmap & (1 << FE_MODULE_LOADER)) {
@@ -405,13 +418,16 @@
                  "  js_std_add_helpers(ctx, argc, argv);\n");
  
          for(i = 0; i < cname_list.count; i++) {
-@@ -857,7 +1032,15 @@
+             namelist_entry_t *e = &cname_list.array[i];
+             if (e->flags == CNAME_TYPE_SCRIPT) {
+-                fprintf(fo, "  js_std_eval_binary(ctx, %s, %s_size, 0);\n",
++                fprintf(fo, "  qn_vm_eval_binary(ctx, %s, %s_size, 0);\n",
                          e->name, e->name);
              }
          }
 -        fputs(main_c_template2, fo);
 +        fprintf(fo,
-+                "  js_std_loop(ctx);\n"
++                "  qn_vm_loop(ctx);\n"
 +                "  int exit_code = qjsx_call_exit_handler(ctx);\n"
 +                "  qn_vm_free(rt);\n"
 +                "  js_std_free_handlers(rt);\n"

@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync, realpathSync } from 'node:fs'
-import { QJSX, QN, QJSXC } from '../util.js'
+import { QN, QJSXC } from '../util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), 'symlink-test-')))
 
@@ -38,7 +38,7 @@ describe('Symlink Resolution', () => {
 		symlinkSync(`${dir}/real/main.js`, `${dir}/linked/main.js`)
 
 		// Running via symlink should still find helper.js in the real directory
-		const output = $`${QJSX()} ${dir}/linked/main.js`
+		const output = $`${QN()} ${dir}/linked/main.js`
 		assert.strictEqual(output, 'from real helper')
 	})
 
@@ -55,7 +55,7 @@ describe('Symlink Resolution', () => {
 		symlinkSync(`${dir}/real/src`, `${dir}/linked-src`)
 
 		// Running via symlinked directory should work
-		const output = $`${QJSX()} ${dir}/linked-src/main.js`
+		const output = $`${QN()} ${dir}/linked-src/main.js`
 		assert.strictEqual(output, '42')
 	})
 
@@ -72,7 +72,7 @@ describe('Symlink Resolution', () => {
 		symlinkSync(`${dir}/real/lib`, `${dir}/linked-lib`)
 
 		// Running via symlinked directory should find ../utils.js in the real parent
-		const output = $`${QJSX()} ${dir}/linked-lib/consumer.js`
+		const output = $`${QN()} ${dir}/linked-lib/consumer.js`
 		assert.strictEqual(output, 'utility')
 	})
 
@@ -89,7 +89,7 @@ describe('Symlink Resolution', () => {
 			import { x } from '${dir}/link-module.js';
 			console.log(x);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'real')
 	})
 
@@ -110,7 +110,7 @@ describe('Symlink Resolution', () => {
 			import { getCount as c2 } from '${dir}/link-singleton.js';
 			console.log(c1(), c2());
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		// If properly canonicalized, both imports reference the same module
 		// so count increments only once per call: "1 2"
 		// If NOT canonicalized, each would be separate: "1 1"
@@ -135,7 +135,7 @@ describe('Symlink Resolution', () => {
 			import { getA } from './pkg/a.js'
 			console.log(getA())
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'a got b: b (a=a-value)')
 	})
 
@@ -153,7 +153,7 @@ describe('Symlink Resolution', () => {
 		`)
 		symlinkSync(`${dir}/pkg`, `${dir}/link`)
 
-		const output = $`${QJSX()} ${dir}/pkg/a.js`
+		const output = $`${QN()} ${dir}/pkg/a.js`
 		// Same module identity → shared counter: "1 2"
 		assert.strictEqual(output, '1 2')
 	})
@@ -171,7 +171,7 @@ describe('Symlink Resolution', () => {
 			import { y } from '${dir}/linked/noext';
 			console.log(y);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'found')
 	})
 
@@ -188,7 +188,7 @@ describe('Symlink Resolution', () => {
 			import { pkg } from '${dir}/linked/mypackage';
 			console.log(pkg);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'package')
 	})
 })
@@ -263,7 +263,7 @@ describe('Symlink Resolution with bare imports', () => {
 	// Tests for cycle detection when a symlink causes a bare import
 	// (via NODE_PATH or node_modules) to resolve back to an already-loaded module.
 
-	test('circular import through node_modules symlink with qjsx', ({ dir }) => {
+	test('circular import through node_modules symlink with qn', ({ dir }) => {
 		// a.js -> ./lib/b.js -> ./c.js -> self/a.js (via node_modules symlink)
 		mkdirSync(`${dir}/lib`)
 		mkdirSync(`${dir}/node_modules`)
@@ -282,7 +282,7 @@ describe('Symlink Resolution with bare imports', () => {
 		`)
 		symlinkSync(dir, `${dir}/node_modules/self`)
 
-		const output = $`${QJSX()} ${dir}/a.js`
+		const output = $`${QN()} ${dir}/a.js`
 		assert.strictEqual(output, 'a: b-value')
 	})
 
@@ -308,7 +308,7 @@ describe('Symlink Resolution with bare imports', () => {
 		assert.strictEqual(output, 'a: b-value')
 	})
 
-	test('circular import through NODE_PATH symlink with qjsx', ({ dir }) => {
+	test('circular import through NODE_PATH symlink with qn', ({ dir }) => {
 		// Same pattern but using NODE_PATH instead of node_modules
 		mkdirSync(`${dir}/lib`)
 		mkdirSync(`${dir}/pkg`)
@@ -327,7 +327,7 @@ describe('Symlink Resolution with bare imports', () => {
 		`)
 		symlinkSync(dir, `${dir}/pkg/self`)
 
-		const output = $`NODE_PATH=${dir}/pkg ${QJSX()} ${dir}/a.js`
+		const output = $`NODE_PATH=${dir}/pkg ${QN()} ${dir}/a.js`
 		assert.strictEqual(output, 'a: b-value')
 	})
 

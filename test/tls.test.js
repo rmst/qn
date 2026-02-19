@@ -95,33 +95,28 @@ describe('qn_tls native module', () => {
 		try {
 			writeFileSync(`${dir}/test.js`, `
 				import * as tls from 'node:tls'
-				import { socket, connect, connectFinish, getaddrinfo, AF_INET, SOCK_STREAM, EINPROGRESS } from 'qn_socket'
-				import * as os from 'os'
-			import { setReadHandler, setWriteHandler } from 'qn_vm'
+				import { _op, TCP_NEW, TCP_CONNECT, SET_ON_CONNECT, CLOSE, AF_INET } from 'qn_uv_stream'
 
 				tls.loadCACerts(${JSON.stringify(certFile)})
-				const addrs = getaddrinfo('127.0.0.1', ${port}, { family: AF_INET })
-				const fd = socket(addrs[0].family, SOCK_STREAM)
-				const ret = connect(fd, addrs[0].address, ${port})
-				if (ret === -EINPROGRESS) {
-					await new Promise((resolve) => {
-						setWriteHandler(fd, () => {
-							setWriteHandler(fd, null)
-							connectFinish(fd)
-							resolve()
-						})
+				const handle = _op(TCP_NEW, AF_INET)
+				await new Promise((resolve, reject) => {
+					_op(SET_ON_CONNECT, handle, (err) => {
+						if (err) reject(err)
+						else resolve()
 					})
-				}
-				const conn = tls.connect(fd, 'localhost')
-				await tls.handshake(conn, fd)
+					_op(TCP_CONNECT, handle, '127.0.0.1', ${port})
+				})
+				const transport = tls.streamTransport(handle)
+				const conn = tls.connect('localhost')
+				await tls.handshake(conn, transport)
 				const req = 'GET /text HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n'
-				await tls.writeAll(conn, fd, new TextEncoder().encode(req))
+				await tls.writeAll(conn, transport, new TextEncoder().encode(req))
 				const buf = new ArrayBuffer(65536)
-				const n = await tls.read(conn, fd, buf, 0, 65536)
+				const n = await tls.read(conn, transport, buf, 0, 65536)
 				const text = new TextDecoder().decode(new Uint8Array(buf, 0, n))
 				console.log(text.startsWith('HTTP/1.1 200') ? 'ok' : 'bad: ' + text.substring(0, 50))
-				await tls.close(conn, fd)
-				os.close(fd)
+				await tls.close(conn, transport)
+				_op(CLOSE, handle)
 			`)
 			const output = await execAsync(bin, [`${dir}/test.js`], {
 				env: { NODE_EXTRA_CA_CERTS: certFile }
@@ -283,36 +278,38 @@ describe('TLS server', { concurrency: true }, () => {
 	testQnOnly('TLS server accept and serve response', async ({ bin, dir }) => {
 		writeFileSync(`${dir}/server.js`, `
 			import * as tls from 'node:tls'
-			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
-			import * as os from 'os'
-			import { setReadHandler, setWriteHandler } from 'qn_vm'
+			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
+			const tcpNew = (f) => _op(TCP_NEW, f)
+			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
+			const uvListen = (h, backlog) => _op(LISTEN, h, backlog)
+			const setOnConnection = (h, fn) => _op(SET_ON_CONNECTION, h, fn)
+			const tcpGetsockname = (h) => _op(TCP_GETSOCKNAME, h)
+			const streamClose = (h) => _op(CLOSE, h)
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
 
-			const fd = socket(AF_INET, SOCK_STREAM)
-			setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
-			bind(fd, '127.0.0.1', 0)
-			listen(fd, 1)
-			const addr = getsockname(fd)
-			console.log(addr.port)
+			const server = tcpNew(AF_INET)
+			tcpBind(server, '127.0.0.1', 0)
+			uvListen(server, 1)
+			console.log(tcpGetsockname(server).port)
 
-			setReadHandler(fd, async () => {
-				const result = accept(fd)
-				if (!result) return
-				setReadHandler(fd, null)
+			setOnConnection(server, async (clientHandle) => {
+				if (clientHandle instanceof Error) return
+				setOnConnection(server, null)
 
-				const conn = tls.accept(result.fd, cred)
-				await tls.handshake(conn, result.fd)
+				const transport = tls.streamTransport(clientHandle)
+				const conn = tls.accept(cred)
+				await tls.handshake(conn, transport)
 
 				const buf = new ArrayBuffer(65536)
-				await tls.read(conn, result.fd, buf, 0, 65536)
+				await tls.read(conn, transport, buf, 0, 65536)
 
 				const body = 'Hello from qn TLS server!'
 				const response = 'HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\nContent-Length: ' + body.length + '\\r\\nConnection: close\\r\\n\\r\\n' + body
-				await tls.writeAll(conn, result.fd, new TextEncoder().encode(response))
-				await tls.close(conn, result.fd)
-				os.close(result.fd)
-				os.close(fd)
+				await tls.writeAll(conn, transport, new TextEncoder().encode(response))
+				await tls.close(conn, transport)
+				streamClose(clientHandle)
+				streamClose(server)
 			})
 		`)
 
@@ -334,32 +331,34 @@ describe('TLS server', { concurrency: true }, () => {
 	testQnOnly('TLS server handles POST with body', async ({ bin, dir }) => {
 		writeFileSync(`${dir}/server.js`, `
 			import * as tls from 'node:tls'
-			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
-			import * as os from 'os'
-			import { setReadHandler, setWriteHandler } from 'qn_vm'
+			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
+			const tcpNew = (f) => _op(TCP_NEW, f)
+			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
+			const uvListen = (h, backlog) => _op(LISTEN, h, backlog)
+			const setOnConnection = (h, fn) => _op(SET_ON_CONNECTION, h, fn)
+			const tcpGetsockname = (h) => _op(TCP_GETSOCKNAME, h)
+			const streamClose = (h) => _op(CLOSE, h)
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
 
-			const fd = socket(AF_INET, SOCK_STREAM)
-			setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
-			bind(fd, '127.0.0.1', 0)
-			listen(fd, 1)
-			const addr = getsockname(fd)
-			console.log(addr.port)
+			const server = tcpNew(AF_INET)
+			tcpBind(server, '127.0.0.1', 0)
+			uvListen(server, 1)
+			console.log(tcpGetsockname(server).port)
 
-			setReadHandler(fd, async () => {
-				const result = accept(fd)
-				if (!result) return
-				setReadHandler(fd, null)
+			setOnConnection(server, async (clientHandle) => {
+				if (clientHandle instanceof Error) return
+				setOnConnection(server, null)
 
-				const conn = tls.accept(result.fd, cred)
-				await tls.handshake(conn, result.fd)
+				const transport = tls.streamTransport(clientHandle)
+				const conn = tls.accept(cred)
+				await tls.handshake(conn, transport)
 
 				// Read until we have complete headers + body
 				const buf = new ArrayBuffer(65536)
 				let accumulated = new Uint8Array(0)
 				while (true) {
-					const n = await tls.read(conn, result.fd, buf, 0, 65536)
+					const n = await tls.read(conn, transport, buf, 0, 65536)
 					if (n <= 0) break
 					const prev = accumulated
 					accumulated = new Uint8Array(prev.length + n)
@@ -380,10 +379,10 @@ describe('TLS server', { concurrency: true }, () => {
 
 				const body = JSON.stringify({ echo: reqBody })
 				const response = 'HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\nContent-Length: ' + new TextEncoder().encode(body).length + '\\r\\nConnection: close\\r\\n\\r\\n' + body
-				await tls.writeAll(conn, result.fd, new TextEncoder().encode(response))
-				await tls.close(conn, result.fd)
-				os.close(result.fd)
-				os.close(fd)
+				await tls.writeAll(conn, transport, new TextEncoder().encode(response))
+				await tls.close(conn, transport)
+				streamClose(clientHandle)
+				streamClose(server)
 			})
 		`)
 
@@ -410,40 +409,42 @@ describe('TLS server', { concurrency: true }, () => {
 	testQnOnly('TLS server with multiple sequential connections', async ({ bin, dir }) => {
 		writeFileSync(`${dir}/server.js`, `
 			import * as tls from 'node:tls'
-			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
-			import * as os from 'os'
-			import { setReadHandler, setWriteHandler } from 'qn_vm'
+			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
+			const tcpNew = (f) => _op(TCP_NEW, f)
+			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
+			const uvListen = (h, backlog) => _op(LISTEN, h, backlog)
+			const setOnConnection = (h, fn) => _op(SET_ON_CONNECTION, h, fn)
+			const tcpGetsockname = (h) => _op(TCP_GETSOCKNAME, h)
+			const streamClose = (h) => _op(CLOSE, h)
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
 
-			const fd = socket(AF_INET, SOCK_STREAM)
-			setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
-			bind(fd, '127.0.0.1', 0)
-			listen(fd, 2)
-			const addr = getsockname(fd)
-			console.log(addr.port)
+			const server = tcpNew(AF_INET)
+			tcpBind(server, '127.0.0.1', 0)
+			uvListen(server, 2)
+			console.log(tcpGetsockname(server).port)
 
 			let count = 0
-			setReadHandler(fd, async () => {
-				const result = accept(fd)
-				if (!result) return
+			setOnConnection(server, async (clientHandle) => {
+				if (clientHandle instanceof Error) return
 
-				const conn = tls.accept(result.fd, cred)
-				await tls.handshake(conn, result.fd)
+				const transport = tls.streamTransport(clientHandle)
+				const conn = tls.accept(cred)
+				await tls.handshake(conn, transport)
 
 				const buf = new ArrayBuffer(65536)
-				await tls.read(conn, result.fd, buf, 0, 65536)
+				await tls.read(conn, transport, buf, 0, 65536)
 
 				count++
 				const body = 'request ' + count
 				const response = 'HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\nContent-Length: ' + body.length + '\\r\\nConnection: close\\r\\n\\r\\n' + body
-				await tls.writeAll(conn, result.fd, new TextEncoder().encode(response))
-				await tls.close(conn, result.fd)
-				os.close(result.fd)
+				await tls.writeAll(conn, transport, new TextEncoder().encode(response))
+				await tls.close(conn, transport)
+				streamClose(clientHandle)
 
 				if (count >= 2) {
-					setReadHandler(fd, null)
-					os.close(fd)
+					setOnConnection(server, null)
+					streamClose(server)
 				}
 			})
 		`)
@@ -671,32 +672,35 @@ if (!NO_NODE) describe('Streaming response body', { concurrency: true }, () => {
 function writeRawServer(dir, rawResponseExpr) {
 	const script = `
 		import * as tls from 'node:tls'
-		import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
-		import * as os from 'os'
-			import { setReadHandler, setWriteHandler } from 'qn_vm'
+		import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
+			const tcpNew = (f) => _op(TCP_NEW, f)
+			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
+			const uvListen = (h, backlog) => _op(LISTEN, h, backlog)
+			const setOnConnection = (h, fn) => _op(SET_ON_CONNECTION, h, fn)
+			const tcpGetsockname = (h) => _op(TCP_GETSOCKNAME, h)
+			const streamClose = (h) => _op(CLOSE, h)
 
 		const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
-		const fd = socket(AF_INET, SOCK_STREAM)
-		setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
-		bind(fd, '127.0.0.1', 0)
-		listen(fd, 1)
-		console.log(getsockname(fd).port)
+		const server = tcpNew(AF_INET)
+		tcpBind(server, '127.0.0.1', 0)
+		uvListen(server, 1)
+		console.log(tcpGetsockname(server).port)
 
-		setReadHandler(fd, async () => {
-			const result = accept(fd)
-			if (!result) return
-			setReadHandler(fd, null)
-			const conn = tls.accept(result.fd, cred)
-			await tls.handshake(conn, result.fd)
+		setOnConnection(server, async (clientHandle) => {
+			if (clientHandle instanceof Error) return
+			setOnConnection(server, null)
+			const transport = tls.streamTransport(clientHandle)
+			const conn = tls.accept(cred)
+			await tls.handshake(conn, transport)
 			// Read the request (and discard it)
 			const buf = new ArrayBuffer(65536)
-			await tls.read(conn, result.fd, buf, 0, 65536)
+			await tls.read(conn, transport, buf, 0, 65536)
 			// Send the raw response
 			const raw = ${rawResponseExpr}
-			await tls.writeAll(conn, result.fd, typeof raw === 'string' ? new TextEncoder().encode(raw) : raw)
-			await tls.close(conn, result.fd)
-			os.close(result.fd)
-			os.close(fd)
+			await tls.writeAll(conn, transport, typeof raw === 'string' ? new TextEncoder().encode(raw) : raw)
+			await tls.close(conn, transport)
+			streamClose(clientHandle)
+			streamClose(server)
 		})
 	`
 	writeFileSync(`${dir}/server.js`, script)
@@ -730,29 +734,32 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 	testQnOnly('server closes connection immediately (no response)', async ({ bin, dir }) => {
 		const script = `
 			import * as tls from 'node:tls'
-			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
-			import * as os from 'os'
-			import { setReadHandler, setWriteHandler } from 'qn_vm'
+			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
+			const tcpNew = (f) => _op(TCP_NEW, f)
+			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
+			const uvListen = (h, backlog) => _op(LISTEN, h, backlog)
+			const setOnConnection = (h, fn) => _op(SET_ON_CONNECTION, h, fn)
+			const tcpGetsockname = (h) => _op(TCP_GETSOCKNAME, h)
+			const streamClose = (h) => _op(CLOSE, h)
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
-			const fd = socket(AF_INET, SOCK_STREAM)
-			setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
-			bind(fd, '127.0.0.1', 0)
-			listen(fd, 1)
-			console.log(getsockname(fd).port)
+			const server = tcpNew(AF_INET)
+			tcpBind(server, '127.0.0.1', 0)
+			uvListen(server, 1)
+			console.log(tcpGetsockname(server).port)
 
-			setReadHandler(fd, async () => {
-				const result = accept(fd)
-				if (!result) return
-				setReadHandler(fd, null)
-				const conn = tls.accept(result.fd, cred)
-				await tls.handshake(conn, result.fd)
+			setOnConnection(server, async (clientHandle) => {
+				if (clientHandle instanceof Error) return
+				setOnConnection(server, null)
+				const transport = tls.streamTransport(clientHandle)
+				const conn = tls.accept(cred)
+				await tls.handshake(conn, transport)
 				// Read the request then close immediately without responding
 				const buf = new ArrayBuffer(65536)
-				await tls.read(conn, result.fd, buf, 0, 65536)
-				await tls.close(conn, result.fd)
-				os.close(result.fd)
-				os.close(fd)
+				await tls.read(conn, transport, buf, 0, 65536)
+				await tls.close(conn, transport)
+				streamClose(clientHandle)
+				streamClose(server)
 			})
 		`
 		writeFileSync(`${dir}/server.js`, script)
@@ -854,35 +861,35 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 		// Server that always redirects to itself
 		const script = `
 			import * as tls from 'node:tls'
-			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
-			import * as os from 'os'
-			import { setReadHandler, setWriteHandler } from 'qn_vm'
+			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
+			const tcpNew = (f) => _op(TCP_NEW, f)
+			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
+			const uvListen = (h, backlog) => _op(LISTEN, h, backlog)
+			const setOnConnection = (h, fn) => _op(SET_ON_CONNECTION, h, fn)
+			const tcpGetsockname = (h) => _op(TCP_GETSOCKNAME, h)
+			const streamClose = (h) => _op(CLOSE, h)
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
-			const fd = socket(AF_INET, SOCK_STREAM)
-			setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
-			bind(fd, '127.0.0.1', 0)
-			listen(fd, 128)
-			const port = getsockname(fd).port
+			const server = tcpNew(AF_INET)
+			tcpBind(server, '127.0.0.1', 0)
+			uvListen(server, 128)
+			const port = tcpGetsockname(server).port
 			console.log(port)
 
-			const handleClient = async () => {
-				setReadHandler(fd, async () => {
-					const result = accept(fd)
-					if (!result) return
-					const conn = tls.accept(result.fd, cred)
-					try {
-						await tls.handshake(conn, result.fd)
-						const buf = new ArrayBuffer(65536)
-						await tls.read(conn, result.fd, buf, 0, 65536)
-						const response = 'HTTP/1.1 302 Found\\r\\nLocation: https://localhost:' + port + '/loop\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n'
-						await tls.writeAll(conn, result.fd, new TextEncoder().encode(response))
-					} catch {}
-					try { await tls.close(conn, result.fd) } catch {}
-					try { os.close(result.fd) } catch {}
-				})
-			}
-			handleClient()
+			setOnConnection(server, async (clientHandle) => {
+				if (clientHandle instanceof Error) return
+				const transport = tls.streamTransport(clientHandle)
+				const conn = tls.accept(cred)
+				try {
+					await tls.handshake(conn, transport)
+					const buf = new ArrayBuffer(65536)
+					await tls.read(conn, transport, buf, 0, 65536)
+					const response = 'HTTP/1.1 302 Found\\r\\nLocation: https://localhost:' + port + '/loop\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n'
+					await tls.writeAll(conn, transport, new TextEncoder().encode(response))
+				} catch {}
+				try { await tls.close(conn, transport) } catch {}
+				try { streamClose(clientHandle) } catch {}
+			})
 		`
 		writeFileSync(`${dir}/server.js`, script)
 		const { port, close } = await startQnTlsServer(`${dir}/server.js`)
@@ -946,41 +953,44 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 		// Server that sends 1MB of data
 		const script = `
 			import * as tls from 'node:tls'
-			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
-			import * as os from 'os'
-			import { setReadHandler, setWriteHandler } from 'qn_vm'
+			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
+			const tcpNew = (f) => _op(TCP_NEW, f)
+			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
+			const uvListen = (h, backlog) => _op(LISTEN, h, backlog)
+			const setOnConnection = (h, fn) => _op(SET_ON_CONNECTION, h, fn)
+			const tcpGetsockname = (h) => _op(TCP_GETSOCKNAME, h)
+			const streamClose = (h) => _op(CLOSE, h)
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
-			const fd = socket(AF_INET, SOCK_STREAM)
-			setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
-			bind(fd, '127.0.0.1', 0)
-			listen(fd, 1)
-			console.log(getsockname(fd).port)
+			const server = tcpNew(AF_INET)
+			tcpBind(server, '127.0.0.1', 0)
+			uvListen(server, 1)
+			console.log(tcpGetsockname(server).port)
 
-			setReadHandler(fd, async () => {
-				const result = accept(fd)
-				if (!result) return
-				setReadHandler(fd, null)
-				const conn = tls.accept(result.fd, cred)
-				await tls.handshake(conn, result.fd)
+			setOnConnection(server, async (clientHandle) => {
+				if (clientHandle instanceof Error) return
+				setOnConnection(server, null)
+				const transport = tls.streamTransport(clientHandle)
+				const conn = tls.accept(cred)
+				await tls.handshake(conn, transport)
 				const buf = new ArrayBuffer(65536)
-				await tls.read(conn, result.fd, buf, 0, 65536)
+				await tls.read(conn, transport, buf, 0, 65536)
 
 				const bodySize = 1024 * 1024
 				const header = 'HTTP/1.1 200 OK\\r\\nContent-Length: ' + bodySize + '\\r\\nConnection: close\\r\\n\\r\\n'
-				await tls.writeAll(conn, result.fd, new TextEncoder().encode(header))
+				await tls.writeAll(conn, transport, new TextEncoder().encode(header))
 				// Send body in 64KB chunks
 				const chunk = new Uint8Array(65536)
 				chunk.fill(0x41) // 'A'
 				let sent = 0
 				while (sent < bodySize) {
 					const toSend = Math.min(65536, bodySize - sent)
-					await tls.writeAll(conn, result.fd, chunk.subarray(0, toSend))
+					await tls.writeAll(conn, transport, chunk.subarray(0, toSend))
 					sent += toSend
 				}
-				await tls.close(conn, result.fd)
-				os.close(result.fd)
-				os.close(fd)
+				await tls.close(conn, transport)
+				streamClose(clientHandle)
+				streamClose(server)
 			})
 		`
 		writeFileSync(`${dir}/server.js`, script)
@@ -1005,35 +1015,38 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 		// Server that sends headers quickly, then delays body
 		const script = `
 			import * as tls from 'node:tls'
-			import { socket, bind, listen, accept, setsockopt, getsockname, AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR } from 'qn_socket'
-			import * as os from 'os'
-			import { setReadHandler, setWriteHandler } from 'qn_vm'
+			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
+			const tcpNew = (f) => _op(TCP_NEW, f)
+			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
+			const uvListen = (h, backlog) => _op(LISTEN, h, backlog)
+			const setOnConnection = (h, fn) => _op(SET_ON_CONNECTION, h, fn)
+			const tcpGetsockname = (h) => _op(TCP_GETSOCKNAME, h)
+			const streamClose = (h) => _op(CLOSE, h)
 
 			const cred = tls.loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
-			const fd = socket(AF_INET, SOCK_STREAM)
-			setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
-			bind(fd, '127.0.0.1', 0)
-			listen(fd, 1)
-			console.log(getsockname(fd).port)
+			const server = tcpNew(AF_INET)
+			tcpBind(server, '127.0.0.1', 0)
+			uvListen(server, 1)
+			console.log(tcpGetsockname(server).port)
 
-			setReadHandler(fd, async () => {
-				const result = accept(fd)
-				if (!result) return
-				setReadHandler(fd, null)
-				const conn = tls.accept(result.fd, cred)
-				await tls.handshake(conn, result.fd)
+			setOnConnection(server, async (clientHandle) => {
+				if (clientHandle instanceof Error) return
+				setOnConnection(server, null)
+				const transport = tls.streamTransport(clientHandle)
+				const conn = tls.accept(cred)
+				await tls.handshake(conn, transport)
 				const buf = new ArrayBuffer(65536)
-				await tls.read(conn, result.fd, buf, 0, 65536)
+				await tls.read(conn, transport, buf, 0, 65536)
 
 				// Send headers with a large content-length, then send data slowly
 				const header = 'HTTP/1.1 200 OK\\r\\nContent-Length: 10000\\r\\nConnection: close\\r\\n\\r\\n'
-				await tls.writeAll(conn, result.fd, new TextEncoder().encode(header))
+				await tls.writeAll(conn, transport, new TextEncoder().encode(header))
 				// Send a small bit then wait forever
-				await tls.writeAll(conn, result.fd, new TextEncoder().encode('partial'))
+				await tls.writeAll(conn, transport, new TextEncoder().encode('partial'))
 				await new Promise(r => setTimeout(r, 5000))
-				try { await tls.close(conn, result.fd) } catch {}
-				os.close(result.fd)
-				os.close(fd)
+				try { await tls.close(conn, transport) } catch {}
+				streamClose(clientHandle)
+				streamClose(server)
 			})
 		`
 		writeFileSync(`${dir}/server.js`, script)

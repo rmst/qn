@@ -94,6 +94,8 @@ enum {
 	PROC_GET_PID,
 	PROC_SET_ON_EXIT,
 	PROC_CLOSE,
+	PROC_SPAWN_SYNC,
+	PROC_KILL_PID,
 };
 
 /* ---- Helper: convert JS string array to C string array ---- */
@@ -131,6 +133,372 @@ static void free_cstrings(JSContext *ctx, char **strs, int count) {
 	js_free(ctx, strs);
 }
 
+/* ---- Shared argument parsing for spawn/spawnSync ---- */
+
+typedef struct {
+	const char *file;
+	char **spawn_args;   /* [file, ...args, NULL] */
+	char **c_args;       /* args from JS (for freeing) */
+	int args_count;
+	const char *cwd;
+	char **env;
+	int env_count;
+	int detached;
+} SpawnArgs;
+
+/*
+ * Parse spawn(file, args_array, options) into SpawnArgs.
+ * Caller must call spawn_args_free() after uv_spawn.
+ * Returns 0 on success, -1 on error (JS exception set).
+ */
+static int spawn_args_parse(JSContext *ctx, int nargs, JSValueConst *args,
+                            SpawnArgs *sa) {
+	memset(sa, 0, sizeof(*sa));
+
+	sa->file = JS_ToCString(ctx, args[0]);
+	if (!sa->file) return -1;
+
+	if (!JS_IsUndefined(args[1])) {
+		sa->c_args = js_array_to_cstrings(ctx, args[1], &sa->args_count);
+		if (!sa->c_args) { JS_FreeCString(ctx, sa->file); return -1; }
+	}
+
+	sa->spawn_args = js_malloc(ctx, sizeof(char *) * (sa->args_count + 2));
+	if (!sa->spawn_args) {
+		if (sa->c_args) free_cstrings(ctx, sa->c_args, sa->args_count);
+		JS_FreeCString(ctx, sa->file);
+		return -1;
+	}
+	sa->spawn_args[0] = (char *)sa->file;
+	for (int i = 0; i < sa->args_count; i++)
+		sa->spawn_args[i + 1] = sa->c_args ? sa->c_args[i] : NULL;
+	sa->spawn_args[sa->args_count + 1] = NULL;
+
+	JSValue opts = nargs > 2 ? args[2] : JS_UNDEFINED;
+	if (!JS_IsUndefined(opts)) {
+		JSValue v;
+
+		v = JS_GetPropertyStr(ctx, opts, "cwd");
+		if (!JS_IsUndefined(v) && !JS_IsNull(v))
+			sa->cwd = JS_ToCString(ctx, v);
+		JS_FreeValue(ctx, v);
+
+		v = JS_GetPropertyStr(ctx, opts, "env");
+		if (!JS_IsUndefined(v) && !JS_IsNull(v))
+			sa->env = js_array_to_cstrings(ctx, v, &sa->env_count);
+		JS_FreeValue(ctx, v);
+
+		v = JS_GetPropertyStr(ctx, opts, "detached");
+		sa->detached = JS_ToBool(ctx, v);
+		JS_FreeValue(ctx, v);
+	}
+	return 0;
+}
+
+static void spawn_args_free(JSContext *ctx, SpawnArgs *sa) {
+	js_free(ctx, sa->spawn_args);
+	if (sa->c_args) free_cstrings(ctx, sa->c_args, sa->args_count);
+	JS_FreeCString(ctx, sa->file);
+	if (sa->cwd) JS_FreeCString(ctx, sa->cwd);
+	if (sa->env) free_cstrings(ctx, sa->env, sa->env_count);
+}
+
+/*
+ * Parse a JS stdio array element into a uv_stdio_container_t.
+ * Handles: null (ignore), undefined (inherit fd i), QNStream (pipe),
+ *          number (inherit that fd), string "pipe"/"inherit"/"ignore".
+ */
+static void parse_stdio_entry(JSContext *ctx, JSValue sval, int i,
+                              uv_stdio_container_t *out) {
+	if (JS_IsNull(sval)) {
+		out->flags = UV_IGNORE;
+	} else if (JS_IsUndefined(sval)) {
+		out->flags = UV_INHERIT_FD;
+		out->data.fd = i;
+	} else {
+		/* Try QNStream pipe handle first */
+		QNStream *s = JS_GetOpaque(sval, qn_stream_class_id);
+		if (s) {
+			int flags = UV_CREATE_PIPE;
+			flags |= (i == 0) ? UV_READABLE_PIPE : UV_WRITABLE_PIPE;
+			out->flags = flags;
+			out->data.stream = &s->h.stream;
+			return;
+		}
+		/* Try numeric fd */
+		int32_t fd;
+		if (JS_ToInt32(ctx, &fd, sval) == 0 && !JS_IsString(sval)) {
+			out->flags = UV_INHERIT_FD;
+			out->data.fd = fd;
+			return;
+		}
+		/* Try string: "pipe", "inherit", "ignore" */
+		const char *str = JS_ToCString(ctx, sval);
+		if (str) {
+			if (strcmp(str, "pipe") == 0) {
+				/* Caller must handle pipe init separately */
+				out->flags = UV_CREATE_PIPE;
+				out->flags |= (i == 0) ? UV_READABLE_PIPE : UV_WRITABLE_PIPE;
+			} else if (strcmp(str, "inherit") == 0) {
+				out->flags = UV_INHERIT_FD;
+				out->data.fd = i;
+			} else if (strcmp(str, "ignore") == 0) {
+				out->flags = UV_IGNORE;
+			} else {
+				out->flags = UV_IGNORE;
+			}
+			JS_FreeCString(ctx, str);
+			return;
+		}
+		out->flags = UV_IGNORE;
+	}
+}
+
+/* ---- Synchronous spawn (fresh uv_loop_t, like Node's SyncProcessRunner) ---- */
+
+typedef struct {
+	char *data;
+	size_t len;
+	size_t cap;
+} sync_buf_t;
+
+typedef struct {
+	uv_process_t process;
+	uv_pipe_t stdin_pipe;
+	uv_pipe_t stdout_pipe;
+	uv_pipe_t stderr_pipe;
+	uv_timer_t timer;
+	uv_write_t write_req;
+
+	int has_stdin, has_stdout, has_stderr, has_timer;
+	sync_buf_t out, err;
+
+	int64_t exit_status;
+	int term_signal;
+	int timed_out;
+	int kill_signal;
+} sync_spawn_t;
+
+static void sync_buf_append(sync_buf_t *b, const char *src, size_t n) {
+	if (b->len + n > b->cap) {
+		size_t nc = b->cap ? b->cap * 2 : 4096;
+		while (nc < b->len + n) nc *= 2;
+		b->data = realloc(b->data, nc);
+		b->cap = nc;
+	}
+	memcpy(b->data + b->len, src, n);
+	b->len += n;
+}
+
+static void sync_close_cb(uv_handle_t *h) { (void)h; }
+
+static void sync_alloc_cb(uv_handle_t *h, size_t suggested, uv_buf_t *buf) {
+	(void)h;
+	buf->base = malloc(suggested);
+	buf->len = buf->base ? suggested : 0;
+}
+
+static void sync_read_cb(uv_stream_t *s, ssize_t nread, const uv_buf_t *buf) {
+	sync_spawn_t *ss = s->data;
+	if (nread > 0) {
+		sync_buf_t *target = (s == (uv_stream_t *)&ss->stdout_pipe)
+		                     ? &ss->out : &ss->err;
+		sync_buf_append(target, buf->base, nread);
+	}
+	if (buf->base) free(buf->base);
+	if (nread < 0)
+		uv_close((uv_handle_t *)s, sync_close_cb);
+}
+
+static void sync_exit_cb(uv_process_t *h, int64_t exit_status, int term_signal) {
+	sync_spawn_t *ss = h->data;
+	ss->exit_status = exit_status;
+	ss->term_signal = term_signal;
+	uv_close((uv_handle_t *)h, sync_close_cb);
+	if (ss->has_timer && !uv_is_closing((uv_handle_t *)&ss->timer))
+		uv_close((uv_handle_t *)&ss->timer, sync_close_cb);
+}
+
+static void sync_timer_cb(uv_timer_t *t) {
+	sync_spawn_t *ss = t->data;
+	ss->timed_out = 1;
+	uv_process_kill(&ss->process, ss->kill_signal);
+	uv_close((uv_handle_t *)t, sync_close_cb);
+}
+
+static void sync_write_cb(uv_write_t *req, int status) {
+	(void)status;
+	sync_spawn_t *ss = req->data;
+	uv_close((uv_handle_t *)&ss->stdin_pipe, sync_close_cb);
+}
+
+static JSValue js_spawn_sync(JSContext *ctx, int nargs, JSValueConst *args) {
+	SpawnArgs sa;
+	if (spawn_args_parse(ctx, nargs, args, &sa) < 0)
+		return JS_EXCEPTION;
+
+	sync_spawn_t ss;
+	memset(&ss, 0, sizeof(ss));
+	ss.kill_signal = 15; /* SIGTERM */
+
+	/* Parse sync-specific options: input, timeout, killSignal, stdio strings */
+	JSValue opts = nargs > 2 ? args[2] : JS_UNDEFINED;
+	uint8_t *input_data = NULL;
+	size_t input_len = 0;
+	uint64_t timeout = 0;
+
+	if (!JS_IsUndefined(opts)) {
+		JSValue v;
+
+		v = JS_GetPropertyStr(ctx, opts, "timeout");
+		if (!JS_IsUndefined(v)) JS_ToIndex(ctx, &timeout, v);
+		JS_FreeValue(ctx, v);
+
+		v = JS_GetPropertyStr(ctx, opts, "killSignal");
+		if (!JS_IsUndefined(v)) {
+			int32_t ks;
+			if (JS_ToInt32(ctx, &ks, v) == 0) ss.kill_signal = ks;
+		}
+		JS_FreeValue(ctx, v);
+
+		v = JS_GetPropertyStr(ctx, opts, "input");
+		if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
+			input_data = JS_GetArrayBuffer(ctx, &input_len, v);
+			if (!input_data) {
+				size_t off, blen;
+				JSValue ab = JS_GetTypedArrayBuffer(ctx, v, &off, &blen, NULL);
+				if (!JS_IsException(ab)) {
+					input_data = JS_GetArrayBuffer(ctx, &input_len, ab);
+					if (input_data) { input_data += off; input_len = blen; }
+					JS_FreeValue(ctx, ab);
+				} else {
+					JS_FreeValue(ctx, JS_GetException(ctx));
+				}
+			}
+		}
+		JS_FreeValue(ctx, v);
+	}
+
+	/* Create temporary event loop */
+	uv_loop_t loop;
+	uv_loop_init(&loop);
+
+	/* Parse stdio and setup pipes on the temp loop */
+	uv_stdio_container_t child_stdio[3];
+	JSValue stdio_arr = JS_UNDEFINED;
+	if (!JS_IsUndefined(opts))
+		stdio_arr = JS_GetPropertyStr(ctx, opts, "stdio");
+
+	for (int i = 0; i < 3; i++) {
+		JSValue sval = JS_UNDEFINED;
+		if (!JS_IsUndefined(stdio_arr))
+			sval = JS_GetPropertyUint32(ctx, stdio_arr, i);
+		parse_stdio_entry(ctx, sval, i, &child_stdio[i]);
+		JS_FreeValue(ctx, sval);
+
+		/* For pipe entries, init a uv_pipe_t on the temp loop */
+		if (child_stdio[i].flags & UV_CREATE_PIPE) {
+			uv_pipe_t *pipe;
+			if (i == 0)      { pipe = &ss.stdin_pipe;  ss.has_stdin = 1; }
+			else if (i == 1) { pipe = &ss.stdout_pipe; ss.has_stdout = 1; }
+			else             { pipe = &ss.stderr_pipe; ss.has_stderr = 1; }
+			uv_pipe_init(&loop, pipe, 0);
+			pipe->data = &ss;
+			child_stdio[i].data.stream = (uv_stream_t *)pipe;
+		}
+	}
+	JS_FreeValue(ctx, stdio_arr);
+
+	/* Spawn */
+	uv_process_options_t popts;
+	memset(&popts, 0, sizeof(popts));
+	popts.exit_cb = sync_exit_cb;
+	popts.file = sa.file;
+	popts.args = sa.spawn_args;
+	popts.cwd = sa.cwd;
+	popts.env = sa.env;
+	popts.stdio_count = 3;
+	popts.stdio = child_stdio;
+	ss.process.data = &ss;
+
+	int r = uv_spawn(&loop, &ss.process, &popts);
+	spawn_args_free(ctx, &sa);
+
+	int pid = 0;
+	if (r < 0) {
+		if (ss.has_stdin)  uv_close((uv_handle_t *)&ss.stdin_pipe, sync_close_cb);
+		if (ss.has_stdout) uv_close((uv_handle_t *)&ss.stdout_pipe, sync_close_cb);
+		if (ss.has_stderr) uv_close((uv_handle_t *)&ss.stderr_pipe, sync_close_cb);
+		uv_run(&loop, UV_RUN_DEFAULT);
+		uv_loop_close(&loop);
+
+		JSValue result = JS_NewObject(ctx);
+		JS_SetPropertyStr(ctx, result, "pid", JS_NewInt32(ctx, 0));
+		JS_SetPropertyStr(ctx, result, "status", JS_NULL);
+		JS_SetPropertyStr(ctx, result, "signal", JS_NULL);
+		JS_SetPropertyStr(ctx, result, "stdout", qn_new_uint8array(ctx, NULL, 0));
+		JS_SetPropertyStr(ctx, result, "stderr", qn_new_uint8array(ctx, NULL, 0));
+		JS_SetPropertyStr(ctx, result, "timedOut", JS_FALSE);
+		JS_SetPropertyStr(ctx, result, "error", qn_new_error(ctx, r));
+		return result;
+	}
+	pid = ss.process.pid;
+
+	/* Write input to stdin and close */
+	if (ss.has_stdin) {
+		if (input_data && input_len > 0) {
+			uv_buf_t wbuf = uv_buf_init((char *)input_data, input_len);
+			ss.write_req.data = &ss;
+			uv_write(&ss.write_req, (uv_stream_t *)&ss.stdin_pipe, &wbuf, 1, sync_write_cb);
+		} else {
+			uv_close((uv_handle_t *)&ss.stdin_pipe, sync_close_cb);
+		}
+	}
+
+	if (ss.has_stdout)
+		uv_read_start((uv_stream_t *)&ss.stdout_pipe, sync_alloc_cb, sync_read_cb);
+	if (ss.has_stderr)
+		uv_read_start((uv_stream_t *)&ss.stderr_pipe, sync_alloc_cb, sync_read_cb);
+
+	if (timeout > 0) {
+		ss.has_timer = 1;
+		uv_timer_init(&loop, &ss.timer);
+		ss.timer.data = &ss;
+		uv_timer_start(&ss.timer, sync_timer_cb, timeout, 0);
+	}
+
+	uv_run(&loop, UV_RUN_DEFAULT);
+	uv_loop_close(&loop);
+
+	/* Build result */
+	JSValue result = JS_NewObject(ctx);
+	JS_SetPropertyStr(ctx, result, "pid", JS_NewInt32(ctx, pid));
+
+	if (ss.term_signal) {
+		JS_SetPropertyStr(ctx, result, "status", JS_NULL);
+		JS_SetPropertyStr(ctx, result, "signal", JS_NewInt32(ctx, ss.term_signal));
+	} else {
+		JS_SetPropertyStr(ctx, result, "status", JS_NewInt64(ctx, ss.exit_status));
+		JS_SetPropertyStr(ctx, result, "signal", JS_NULL);
+	}
+
+	for (int i = 0; i < 2; i++) {
+		sync_buf_t *b = i == 0 ? &ss.out : &ss.err;
+		const char *key = i == 0 ? "stdout" : "stderr";
+		if (b->data) {
+			uint8_t *copy = js_malloc(ctx, b->len ? b->len : 1);
+			if (b->len) memcpy(copy, b->data, b->len);
+			JS_SetPropertyStr(ctx, result, key, qn_new_uint8array(ctx, copy, b->len));
+			free(b->data);
+		} else {
+			JS_SetPropertyStr(ctx, result, key, qn_new_uint8array(ctx, NULL, 0));
+		}
+	}
+
+	JS_SetPropertyStr(ctx, result, "timedOut", ss.timed_out ? JS_TRUE : JS_FALSE);
+	return result;
+}
+
 /* ---- Single dispatch ---- */
 
 static JSValue js_uv_process_op(JSContext *ctx, JSValueConst this_val,
@@ -150,60 +518,15 @@ static JSValue js_uv_process_op(JSContext *ctx, JSValueConst this_val,
 		 * spawn(file, args_array, options)
 		 * options: { cwd, env_array, stdio: [stdin_handle, stdout_handle, stderr_handle],
 		 *            detached, uid, gid }
-		 * stdio handles: null = ignore, undefined = inherit, QNStream = pipe
+		 * stdio handles: null = ignore, undefined = inherit, QNStream = pipe, number = fd
 		 */
-		const char *file = JS_ToCString(ctx, args[0]);
-		if (!file) return JS_EXCEPTION;
-
-		/* Build args array: [file, ...args] */
-		int args_count = 0;
-		char **c_args = NULL;
-		if (!JS_IsUndefined(args[1])) {
-			c_args = js_array_to_cstrings(ctx, args[1], &args_count);
-			if (!c_args) { JS_FreeCString(ctx, file); return JS_EXCEPTION; }
-		}
-
-		/* Prepend file to args for uv_spawn (argv[0] = file) */
-		char **spawn_args = js_malloc(ctx, sizeof(char *) * (args_count + 2));
-		if (!spawn_args) {
-			if (c_args) free_cstrings(ctx, c_args, args_count);
-			JS_FreeCString(ctx, file);
+		SpawnArgs sa;
+		if (spawn_args_parse(ctx, nargs, args, &sa) < 0)
 			return JS_EXCEPTION;
-		}
-		spawn_args[0] = (char *)file;
-		for (int i = 0; i < args_count; i++)
-			spawn_args[i + 1] = c_args ? c_args[i] : NULL;
-		spawn_args[args_count + 1] = NULL;
-
-		/* Options */
-		JSValue opts = nargs > 2 ? args[2] : JS_UNDEFINED;
-		const char *cwd = NULL;
-		char **env = NULL;
-		int env_count = 0;
-		int detached = 0;
-
-		if (!JS_IsUndefined(opts)) {
-			JSValue v;
-
-			v = JS_GetPropertyStr(ctx, opts, "cwd");
-			if (!JS_IsUndefined(v) && !JS_IsNull(v))
-				cwd = JS_ToCString(ctx, v);
-			JS_FreeValue(ctx, v);
-
-			v = JS_GetPropertyStr(ctx, opts, "env");
-			if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
-				env = js_array_to_cstrings(ctx, v, &env_count);
-			}
-			JS_FreeValue(ctx, v);
-
-			v = JS_GetPropertyStr(ctx, opts, "detached");
-			detached = JS_ToBool(ctx, v);
-			JS_FreeValue(ctx, v);
-		}
 
 		/* Setup stdio */
 		uv_stdio_container_t child_stdio[3];
-
+		JSValue opts = nargs > 2 ? args[2] : JS_UNDEFINED;
 		JSValue stdio_arr = JS_UNDEFINED;
 		if (!JS_IsUndefined(opts))
 			stdio_arr = JS_GetPropertyStr(ctx, opts, "stdio");
@@ -212,36 +535,7 @@ static JSValue js_uv_process_op(JSContext *ctx, JSValueConst this_val,
 			JSValue sval = JS_UNDEFINED;
 			if (!JS_IsUndefined(stdio_arr))
 				sval = JS_GetPropertyUint32(ctx, stdio_arr, i);
-
-			if (JS_IsNull(sval)) {
-				/* null = ignore */
-				child_stdio[i].flags = UV_IGNORE;
-			} else if (JS_IsUndefined(sval)) {
-				/* undefined = inherit */
-				child_stdio[i].flags = UV_INHERIT_FD;
-				child_stdio[i].data.fd = i;
-			} else {
-				/* QNStream pipe handle */
-				QNStream *s = JS_GetOpaque2(ctx, sval, qn_stream_class_id);
-				if (!s) {
-					/* Might be a numeric fd */
-					int32_t fd;
-					if (JS_ToInt32(ctx, &fd, sval) == 0) {
-						child_stdio[i].flags = UV_INHERIT_FD;
-						child_stdio[i].data.fd = fd;
-					} else {
-						child_stdio[i].flags = UV_IGNORE;
-					}
-				} else {
-					int flags = UV_CREATE_PIPE;
-					if (i == 0)
-						flags |= UV_READABLE_PIPE;
-					else
-						flags |= UV_WRITABLE_PIPE;
-					child_stdio[i].flags = flags;
-					child_stdio[i].data.stream = &s->h.stream;
-				}
-			}
+			parse_stdio_entry(ctx, sval, i, &child_stdio[i]);
 			JS_FreeValue(ctx, sval);
 		}
 		JS_FreeValue(ctx, stdio_arr);
@@ -249,11 +543,7 @@ static JSValue js_uv_process_op(JSContext *ctx, JSValueConst this_val,
 		/* Create process handle */
 		QNProcess *proc = calloc(1, sizeof(*proc));
 		if (!proc) {
-			js_free(ctx, spawn_args);
-			if (c_args) free_cstrings(ctx, c_args, args_count);
-			JS_FreeCString(ctx, file);
-			if (cwd) JS_FreeCString(ctx, cwd);
-			if (env) free_cstrings(ctx, env, env_count);
+			spawn_args_free(ctx, &sa);
 			return JS_ThrowOutOfMemory(ctx);
 		}
 		proc->ctx = ctx;
@@ -265,23 +555,17 @@ static JSValue js_uv_process_op(JSContext *ctx, JSValueConst this_val,
 		uv_process_options_t popts;
 		memset(&popts, 0, sizeof(popts));
 		popts.exit_cb = qn_exit_cb;
-		popts.file = file;
-		popts.args = spawn_args;
-		popts.cwd = cwd;
-		popts.env = env;
+		popts.file = sa.file;
+		popts.args = sa.spawn_args;
+		popts.cwd = sa.cwd;
+		popts.env = sa.env;
 		popts.flags = 0;
-		if (detached) popts.flags |= UV_PROCESS_DETACHED;
+		if (sa.detached) popts.flags |= UV_PROCESS_DETACHED;
 		popts.stdio_count = 3;
 		popts.stdio = child_stdio;
 
 		int r = uv_spawn(loop, &proc->handle, &popts);
-
-		/* Cleanup C strings */
-		js_free(ctx, spawn_args);
-		if (c_args) free_cstrings(ctx, c_args, args_count);
-		JS_FreeCString(ctx, file);
-		if (cwd) JS_FreeCString(ctx, cwd);
-		if (env) free_cstrings(ctx, env, env_count);
+		spawn_args_free(ctx, &sa);
 
 		if (r < 0) {
 			free(proc);
@@ -335,6 +619,19 @@ static JSValue js_uv_process_op(JSContext *ctx, JSValueConst this_val,
 		return JS_UNDEFINED;
 	}
 
+	case PROC_SPAWN_SYNC:
+		return js_spawn_sync(ctx, nargs, args);
+
+	case PROC_KILL_PID: {
+		/* kill(pid, signal) — kill by PID (not handle) */
+		int32_t pid, sig;
+		if (JS_ToInt32(ctx, &pid, args[0])) return JS_EXCEPTION;
+		if (JS_ToInt32(ctx, &sig, args[1])) return JS_EXCEPTION;
+		int r = uv_kill(pid, sig);
+		if (r < 0) return qn_throw_errno(ctx, r);
+		return JS_UNDEFINED;
+	}
+
 	default:
 		return JS_ThrowRangeError(ctx, "unknown process opcode: %d", op);
 	}
@@ -349,6 +646,8 @@ static const JSCFunctionListEntry js_uv_process_funcs[] = {
 	QN_CONST2("GET_PID", PROC_GET_PID),
 	QN_CONST2("SET_ON_EXIT", PROC_SET_ON_EXIT),
 	QN_CONST2("CLOSE", PROC_CLOSE),
+	QN_CONST2("SPAWN_SYNC", PROC_SPAWN_SYNC),
+	QN_CONST2("KILL_PID", PROC_KILL_PID),
 };
 
 static int js_uv_process_init(JSContext *ctx, JSModuleDef *m) {

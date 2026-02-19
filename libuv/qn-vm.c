@@ -1,16 +1,20 @@
 /*
- * qn-vm.c - Event loop ownership and core async primitives
+ * qn-vm.c - Event loop ownership, eval, and core async primitives
  *
- * Owns the libuv event loop and provides timer/poll primitives that replace
- * quickjs-libc.c's os.setTimeout/os.setReadHandler with native libuv handles.
- * This eliminates the need to patch quickjs-libc.c's internals — we just
- * install our own poll function via js_set_os_poll_func().
+ * Owns the libuv event loop and provides:
+ * - Timer/poll primitives (setTimeout, setReadHandler, etc.)
+ * - qn_vm_eval_binary / qn_vm_loop to replace js_std_eval_binary / js_std_loop
+ * - Promise rejection tracking
+ *
+ * Uses the three-handle pattern from txiki.js (uv_prepare + uv_idle + uv_check)
+ * to integrate microtask draining into uv_run. No patches to quickjs-libc.c needed.
  *
  * Adapted from txiki.js by Saul Ibarra Corretge (MIT License).
  */
 
 #include "qn-vm.h"
 #include "qn-uv-utils.h"
+#include "quickjs/quickjs-libc.h"
 
 #include <string.h>
 
@@ -19,10 +23,100 @@
  * -------------------------------------------------------------------------- */
 
 static uv_loop_t *g_loop = NULL;
+static JSContext *g_ctx = NULL;
+
+/* Three-handle pattern for microtask draining during uv_run */
+static uv_prepare_t g_prepare;
+static uv_idle_t g_idle;
+static uv_check_t g_check;
 
 uv_loop_t *js_uv_loop(JSContext *ctx) {
 	(void)ctx;
 	return g_loop;
+}
+
+/* --------------------------------------------------------------------------
+ * Promise rejection tracking
+ *
+ * We track unhandled rejections ourselves via JS_SetHostPromiseRejectionTracker.
+ * If any remain unhandled when the loop is about to sleep, we report and exit.
+ * -------------------------------------------------------------------------- */
+
+typedef struct QNRejection {
+	struct QNRejection *next;
+	JSValue promise;
+	JSValue reason;
+} QNRejection;
+
+static QNRejection *rejection_head = NULL;
+
+static void rejection_tracker(JSContext *ctx, JSValueConst promise,
+                               JSValueConst reason, JS_BOOL is_handled,
+                               void *opaque) {
+	(void)opaque;
+
+	if (!is_handled) {
+		/* Add new unhandled rejection */
+		QNRejection *r = malloc(sizeof(QNRejection));
+		if (!r) return;
+		r->promise = JS_DupValue(ctx, promise);
+		r->reason = JS_DupValue(ctx, reason);
+		r->next = rejection_head;
+		rejection_head = r;
+	} else {
+		/* Rejection was handled — remove from list */
+		QNRejection **pp = &rejection_head;
+		while (*pp) {
+			if (JS_SameValue(ctx, (*pp)->promise, promise)) {
+				QNRejection *r = *pp;
+				*pp = r->next;
+				JS_FreeValue(ctx, r->promise);
+				JS_FreeValue(ctx, r->reason);
+				free(r);
+				return;
+			}
+			pp = &(*pp)->next;
+		}
+	}
+}
+
+static void rejection_check(JSContext *ctx) {
+	if (!rejection_head) return;
+
+	for (QNRejection *r = rejection_head; r; r = r->next) {
+		fprintf(stderr, "Possibly unhandled promise rejection: ");
+		JSValue err_str = JS_ToString(ctx, r->reason);
+		const char *s = JS_ToCString(ctx, err_str);
+		if (s) {
+			fprintf(stderr, "%s\n", s);
+			JS_FreeCString(ctx, s);
+		}
+		JS_FreeValue(ctx, err_str);
+
+		/* Also print stack if available */
+		if (JS_IsObject(r->reason)) {
+			JSValue stack = JS_GetPropertyStr(ctx, r->reason, "stack");
+			if (!JS_IsUndefined(stack)) {
+				const char *stack_str = JS_ToCString(ctx, stack);
+				if (stack_str) {
+					fprintf(stderr, "%s\n", stack_str);
+					JS_FreeCString(ctx, stack_str);
+				}
+			}
+			JS_FreeValue(ctx, stack);
+		}
+	}
+	exit(1);
+}
+
+static void rejection_free_all(JSRuntime *rt) {
+	while (rejection_head) {
+		QNRejection *r = rejection_head;
+		rejection_head = r->next;
+		JS_FreeValueRT(rt, r->promise);
+		JS_FreeValueRT(rt, r->reason);
+		free(r);
+	}
 }
 
 /* --------------------------------------------------------------------------
@@ -101,6 +195,12 @@ static JSValue js_vm_setTimeout(JSContext *ctx, JSValueConst this_val,
 
 	uv_timer_init(g_loop, &t->handle);
 	t->handle.data = t;
+	/* Refresh the loop's cached "now" so the timer deadline is based on
+	   current wall-clock time, not the (possibly stale) value from the
+	   start of this loop iteration.  Without this, timers started from
+	   JS callbacks can fire early by the amount of time spent in JS
+	   since the last uv_run poll.  See libuv/libuv#1105. */
+	uv_update_time(g_loop);
 	uv_timer_start(&t->handle, timer_cb, (uint64_t)delay, 0);
 
 	return JS_NewInt32(ctx, t->id);
@@ -156,7 +256,7 @@ static void poll_unlink(QNPoll *p) {
 
 static void poll_close_cb(uv_handle_t *h) {
 	QNPoll *p = h->data;
-	poll_unlink(p);
+	/* Entry was already unlinked in poll_free_entry; just free */
 	js_free_rt(JS_GetRuntime(p->ctx), p);
 }
 
@@ -193,11 +293,12 @@ static void poll_update(QNPoll *p) {
 static void poll_free_entry(JSRuntime *rt, QNPoll *p) {
 	JS_FreeValueRT(rt, p->rw_func[0]);
 	JS_FreeValueRT(rt, p->rw_func[1]);
+	/* Unlink immediately so poll_find() won't return a stale/closing entry */
+	poll_unlink(p);
 	if (p->handle_inited) {
 		uv_poll_stop(&p->handle);
 		uv_close((uv_handle_t *)&p->handle, poll_close_cb);
 	} else {
-		poll_unlink(p);
 		js_free_rt(rt, p);
 	}
 }
@@ -251,16 +352,45 @@ static JSValue js_vm_setRWHandler(JSContext *ctx, JSValueConst this_val,
 }
 
 /* --------------------------------------------------------------------------
- * Poll function — replaces js_os_poll via js_set_os_poll_func
+ * Three-handle pattern for microtask draining
+ *
+ * Like txiki.js: uv_prepare + uv_idle + uv_check integrate JS job execution
+ * into libuv's event loop. The idle handle prevents libuv from blocking in
+ * I/O poll when there are pending JS jobs.
  * -------------------------------------------------------------------------- */
 
-static int qn_vm_poll(JSContext *ctx) {
-	if (!uv_loop_alive(g_loop))
-		return -1; /* no more events */
+static void execute_jobs(JSContext *ctx) {
+	int err;
+	for (;;) {
+		err = JS_ExecutePendingJob(JS_GetRuntime(ctx), NULL);
+		if (err <= 0) {
+			if (err < 0)
+				js_std_dump_error(ctx);
+			break;
+		}
+	}
+}
 
-	g_loop->data = ctx;
-	uv_run(g_loop, UV_RUN_ONCE);
-	return 0;
+static void idle_cb(uv_idle_t *handle) {
+	/* noop — just prevents uv_run from blocking */
+}
+
+static void maybe_idle(void) {
+	JSRuntime *rt = JS_GetRuntime(g_ctx);
+	if (JS_IsJobPending(rt))
+		uv_idle_start(&g_idle, idle_cb);
+	else
+		uv_idle_stop(&g_idle);
+}
+
+static void prepare_cb(uv_prepare_t *handle) {
+	maybe_idle();
+}
+
+static void check_cb(uv_check_t *handle) {
+	execute_jobs(g_ctx);
+	rejection_check(g_ctx);
+	maybe_idle();
 }
 
 /* --------------------------------------------------------------------------
@@ -286,24 +416,116 @@ JSModuleDef *js_init_module_qn_vm(JSContext *ctx, const char *module_name) {
 }
 
 /* --------------------------------------------------------------------------
+ * Eval and loop — replacements for js_std_eval_binary / js_std_loop
+ * -------------------------------------------------------------------------- */
+
+void qn_vm_eval_binary(JSContext *ctx, const uint8_t *buf, size_t buf_len,
+                        int load_only) {
+	JSValue obj, val;
+	obj = JS_ReadObject(ctx, buf, buf_len, JS_READ_OBJ_BYTECODE);
+	if (JS_IsException(obj))
+		goto exception;
+	if (load_only) {
+		if (JS_VALUE_GET_TAG(obj) == JS_TAG_MODULE) {
+			js_module_set_import_meta(ctx, obj, FALSE, FALSE);
+		}
+		JS_FreeValue(ctx, obj);
+	} else {
+		if (JS_VALUE_GET_TAG(obj) == JS_TAG_MODULE) {
+			if (JS_ResolveModule(ctx, obj) < 0) {
+				JS_FreeValue(ctx, obj);
+				goto exception;
+			}
+			js_module_set_import_meta(ctx, obj, FALSE, TRUE);
+		}
+		val = JS_EvalFunction(ctx, obj);
+		/* Don't call js_std_await — the three-handle pattern in qn_vm_loop
+		   will drain jobs and resolve promises via uv_run. */
+		if (JS_IsException(val)) {
+		exception:
+			js_std_dump_error(ctx);
+			exit(1);
+		}
+		JS_FreeValue(ctx, val);
+	}
+}
+
+void qn_vm_eval_binary_json_module(JSContext *ctx,
+                                    const uint8_t *buf, size_t buf_len,
+                                    const char *module_name) {
+	JSValue obj = JS_ParseJSON2(ctx, (const char *)buf, buf_len, module_name,
+	                             JS_PARSE_JSON_EXT);
+	if (JS_IsException(obj))
+		goto exception;
+	JSModuleDef *m = JS_NewCModule(ctx, module_name, NULL);
+	if (!m) {
+		JS_FreeValue(ctx, obj);
+		goto exception;
+	}
+	JS_AddModuleExport(ctx, m, "default");
+	/* Note: JS_SetModuleExport steals the reference to obj */
+	JS_SetModuleExport(ctx, m, "default", obj);
+	return;
+exception:
+	js_std_dump_error(ctx);
+	exit(1);
+}
+
+void qn_vm_loop(JSContext *ctx) {
+	JSRuntime *rt = JS_GetRuntime(ctx);
+
+	/* Start the three-handle pattern */
+	uv_prepare_start(&g_prepare, prepare_cb);
+	uv_unref((uv_handle_t *)&g_prepare);
+	uv_check_start(&g_check, check_cb);
+	uv_unref((uv_handle_t *)&g_check);
+
+	/* Drain any jobs that were queued by eval_binary */
+	execute_jobs(ctx);
+	rejection_check(ctx);
+
+	/* Main event loop */
+	int r;
+	do {
+		maybe_idle();
+		r = uv_run(g_loop, UV_RUN_DEFAULT);
+	} while (r == 0 && JS_IsJobPending(rt));
+
+	/* Final check for unhandled exceptions */
+	if (JS_HasException(ctx)) {
+		js_std_dump_error(ctx);
+	}
+}
+
+/* --------------------------------------------------------------------------
  * Lifecycle
  * -------------------------------------------------------------------------- */
 
-/* Declared in quickjs-libc.c, exposed via js_set_os_poll_func patch */
-extern void js_set_os_poll_func(int (*func)(JSContext *ctx));
-
 void qn_vm_init(JSContext *ctx) {
-	(void)ctx;
+	g_ctx = ctx;
 	g_loop = malloc(sizeof(uv_loop_t));
 	if (!g_loop) {
 		fprintf(stderr, "qn_vm_init: could not allocate uv_loop_t\n");
 		abort();
 	}
 	uv_loop_init(g_loop);
-	js_set_os_poll_func(qn_vm_poll);
+
+	/* Initialize three-handle pattern handles */
+	uv_prepare_init(g_loop, &g_prepare);
+	uv_idle_init(g_loop, &g_idle);
+	uv_check_init(g_loop, &g_check);
+
+	/* Set up promise rejection tracking */
+	JS_SetHostPromiseRejectionTracker(JS_GetRuntime(ctx),
+	                                  rejection_tracker, NULL);
 }
 
 void qn_vm_free(JSRuntime *rt) {
+	/* Close three-handle pattern handles */
+	uv_close((uv_handle_t *)&g_prepare, NULL);
+	uv_close((uv_handle_t *)&g_idle, NULL);
+	uv_close((uv_handle_t *)&g_check, NULL);
+
 	/* Free all timers */
 	while (timer_head) {
 		QNTimer *t = timer_head;
@@ -311,7 +533,6 @@ void qn_vm_free(JSRuntime *rt) {
 		JS_FreeValueRT(rt, t->func);
 		if (!t->closed) {
 			uv_timer_stop(&t->handle);
-			/* Can't use close callback since we're shutting down — just stop */
 		}
 		js_free_rt(rt, t);
 	}
@@ -328,11 +549,16 @@ void qn_vm_free(JSRuntime *rt) {
 		js_free_rt(rt, p);
 	}
 
+	/* Free rejection tracking entries */
+	rejection_free_all(rt);
+
 	if (g_loop) {
-		/* Run one last time to let pending close callbacks fire */
+		/* Run to let pending close callbacks fire */
 		uv_run(g_loop, UV_RUN_NOWAIT);
 		uv_loop_close(g_loop);
 		free(g_loop);
 		g_loop = NULL;
 	}
+
+	g_ctx = NULL;
 }

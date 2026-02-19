@@ -6,10 +6,9 @@ import {
 	setOnRead, setOnShutdown,
 } from 'qn/uv-stream'
 import {
-	kill as _procKill, getPid, setOnExit,
+	kill as _procKill, getPid, setOnExit, killPid,
 } from 'qn/uv-process'
 import { signals } from 'qn_uv_signals'
-import * as os from 'os'
 
 // Build reverse map (number → name)
 const signalNames = Object.fromEntries(
@@ -107,6 +106,20 @@ class PipeReadable extends EventEmitter {
 		return this
 	}
 
+	get destroyed() {
+		return this.#destroyed
+	}
+
+	pause() {
+		if (this.#handle && !this.#destroyed) readStop(this.#handle)
+		return this
+	}
+
+	resume() {
+		if (this.#handle && !this.#destroyed) readStart(this.#handle)
+		return this
+	}
+
 	#close() {
 		if (this.#destroyed) return
 		this.#destroyed = true
@@ -140,6 +153,10 @@ class PipeWritable extends EventEmitter {
 	constructor(handle) {
 		super()
 		this.#handle = handle
+	}
+
+	get destroyed() {
+		return this.#destroyed
 	}
 
 	write(chunk, encoding, callback) {
@@ -373,7 +390,7 @@ export class ChildProcess extends EventEmitter {
 		try {
 			if (this.#detached) {
 				/* For detached processes, kill the entire process group */
-				os.kill(-this.pid, sig)
+				killPid(-this.pid, sig)
 			} else {
 				_procKill(this.#procHandle, sig)
 			}

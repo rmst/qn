@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync, realpathSync } from 'node:fs'
-import { QJSX, QJSXC, QN } from '../util.js'
+import { QN, QJSXC } from '../util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), 'module-res-test-')))
 
@@ -30,7 +30,7 @@ describe('Bundler Mode (default)', () => {
 			import { add } from './utils';
 			console.log(add(1, 2));
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, '3')
 	})
 
@@ -41,18 +41,18 @@ describe('Bundler Mode (default)', () => {
 			import { msg } from './mylib';
 			console.log(msg);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'from index')
 	})
 
 	test('colon-to-slash translation', ({ dir }) => {
-		mkdirSync(`${dir}/node`)
-		writeFileSync(`${dir}/node/test.js`, `export const value = 42;`)
+		mkdirSync(`${dir}/myns`)
+		writeFileSync(`${dir}/myns/lib.js`, `export const value = 42;`)
 		writeFileSync(`${dir}/main.js`, `
-			import { value } from 'node:test';
+			import { value } from 'myns:lib';
 			console.log(value);
 		`)
-		const output = $`NODE_PATH=${dir} ${QJSX()} ${dir}/main.js`
+		const output = $`NODE_PATH=${dir} ${QN()} ${dir}/main.js`
 		assert.strictEqual(output, '42')
 	})
 
@@ -63,7 +63,7 @@ describe('Bundler Mode (default)', () => {
 			import { val } from 'myutil';
 			console.log(val);
 		`)
-		const output = $`NODE_PATH=${dir}/modules ${QJSX()} ${dir}/main.js`
+		const output = $`NODE_PATH=${dir}/modules ${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'bare import works')
 	})
 
@@ -77,7 +77,7 @@ describe('Bundler Mode (default)', () => {
 			import { y } from 'bar';
 			console.log(x + y);
 		`)
-		const output = $`NODE_PATH=${dir}/lib1:${dir}/lib2 ${QJSX()} ${dir}/main.js`
+		const output = $`NODE_PATH=${dir}/lib1:${dir}/lib2 ${QN()} ${dir}/main.js`
 		assert.strictEqual(output, '3')
 	})
 
@@ -90,7 +90,7 @@ describe('Bundler Mode (default)', () => {
 			}
 			main();
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'loaded dynamically')
 	})
 
@@ -104,7 +104,7 @@ describe('Bundler Mode (default)', () => {
 			}
 			main();
 		`)
-		const output = $`NODE_PATH=${dir} ${QJSX()} ${dir}/main.js`
+		const output = $`NODE_PATH=${dir} ${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'from namespace')
 	})
 
@@ -139,7 +139,7 @@ describe('Bundler Mode (default)', () => {
 			console.log(getAB())
 		`)
 
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'AB')
 	})
 })
@@ -158,7 +158,7 @@ describe('node_modules resolution', () => {
 			import { greet } from 'mypkg/utils';
 			console.log(hello, greet("world"));
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'from mypkg hi world')
 	})
 
@@ -172,7 +172,7 @@ describe('node_modules resolution', () => {
 			import { val } from 'oldpkg';
 			console.log(val);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, '42')
 	})
 
@@ -186,7 +186,7 @@ describe('node_modules resolution', () => {
 			import { scoped } from '@scope/pkg';
 			console.log(scoped);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'works')
 	})
 
@@ -198,7 +198,7 @@ describe('node_modules resolution', () => {
 			import { found } from 'uppkg';
 			console.log(found);
 		`)
-		const output = $`${QJSX()} ${dir}/sub/deep/main.js`
+		const output = $`${QN()} ${dir}/sub/deep/main.js`
 		assert.strictEqual(output, 'walked up')
 	})
 
@@ -211,7 +211,7 @@ describe('node_modules resolution', () => {
 			import { src } from 'dualpkg';
 			console.log(src);
 		`)
-		const output = $`NODE_PATH=${dir}/mylibs ${QJSX()} ${dir}/main.js`
+		const output = $`NODE_PATH=${dir}/mylibs ${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'NODE_PATH')
 	})
 
@@ -225,7 +225,7 @@ describe('node_modules resolution', () => {
 			import { v } from 'simplepkg';
 			console.log(v);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'direct string')
 	})
 
@@ -239,7 +239,7 @@ describe('node_modules resolution', () => {
 			import { v } from 'defpkg';
 			console.log(v);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'from default')
 	})
 
@@ -250,7 +250,7 @@ describe('node_modules resolution', () => {
 			import { v } from 'nopkgjson';
 			console.log(v);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'no pkg json')
 	})
 
@@ -267,7 +267,7 @@ describe('node_modules resolution', () => {
 			import { util } from '@myorg/lib/utils';
 			console.log(root, util);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'root util')
 	})
 
@@ -283,7 +283,7 @@ describe('node_modules resolution', () => {
 			import { v } from 'loosepkg/extra';
 			console.log(v);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, '2')
 	})
 
@@ -300,7 +300,7 @@ describe('node_modules resolution', () => {
 			import { v } from 'fancypkg';
 			console.log(v);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'fallback')
 	})
 
@@ -312,7 +312,7 @@ describe('node_modules resolution', () => {
 			import { v } from 'badpkg';
 			console.log(v);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'survived')
 	})
 
@@ -330,7 +330,7 @@ describe('node_modules resolution', () => {
 			import { result } from 'outer';
 			console.log(result);
 		`)
-		const output = $`${QJSX()} ${dir}/main.js`
+		const output = $`${QN()} ${dir}/main.js`
 		assert.strictEqual(output, 'nested')
 	})
 

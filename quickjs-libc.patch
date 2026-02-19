@@ -2,7 +2,7 @@
 #
 # Target file: quickjs/quickjs-libc.c
 # Applied by: Makefile rule for $(BIN_DIR)/obj/quickjs-libc.c
-# Note: sandboxed-worker.patch and introspect.patch are applied on top of this
+# Note: introspect.patch is applied on top of this (sandbox hooks are included here)
 #
 # Features added:
 #

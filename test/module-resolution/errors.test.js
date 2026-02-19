@@ -4,7 +4,7 @@ import { writeFileSync, rmSync, mkdtempSync, realpathSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { QJSX } from '../util.js'
+import { QN } from '../util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), 'import-error-test-')))
 
@@ -35,7 +35,7 @@ describe('Import error messages', () => {
 import { foo, nonexistent } from './target.js';
 console.log(foo);
 `)
-		const err = $err`${QJSX()} ${dir}/main.js`
+		const err = $err`${QN()} ${dir}/main.js`
 		assert.ok(err, 'Expected an error')
 		assert.ok(err.includes("Could not find export 'nonexistent'"), `Expected export name in error: ${err}`)
 		assert.ok(err.includes('target.js'), `Expected target module in error: ${err}`)
@@ -44,7 +44,7 @@ console.log(foo);
 
 	test('module not found: includes importing file name', ({ dir }) => {
 		writeFileSync(`${dir}/main.js`, `import { foo } from './nonexistent.js';`)
-		const err = $err`${QJSX()} ${dir}/main.js`
+		const err = $err`${QN()} ${dir}/main.js`
 		assert.ok(err, 'Expected an error')
 		assert.ok(err.includes('nonexistent.js'), `Expected missing module name in error: ${err}`)
 		assert.ok(err.includes('imported from') && err.includes('main.js'), `Expected importing file in error: ${err}`)
@@ -53,7 +53,7 @@ console.log(foo);
 	test('module not found in chain: shows import chain', ({ dir }) => {
 		writeFileSync(`${dir}/middle.js`, `import { foo } from './missing.js';\nexport const bar = 1;`)
 		writeFileSync(`${dir}/main.js`, `import { bar } from './middle.js';`)
-		const err = $err`${QJSX()} ${dir}/main.js`
+		const err = $err`${QN()} ${dir}/main.js`
 		assert.ok(err, 'Expected an error')
 		assert.ok(err.includes('missing.js'), `Expected missing module name in error: ${err}`)
 		assert.ok(err.includes('imported from') && err.includes('middle.js'), `Expected intermediate file in error: ${err}`)

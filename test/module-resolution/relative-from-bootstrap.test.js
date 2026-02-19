@@ -13,7 +13,7 @@ import { writeFileSync, rmSync, mkdtempSync, realpathSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { QN, QX, QJSX } from '../util.js'
+import { QN, QX } from '../util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), 'relative-from-bootstrap-')))
 
@@ -132,19 +132,3 @@ describe('Relative path resolution from qx bootstrap', () => {
 	})
 })
 
-describe('Comparison: qjsx handles relative paths correctly', () => {
-	test('qjsx ./script.js works from any directory', ({ dir }) => {
-		writeFileSync(`${dir}/script.js`, `console.log('qjsx success');`)
-		const result = exec(`${QJSX()} ./script.js`, { cwd: dir })
-		assert.strictEqual(result.code, 0, `Expected success, got: ${result.stderr}`)
-		assert.ok(result.stdout.includes('qjsx success'), `Expected 'qjsx success' output, got: ${result.stdout}`)
-	})
-
-	test('qjsx ./non-existing.js error shows correct path', ({ dir }) => {
-		const result = exec(`${QJSX()} ./non-existing.js`, { cwd: dir })
-		assert.strictEqual(result.code, 1, 'Expected failure')
-		// qjsx should show the exact path requested
-		assert.ok(result.stderr.includes('./non-existing.js') || result.stderr.includes('non-existing.js'),
-			`Error should reference the requested path: ${result.stderr}`)
-	})
-})

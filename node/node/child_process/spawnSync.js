@@ -1,50 +1,15 @@
 import * as std from 'std'
-import * as os from 'os'
 import { Buffer } from 'node:buffer'
-import { setNonBlock } from 'qn:uv-fs'
+import { spawnSync as _spawnSync, killPid } from 'qn:uv-process'
 import {
 	parseStdio,
-	setupStdioPipes,
 	getSignalNumber,
 	signalName,
 	checkUnsupportedOptions,
 	NodeCompatibilityError,
-	writeInputToFd,
 } from './utils.js'
 
 const UNSUPPORTED_OPTIONS = ['uid', 'gid']
-
-function drainFd(fd, chunks) {
-	const buf = new Uint8Array(65536)
-	while (true) {
-		const n = os.read(fd, buf.buffer, 0, buf.length)
-		if (n > 0) {
-			chunks.push(buf.slice(0, n))
-		} else {
-			break
-		}
-	}
-}
-
-function assembleOutput(chunks, useUtf8) {
-	if (chunks.length === 0) return useUtf8 ? '' : Buffer.alloc(0)
-
-	let totalLen = 0
-	for (const chunk of chunks) totalLen += chunk.length
-	if (totalLen === 0) return useUtf8 ? '' : Buffer.alloc(0)
-
-	const result = Buffer.alloc(totalLen)
-	let offset = 0
-	for (const chunk of chunks) {
-		result.set(chunk, offset)
-		offset += chunk.length
-	}
-
-	if (useUtf8) {
-		return std._decodeUtf8(result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength))
-	}
-	return result
-}
 
 /**
  * Synchronously spawn a child process and return result object.
@@ -98,93 +63,73 @@ export function spawnSync(command, args, options) {
 		execCommand = shell
 	}
 
-	// Setup pipes using shared utility
+	// Parse stdio config
 	const stdio = parseStdio(options.stdio)
-	const { parentFds, execOptions, closeChildSide } = setupStdioPipes(stdio)
 
-	// Add env and cwd to exec options
-	execOptions.block = false
-	execOptions.env = env
-	execOptions.cwd = cwd
-
-	// Spawn the process
-	const pid = os.exec([execCommand, ...execArgs], execOptions)
-
-	// Close child-side of pipes in parent
-	closeChildSide()
-
-	// Write input then close stdin
-	if (parentFds.stdin !== null) {
-		if (options.input !== undefined) {
-			writeInputToFd(parentFds.stdin, options.input)
-		} else {
-			os.close(parentFds.stdin)
+	// Prepare input as Uint8Array
+	let inputBuf = null
+	if (options.input !== undefined) {
+		if (typeof options.input === 'string') {
+			inputBuf = std._encodeUtf8(options.input)
+		} else if (options.input instanceof ArrayBuffer) {
+			inputBuf = new Uint8Array(options.input)
+		} else if (ArrayBuffer.isView(options.input)) {
+			inputBuf = new Uint8Array(options.input.buffer, options.input.byteOffset, options.input.byteLength)
 		}
 	}
 
-	// Set stdout/stderr to non-blocking for draining during poll loop
-	if (parentFds.stdout !== null) setNonBlock(parentFds.stdout)
-	if (parentFds.stderr !== null) setNonBlock(parentFds.stderr)
+	// Convert env object to "KEY=VALUE" array for C
+	let envArr = null
+	if (env) {
+		envArr = Object.entries(env).map(([k, v]) => `${k}=${v}`)
+	}
 
-	const stdoutChunks = []
-	const stderrChunks = []
-
-	// Poll for process exit with timeout support
-	const timeout = options.timeout || 0
 	const killSignal = options.killSignal || 'SIGTERM'
-	const startTime = Date.now()
-	let timedOut = false
-	let status = null
-	let signal = null
+	const killSigNum = getSignalNumber(killSignal)
 
-	while (true) {
-		if (parentFds.stdout !== null) drainFd(parentFds.stdout, stdoutChunks)
-		if (parentFds.stderr !== null) drainFd(parentFds.stderr, stderrChunks)
+	// Call C-level synchronous spawn
+	const raw = _spawnSync(execCommand, execArgs, {
+		cwd,
+		env: envArr,
+		stdio,
+		input: inputBuf,
+		timeout: options.timeout || 0,
+		killSignal: killSigNum,
+	})
 
-		const [ret, waitStatus] = os.waitpid(pid, os.WNOHANG)
+	// Convert raw Uint8Array stdout/stderr to Buffer or string
+	const rawStdout = raw.stdout || new Uint8Array(0)
+	const rawStderr = raw.stderr || new Uint8Array(0)
 
-		if (ret === pid) {
-			if ((waitStatus & 0x7F) === 0) {
-				status = (waitStatus >> 8) & 0xFF
-			} else {
-				signal = signalName(waitStatus & 0x7F)
-			}
-			break
-		}
-
-		if (timeout > 0 && Date.now() - startTime > timeout) {
-			timedOut = true
-			os.kill(pid, getSignalNumber(killSignal))
-			os.waitpid(pid, 0)
-			break
-		}
-
-		os.sleep(1)
+	let stdout, stderr
+	if (useUtf8) {
+		stdout = rawStdout.length > 0
+			? std._decodeUtf8(rawStdout.buffer.slice(rawStdout.byteOffset, rawStdout.byteOffset + rawStdout.byteLength))
+			: ''
+		stderr = rawStderr.length > 0
+			? std._decodeUtf8(rawStderr.buffer.slice(rawStderr.byteOffset, rawStderr.byteOffset + rawStderr.byteLength))
+			: ''
+	} else {
+		stdout = Buffer.from(rawStdout)
+		stderr = Buffer.from(rawStderr)
 	}
 
-	// Final drain and close
-	if (parentFds.stdout !== null) {
-		drainFd(parentFds.stdout, stdoutChunks)
-		os.close(parentFds.stdout)
-	}
-	if (parentFds.stderr !== null) {
-		drainFd(parentFds.stderr, stderrChunks)
-		os.close(parentFds.stderr)
-	}
-
-	const stdout = assembleOutput(stdoutChunks, useUtf8)
-	const stderr = assembleOutput(stderrChunks, useUtf8)
+	// Build result
+	const status = raw.status
+	const signal = raw.signal !== null ? signalName(raw.signal) : null
 
 	const result = {
-		pid,
+		pid: raw.pid,
 		stdout,
 		stderr,
 		status,
-		signal: timedOut ? killSignal : signal,
+		signal: raw.timedOut ? killSignal : signal,
 		output: [null, stdout, stderr],
 	}
 
-	if (timedOut) {
+	if (raw.error) {
+		result.error = raw.error
+	} else if (raw.timedOut) {
 		result.error = new Error(`spawnSync ${command} ETIMEDOUT`)
 		result.error.code = 'ETIMEDOUT'
 	}

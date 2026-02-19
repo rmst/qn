@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync, realpathSync } from 'node:fs'
-import { QJSX } from '../util.js'
+import { QN } from '../util.js'
 
 const mktempdir = () => realpathSync(mkdtempSync(join(tmpdir(), 'module-res-node-test-')))
 
@@ -15,14 +15,14 @@ const $ = (strings, ...values) => {
 }
 
 /**
- * Run a test twice: once with Node.js, once with qjsx in node mode.
+ * Run a test twice: once with Node.js, once with qn in node mode.
  * Both runs must produce identical output.
  */
 const test = (name, fn) => {
-	const runtimes = process.env.NO_NODEJS_TESTS ? ['qjsx'] : ['node', 'qjsx']
+	const runtimes = process.env.NO_NODEJS_TESTS ? ['qn'] : ['node', 'qn']
 	for (const runtime of runtimes) {
-		const bin = runtime === 'node' ? 'node' : QJSX()
-		const env = runtime === 'qjsx' ? 'QJSX_MODULE_RESOLUTION=node' : ''
+		const bin = runtime === 'node' ? 'node' : QN()
+		const env = runtime === 'qn' ? 'QJSX_MODULE_RESOLUTION=node' : ''
 		nodetest(`${name} [${runtime}]`, () => {
 			const dir = mktempdir()
 			try {
@@ -105,7 +105,7 @@ describe('Node Mode (matches Node.js ESM)', () => {
 	})
 })
 
-describe('Node Mode Failures (should fail in both node and qjsx)', () => {
+describe('Node Mode Failures (should fail in both node and qn)', () => {
 	test('missing .js extension fails', ({ bin, env, dir }) => {
 		writeFileSync(`${dir}/utils.js`, `export const add = (a,b) => a+b;`)
 		writeFileSync(`${dir}/main.js`, `

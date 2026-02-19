@@ -30,14 +30,10 @@ async function handleConnection(socket, handler, onError, headerTimeout) {
 		await writeResponse(data => {
 			return new Promise((resolve, reject) => {
 				if (socket.destroyed) { reject(new Error('socket closed')); return }
-				const ok = socket.write(data)
-				if (ok) resolve()
-				else {
-					const onDrain = () => { socket.removeListener('close', onClose); resolve() }
-					const onClose = () => { socket.removeListener('drain', onDrain); reject(new Error('socket closed')) }
-					socket.once('drain', onDrain)
-					socket.once('close', onClose)
-				}
+				socket.write(data, (err) => {
+					if (err) reject(err)
+					else resolve()
+				})
 			})
 		}, response)
 	} catch (err) {
