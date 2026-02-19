@@ -22,6 +22,10 @@ When wrapping a libuv handle in a JS class, `JS_DupValue(ctx, obj)` alone does N
 Never edit a patch file directly. Instead update the resulting code file and then regenerate the patch file from that.
 
 
+### C/JS layering
+
+The C layer should be as thin as possible — single-dispatch functions that map opcodes to libuv calls with shared promise plumbing. All API design, argument parsing, and result shaping belongs in JS. Adding new operations should rarely require touching C (just a new opcode + JS wrapper). C code should be non-repetitive — boilerplate is a source of bugs. `node:*` shims must behave identically to Node.js, but qn can also offer more ergonomic APIs via `qn:*` namespace.
+
 ### Architecture docs
 When committing changes that affect the project structure (new modules, dependencies, etc.), check if `architecture.md` needs updating.
 

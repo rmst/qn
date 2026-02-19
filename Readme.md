@@ -1,20 +1,18 @@
 # Qn - Quickjs+Node.js
 
-Qn is [QuickJS](https://bellard.org/quickjs) with a few additional features:
+Qn is a lightweight JavaScript runtime built on [QuickJS](https://bellard.org/quickjs) and [libuv](https://libuv.org). It provides a subset of the Node.js API — not every Node.js program will run on qn, but every qn program using only the `node:*` API should run on Node.js without modification.
 
-1. **Module resolution** with two modes (see [docs](module_resolution/Readme.md), [tests](test/module-resolution/)):
+Features:
+
+1. **libuv-based async I/O** — true async file I/O via thread pool (io_uring on supported kernels), TCP/TLS/HTTP networking, child process spawning, signal handling, DNS resolution
+2. **Node.js compatibility** — `node:fs`, `node:net`, `node:tls`, `node:http`, `node:child_process`, `node:stream`, `node:crypto`, `node:path`, `node:events`, `node:url`, `node:os`, `node:buffer`, `node:assert`, `node:test`, `node:sqlite`
+3. **Module resolution** with two modes (see [docs](module_resolution/Readme.md), [tests](test/module-resolution/)):
    - **Bundler mode** (default): `NODE_PATH` for bare imports, `node_modules` walking, `.js` and `/index.js` fallbacks
    - **Node mode** (`QJSX_MODULE_RESOLUTION=node`): matches Node.js ESM exactly
-
-2. `import.meta.dirname` and `import.meta.filename`
-
-3. `qn` binary with Node.js standard library shims (`node:fs`, `node:child_process`, etc.)
-
-4. `os.SandboxedWorker` for running JS in a restricted environment (see [test](test/sandbox.test.js))
-
-5. `qn:introspect` module for closure introspection and function serialization (see [introspect/](introspect/Readme.md))
-
-6. Import errors include source location:
+4. `import.meta.dirname` and `import.meta.filename`
+5. `qn:http` — high-level HTTP server (`serve()` API)
+6. `qn:introspect` — closure introspection and function serialization (see [introspect/](introspect/Readme.md))
+7. Import errors include source location:
    - Export not found: `Could not find export 'foo' in module 'bar.js' (imported at main.js:5)`
    - Module not found: `could not load module filename 'foo.js' (imported from 'main.js')`
 
@@ -33,61 +31,63 @@ make build  # Builds ./bin/qn, ./bin/qx, and ./bin/qnc
 
 ### Usage
 
-**Basic JavaScript execution like QuickJS**
-```bash
-./bin/qjsx script.js
-```
-
-**Module resolution with NODE_PATH**
-```bash
-# script.js can import all modules in ./mymodules and ./lib.
-NODE_PATH=./my_modules:./lib ./bin/qjsx script.js
-```
-
-`NODE_PATH` enables bare module imports (e.g., `import foo from "foo"`) by specifying search directories. Standard `node_modules` walking with `package.json` resolution is also supported.
-
-**With Node.js compatibility modules**
+**Run a script**
 ```bash
 ./bin/qn script.js
 ```
 
-`script.js` can use a subset of node:fs, node:child_process, etc (see `node/node`)
+`script.js` can use `node:fs`, `node:net`, `node:http`, etc.
+
+**Module resolution with NODE_PATH**
+```bash
+NODE_PATH=./my_modules:./lib ./bin/qn script.js
+```
+
+`NODE_PATH` enables bare module imports (e.g., `import foo from "foo"`) by specifying search directories. Standard `node_modules` walking with `package.json` resolution is also supported.
+
+**Run tests**
+```bash
+./bin/qn --test test/
+```
+
+**Shell scripting (qx)**
+```bash
+./bin/qx script.js  # zx-compatible shell scripting with $ function
+```
 
 
 ### Building Standalone Applications
 
-`qnc` can be used to compile JavaScript applications into standalone executables with embedded modules.
+`qnc` compiles JavaScript applications into standalone executables with embedded modules.
 
-#### Basic Usage
 ```bash
 # Compile an application and embed all modules imported by main.js
 NODE_PATH=./my_modules ./bin/qnc -o my-app main.js
 
 # The resulting binary is a standalone executable
-./my-app                          # (runs your application)
+./my-app
 ```
 
-#### Embedding Additional Modules
 Use the `-D` flag to embed modules that aren't directly imported but should be available to dynamically loaded scripts:
 
 ```bash
-# Embed modules for dynamic loading
 NODE_PATH=./libs ./bin/qnc -D utils -D config -o runtime bootstrap.js
-
-# External scripts can now import these modules
 ./runtime external-script.js      # Can use import { ... } from "utils"
 ```
 
-This is how `qn` is built - it compiles a minimal bootstrap with all node modules embedded using `-D` flags, creating a single native executable that can run any script with Node.js compatibility.
+This is how `qn` itself is built — it compiles a minimal bootstrap with all node modules embedded using `-D` flags, creating a single native executable.
+
 
 ### Architecture
 
-See [architecture.md](architecture.md) for an overview of own code and vendored dependencies (QuickJS, SQLite, BearSSL).
+See [architecture.md](architecture.md) for codebase structure, and [comparison.md](comparison.md) for comparisons with Node.js and txiki.js.
 
 Key source files:
 
-- `qnc.c` — standalone compiler (replaces the former `qjsxc.patch` applied to `quickjs/qjsc.c`)
-- `quickjs.patch` is applied to `quickjs/quickjs.c` (import error locations)
-- `qjsx.patch` is applied to `quickjs/qjs.c`
-- `quickjs-libc.patch` is applied to `quickjs/quickjs-libc.c`
-- `module_resolution/module-resolution.h` contains shared module resolution logic (NODE_PATH, node_modules, package.json)
+- `libuv/` — C modules for libuv integration (event loop, streams, fs, process, DNS, signals)
+- `node/node/` — Node.js API shims in JS
+- `node/qn/` — qn-specific modules (`qn:http`, libuv JS wrappers)
+- `qnc.c` — standalone compiler
+- `module_resolution/module-resolution.h` — shared module resolution logic
+- `quickjs.patch` — applied to `quickjs/quickjs.c` (import error locations)
+- `quickjs-libc.patch` — applied to `quickjs/quickjs-libc.c` (`import.meta.dirname/filename`, UTF-8 helpers)
