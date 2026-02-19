@@ -42,7 +42,8 @@ export class Socket extends EventEmitter {
 	#connecting = false
 	#connected = false
 	#destroyed = false
-	#ended = false
+	#readEnded = false
+	#writeEnded = false
 	#allowHalfOpen = false
 	remoteAddress = null
 	remotePort = null
@@ -100,12 +101,18 @@ export class Socket extends EventEmitter {
 				return
 			}
 			if (buf === null) {
-				// EOF
+				// EOF — remote closed their write side
 				readStop(this.#handle)
-				this.#ended = true
+				this.#readEnded = true
 				this.emit('end')
 				if (!this.#allowHalfOpen) {
-					this.end()
+					if (this.#writeEnded) {
+						// Both sides done — destroy
+						this.destroy()
+					} else {
+						// Auto-close our write side too
+						this.end()
+					}
 				}
 				return
 			}
@@ -184,7 +191,7 @@ export class Socket extends EventEmitter {
 			callback = encoding
 			encoding = undefined
 		}
-		if (this.#destroyed || this.#ended) {
+		if (this.#destroyed || this.#writeEnded) {
 			const err = new Error('write after end')
 			if (callback) callback(err)
 			return false
@@ -235,6 +242,9 @@ export class Socket extends EventEmitter {
 			this.write(data, encoding)
 		}
 
+		if (this.#writeEnded) return this
+		this.#writeEnded = true
+
 		if (callback) this.once('finish', callback)
 
 		const doEnd = () => {
@@ -245,7 +255,10 @@ export class Socket extends EventEmitter {
 			if (this.#handle && this.#connected) {
 				setOnShutdown(this.#handle, (err) => {
 					this.emit('finish')
-					if (this.#ended || !this.#allowHalfOpen) {
+					/* Only destroy if the read side is already done.
+					 * If not, keep the socket open for reading — the
+					 * read EOF handler will destroy when it fires. */
+					if (this.#readEnded) {
 						this.destroy()
 					}
 				})
@@ -254,15 +267,13 @@ export class Socket extends EventEmitter {
 				} catch (e) {
 					// ignore errors during shutdown
 					this.emit('finish')
-					if (this.#ended || !this.#allowHalfOpen) {
+					if (this.#readEnded) {
 						this.destroy()
 					}
 				}
 			} else {
 				this.emit('finish')
-				if (this.#ended || !this.#allowHalfOpen) {
-					this.destroy()
-				}
+				this.destroy()
 			}
 		}
 

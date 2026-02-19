@@ -21,6 +21,7 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include <signal.h>
 #endif
 
 /* --------------------------------------------------------------------------
@@ -674,6 +675,13 @@ void qn_vm_loop(JSContext *ctx) {
 
 void qn_vm_init(JSContext *ctx) {
 	g_ctx = ctx;
+
+#if !defined(_WIN32)
+	/* Ignore SIGPIPE so writev() on closed sockets returns EPIPE instead of
+	   killing the process. Matches Node.js / Deno / txiki.js behavior. */
+	signal(SIGPIPE, SIG_IGN);
+#endif
+
 	g_loop = malloc(sizeof(uv_loop_t));
 	if (!g_loop) {
 		fprintf(stderr, "qn_vm_init: could not allocate uv_loop_t\n");

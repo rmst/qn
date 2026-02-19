@@ -176,6 +176,143 @@ describe('node:net Server', () => {
 			assert.equal(lines[1], 'start:0,1,2')
 		})
 	})
+
+	testQnOnly('large client-to-server transfer', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { createServer, createConnection } from 'node:net'
+
+			const size = 256 * 1024
+			const data = new Uint8Array(size)
+			for (let i = 0; i < size; i++) data[i] = i & 0xff
+
+			const server = createServer((socket) => {
+				let totalLen = 0
+				let checksum = 0
+				socket.on('data', (chunk) => {
+					totalLen += chunk.length
+					for (let i = 0; i < chunk.length; i++) checksum = (checksum + chunk[i]) >>> 0
+				})
+				socket.on('end', () => {
+					socket.write(JSON.stringify({ totalLen, checksum }))
+					socket.end()
+				})
+			})
+
+			server.listen(0, '127.0.0.1', () => {
+				const addr = server.address()
+				const client = createConnection(addr.port, '127.0.0.1', () => {
+					client.write(data, () => client.end())
+				})
+				let resp = ''
+				client.on('data', (d) => resp += new TextDecoder().decode(d))
+				client.on('end', () => {
+					console.log(resp)
+					server.close()
+				})
+			})
+		`)
+		return execAsync(bin, [`${dir}/test.js`]).then(output => {
+			const result = JSON.parse(output)
+			assert.equal(result.totalLen, 256 * 1024)
+		})
+	})
+
+	// Cross-runtime: qn client connects to Node.js server
+	testQnOnly('large transfer: qn client → Node.js server', ({ bin, dir }) => {
+		if (process.env.NO_NODEJS_TESTS) return
+		// Node.js server script
+		writeFileSync(`${dir}/server.js`, `
+			import { createServer } from 'node:net'
+			const server = createServer((socket) => {
+				let totalLen = 0
+				socket.on('data', (chunk) => { totalLen += chunk.length })
+				socket.on('end', () => {
+					socket.write(String(totalLen))
+					socket.end()
+				})
+			})
+			server.listen(0, '127.0.0.1', () => {
+				console.log(server.address().port)
+			})
+		`)
+		// qn client script (port passed as argv)
+		writeFileSync(`${dir}/client.js`, `
+			import { createConnection } from 'node:net'
+			const port = parseInt(process.argv[2] || scriptArgs[2])
+			const data = new Uint8Array(256 * 1024)
+			const client = createConnection(port, '127.0.0.1', () => {
+				client.write(data, () => client.end())
+			})
+			let resp = ''
+			client.on('data', (d) => resp += new TextDecoder().decode(d))
+			client.on('end', () => console.log(resp))
+		`)
+		const serverProc = execAsync('node', [`${dir}/server.js`])
+		// Wait for port
+		return new Promise((resolve, reject) => {
+			let port = ''
+			serverProc.child.stdout.on('data', (d) => {
+				port += d.toString()
+				if (port.includes('\n')) {
+					const p = port.trim()
+					execAsync(bin, [`${dir}/client.js`, p]).then(output => {
+						serverProc.child.kill()
+						assert.equal(output.trim(), String(256 * 1024))
+						resolve()
+					}).catch(reject)
+				}
+			})
+			serverProc.catch(() => {}) // ignore server exit error from kill
+		})
+	})
+
+	// Cross-runtime: Node.js client connects to qn server
+	testQnOnly('large transfer: Node.js client → qn server', ({ bin, dir }) => {
+		if (process.env.NO_NODEJS_TESTS) return
+		// qn server script
+		writeFileSync(`${dir}/server.js`, `
+			import { createServer } from 'node:net'
+			const server = createServer((socket) => {
+				let totalLen = 0
+				socket.on('data', (chunk) => { totalLen += chunk.length })
+				socket.on('end', () => {
+					socket.write(String(totalLen))
+					socket.end()
+				})
+			})
+			server.listen(0, '127.0.0.1', () => {
+				console.log(server.address().port)
+			})
+		`)
+		// Node.js client script
+		writeFileSync(`${dir}/client.js`, `
+			import { createConnection } from 'node:net'
+			const port = parseInt(process.argv[2])
+			const data = Buffer.alloc(256 * 1024)
+			const client = createConnection(port, '127.0.0.1', () => {
+				client.write(data, () => client.end())
+			})
+			let resp = ''
+			client.on('data', (d) => resp += d.toString())
+			client.on('end', () => console.log(resp))
+		`)
+		const serverProc = execAsync(bin, [`${dir}/server.js`])
+		return new Promise((resolve, reject) => {
+			let port = ''
+			serverProc.child.stdout.on('data', (d) => {
+				port += d.toString()
+				if (port.includes('\n')) {
+					const p = port.trim()
+					execAsync('node', [`${dir}/client.js`, p]).then(output => {
+						serverProc.child.kill()
+						assert.equal(output.trim(), String(256 * 1024))
+						resolve()
+					}).catch(reject)
+				}
+			})
+			serverProc.catch(() => {}) // ignore server exit error from kill
+		})
+	})
 })
 
 describe('node:net Socket client', () => {
