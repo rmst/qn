@@ -457,6 +457,13 @@ export function createConnection(options, callback) {
 
 export const connect = createConnection
 
+/*
+ * Keep qn_socket embedded in the binary so that test scripts and legacy code
+ * can still `import ... from 'qn_socket'`. This import will be removed once
+ * all tests are migrated to node:net.
+ */
+import 'qn_socket'
+
 export default {
 	Socket,
 	Server,

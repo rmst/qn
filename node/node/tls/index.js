@@ -5,8 +5,8 @@
  * The C side (qn_tls) exposes thin wrappers around the BearSSL engine
  * state machine; this module provides the async I/O loop on top.
  *
- * All I/O goes through a transport object { read, write }. When a raw
- * socket fd is passed, it is automatically wrapped in an fd transport.
+ * All I/O goes through a transport object { read, write }. Raw socket fds
+ * and libuv stream handles are automatically wrapped in transports.
  */
 
 import {
@@ -19,6 +19,10 @@ import {
 	EAGAIN as _EAGAIN,
 } from 'qn_tls'
 import * as os from 'os'
+import {
+	readStart, readStop, write as _streamWrite,
+	close as _streamClose, setOnRead,
+} from 'qn/uv-stream'
 
 export {
 	tlsLoadCACerts as loadCACerts,
@@ -26,8 +30,29 @@ export {
 	tlsLoadServerCert as loadServerCert,
 }
 export { TLS_CLOSED, TLS_SENDREC, TLS_RECVREC, TLS_SENDAPP, TLS_RECVAPP }
-export const connect = _tlsConnect
-export const accept = _tlsAccept
+
+/**
+ * Create a TLS client context.
+ * @param {number|string} fdOrHostname - fd for legacy mode, or hostname for transport mode
+ * @param {string} [hostname] - hostname when using fd mode: connect(fd, hostname)
+ */
+export function connect(fdOrHostname, hostname) {
+	if (typeof fdOrHostname === 'number') {
+		/* Legacy: connect(fd, hostname) */
+		return _tlsConnect(fdOrHostname, hostname)
+	}
+	/* New: connect(hostname) — transport-based, no fd */
+	return _tlsConnect(-1, fdOrHostname)
+}
+
+export function accept(fdOrCred, cred) {
+	if (cred !== undefined) {
+		/* Legacy: accept(fd, cred) */
+		return _tlsAccept(fdOrCred, cred)
+	}
+	/* New: accept(cred) — transport-based */
+	return _tlsAccept(-1, fdOrCred)
+}
 
 /** Create a TLS client context without a socket fd (for transport-based I/O) */
 export function connectBuf(hostname) {
@@ -38,6 +63,8 @@ export function connectBuf(hostname) {
 export function acceptBuf(cred) {
 	return _tlsAccept(-1, cred)
 }
+
+/* ---- fd-based transport (legacy, uses os.read/os.write/os.setReadHandler) ---- */
 
 function waitReadable(fd, signal) {
 	if (signal?.aborted) return Promise.reject(signal.reason)
@@ -97,6 +124,86 @@ function fdTransport(fd) {
 	}
 }
 
+/* ---- libuv stream-based transport ---- */
+
+/**
+ * Create a transport { read, write } from a libuv stream handle.
+ * The read side uses one-shot reads: start reading, resolve on first chunk, stop.
+ */
+export function streamTransport(handle) {
+	let pendingResolve = null
+	let pendingReject = null
+	let buffered = null
+	let eof = false
+
+	setOnRead(handle, (buf, err) => {
+		if (err) {
+			readStop(handle)
+			if (pendingReject) {
+				const rej = pendingReject
+				pendingResolve = pendingReject = null
+				rej(new Error('TLS: stream read error'))
+			}
+			return
+		}
+		if (buf === null) {
+			eof = true
+			readStop(handle)
+			if (pendingResolve) {
+				const res = pendingResolve
+				pendingResolve = pendingReject = null
+				res(null)
+			}
+			return
+		}
+		/* Got data — stop reading and deliver */
+		readStop(handle)
+		const chunk = new Uint8Array(buf)
+		if (pendingResolve) {
+			const res = pendingResolve
+			pendingResolve = pendingReject = null
+			res(chunk)
+		} else {
+			buffered = chunk
+		}
+	})
+
+	return {
+		read({ signal } = {}) {
+			if (buffered) {
+				const b = buffered
+				buffered = null
+				return Promise.resolve(b)
+			}
+			if (eof) return Promise.resolve(null)
+			if (signal?.aborted) return Promise.reject(signal.reason)
+			return new Promise((resolve, reject) => {
+				pendingResolve = resolve
+				pendingReject = reject
+				if (signal) {
+					signal.addEventListener('abort', () => {
+						readStop(handle)
+						pendingResolve = pendingReject = null
+						reject(signal.reason)
+					}, { once: true })
+				}
+				readStart(handle)
+			})
+		},
+		write(data, { signal } = {}) {
+			if (signal?.aborted) return Promise.reject(signal.reason)
+			return _streamWrite(handle, data)
+		},
+	}
+}
+
+/* ---- Auto-detect transport from fd or transport object ---- */
+
+function toTransport(fdOrTransport) {
+	if (typeof fdOrTransport === 'number') return fdTransport(fdOrTransport)
+	return fdOrTransport
+}
+
 /** Leftover state for connections */
 const _recvState = new WeakMap()
 
@@ -105,7 +212,7 @@ const _recvState = new WeakMap()
  * is met or engine closes. Wraps raw fds into a transport automatically.
  */
 async function drive(conn, fdOrTransport, condition, signal) {
-	const transport = typeof fdOrTransport === 'number' ? fdTransport(fdOrTransport) : fdOrTransport
+	const transport = toTransport(fdOrTransport)
 	let rs = _recvState.get(conn)
 	if (!rs) { rs = { leftover: null }; _recvState.set(conn, rs) }
 	for (;;) {
@@ -191,7 +298,7 @@ export async function flush(conn, fdOrTransport, signal) {
  * Close TLS connection gracefully (sends close_notify).
  */
 export async function close(conn, fdOrTransport) {
-	const transport = typeof fdOrTransport === 'number' ? fdTransport(fdOrTransport) : fdOrTransport
+	const transport = toTransport(fdOrTransport)
 	_tlsClose(conn)
 	try {
 		for (;;) {
