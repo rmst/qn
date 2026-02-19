@@ -7,6 +7,7 @@
  */
 
 #include "qn-uv-stream.h"
+#include "qn-vm.h"
 #include <string.h>
 
 /* ---- Process handle struct ---- */
@@ -18,13 +19,31 @@ typedef struct QNProcess {
 	uv_process_t handle;
 	JSValue on_exit;   /* function(exit_code, term_signal) */
 	JSValue this_val;  /* prevent GC while libuv holds a reference */
+	struct QNProcess *next;
 } QNProcess;
 
 static JSClassID qn_process_class_id;
+static void qn_process_cleanup(JSRuntime *rt);
+static QNProcess *process_head = NULL;
+
+static void process_link(QNProcess *p) {
+	p->next = process_head;
+	process_head = p;
+}
+
+static void process_unlink(QNProcess *p) {
+	QNProcess **pp = &process_head;
+	while (*pp) {
+		if (*pp == p) { *pp = p->next; return; }
+		pp = &(*pp)->next;
+	}
+}
 
 static void qn_process_maybe_free(QNProcess *p) {
-	if (p->closed && p->finalized)
+	if (p->closed && p->finalized) {
+		process_unlink(p);
 		free(p);
+	}
 }
 
 static void qn_process_close_cb(uv_handle_t *handle) {
@@ -39,6 +58,8 @@ static void qn_process_finalizer(JSRuntime *rt, JSValue val) {
 
 	JS_FreeValueRT(rt, p->on_exit);
 	JS_FreeValueRT(rt, p->this_val);
+	p->on_exit = JS_UNDEFINED;
+	p->this_val = JS_UNDEFINED;
 
 	p->finalized = 1;
 	if (!p->closed) {
@@ -54,7 +75,7 @@ static void qn_process_gc_mark(JSRuntime *rt, JSValueConst val,
 	QNProcess *p = JS_GetOpaque(val, qn_process_class_id);
 	if (!p) return;
 	JS_MarkValue(rt, p->on_exit, mark_func);
-	JS_MarkValue(rt, p->this_val, mark_func);
+	/* this_val intentionally NOT marked — see CLAUDE.md "QuickJS GC" */
 }
 
 static JSClassDef qn_process_class = {
@@ -550,6 +571,7 @@ static JSValue js_uv_process_op(JSContext *ctx, JSValueConst this_val,
 		proc->on_exit = JS_UNDEFINED;
 		proc->this_val = JS_UNDEFINED;
 		proc->handle.data = proc;
+		process_link(proc);
 
 		/* Setup spawn options */
 		uv_process_options_t popts;
@@ -662,5 +684,15 @@ JSModuleDef *js_init_module_qn_uv_process(JSContext *ctx,
 	JSModuleDef *m = JS_NewCModule(ctx, module_name, js_uv_process_init);
 	if (!m) return NULL;
 	JS_AddModuleExportList(ctx, m, js_uv_process_funcs, countof(js_uv_process_funcs));
+	qn_vm_register_cleanup(qn_process_cleanup);
 	return m;
+}
+
+void qn_process_cleanup(JSRuntime *rt) {
+	for (QNProcess *p = process_head; p; p = p->next) {
+		if (!JS_IsUndefined(p->this_val)) {
+			JS_FreeValueRT(rt, p->this_val);
+			p->this_val = JS_UNDEFINED;
+		}
+	}
 }

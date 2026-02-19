@@ -6,18 +6,53 @@
  */
 
 #include "qn-uv-stream.h"
+#include "qn-vm.h"
 #include <string.h>
 
 JSClassID qn_stream_class_id;
 
+/* Linked list of all QNStream objects, for shutdown cleanup */
+static QNStream *stream_head = NULL;
+
+static void stream_link(QNStream *s) {
+	s->next = stream_head;
+	stream_head = s;
+}
+
+static void stream_unlink(QNStream *s) {
+	QNStream **pp = &stream_head;
+	while (*pp) {
+		if (*pp == s) { *pp = s->next; return; }
+		pp = &(*pp)->next;
+	}
+}
+
 static void qn_stream_maybe_free(QNStream *s) {
-	if (s->closed && s->finalized)
+	if (s->closed && s->finalized) {
+		stream_unlink(s);
 		free(s);
+	}
 }
 
 static void qn_stream_close_cb(uv_handle_t *handle) {
 	QNStream *s = handle->data;
 	s->closed = 1;
+	/* Release the prevent-GC ref now that libuv is truly done with the handle.
+	 * Must happen HERE (not in STREAM_CLOSE) because uv_close is async —
+	 * libuv may still fire pending write/shutdown callbacks before this runs.
+	 * If we freed this_val earlier, GC could collect the JS object and run
+	 * the finalizer (which frees on_read/on_shutdown/etc.) while those
+	 * callbacks still need them. */
+	/* If finalized is already set, the finalizer already freed this_val
+	 * (and all other JS values), so we must not free it again. */
+	if (!s->finalized && !JS_IsUndefined(s->this_val)) {
+		JSValue tmp = s->this_val;
+		s->this_val = JS_UNDEFINED;
+		JS_FreeValue(s->ctx, tmp);
+		/* JS_FreeValue may have dropped the last ref, triggering GC →
+		 * finalizer → maybe_free → struct freed. Do not access s. */
+		return;
+	}
 	qn_stream_maybe_free(s);
 }
 
@@ -30,6 +65,13 @@ static void qn_stream_finalizer(JSRuntime *rt, JSValue val) {
 	JS_FreeValueRT(rt, s->on_connect);
 	JS_FreeValueRT(rt, s->on_shutdown);
 	JS_FreeValueRT(rt, s->this_val);
+	/* Null out so libuv callbacks that fire after finalization see
+	 * JS_UNDEFINED and bail out instead of using freed values. */
+	s->on_read = JS_UNDEFINED;
+	s->on_connection = JS_UNDEFINED;
+	s->on_connect = JS_UNDEFINED;
+	s->on_shutdown = JS_UNDEFINED;
+	s->this_val = JS_UNDEFINED;
 
 	s->finalized = 1;
 	if (!s->closed) {
@@ -48,7 +90,12 @@ static void qn_stream_gc_mark(JSRuntime *rt, JSValueConst val,
 	JS_MarkValue(rt, s->on_connection, mark_func);
 	JS_MarkValue(rt, s->on_connect, mark_func);
 	JS_MarkValue(rt, s->on_shutdown, mark_func);
-	JS_MarkValue(rt, s->this_val, mark_func);
+	/* NOTE: this_val is intentionally NOT marked. It is a prevent-GC
+	 * self-reference (points back to this same JS object). If we mark it,
+	 * the cycle collector sees the self-cycle and can collect the object
+	 * while libuv still holds the handle. By not marking it, the refcount
+	 * bump from JS_DupValue appears as an external reference, preventing
+	 * collection until close_cb explicitly frees this_val. */
 }
 
 static JSClassDef qn_stream_class = {
@@ -73,6 +120,7 @@ QNStream *qn_stream_new(JSContext *ctx) {
 	s->on_shutdown = JS_UNDEFINED;
 	s->this_val = JS_UNDEFINED;
 	s->h.handle.data = s;
+	stream_link(s);
 	return s;
 }
 
@@ -418,9 +466,11 @@ static JSValue js_uv_stream_op(JSContext *ctx, JSValueConst this_val,
 		if (!s) return JS_EXCEPTION;
 		if (!uv_is_closing(&s->h.handle)) {
 			uv_close(&s->h.handle, qn_stream_close_cb);
-			/* Release the prevent-GC ref */
-			JS_FreeValue(ctx, s->this_val);
-			s->this_val = JS_UNDEFINED;
+			/* NOTE: do NOT free this_val here. uv_close is async — libuv
+			 * may still fire pending write/shutdown callbacks before the
+			 * close callback runs. The prevent-GC ref keeps the JS object
+			 * alive so the finalizer won't free on_read/on_shutdown/etc.
+			 * prematurely. this_val is freed in qn_stream_close_cb. */
 		}
 		return JS_UNDEFINED;
 	}
@@ -567,5 +617,18 @@ JSModuleDef *js_init_module_qn_uv_stream(JSContext *ctx,
 	JSModuleDef *m = JS_NewCModule(ctx, module_name, js_uv_stream_init);
 	if (!m) return NULL;
 	JS_AddModuleExportList(ctx, m, js_uv_stream_funcs, countof(js_uv_stream_funcs));
+	qn_vm_register_cleanup(qn_stream_cleanup);
 	return m;
+}
+
+void qn_stream_cleanup(JSRuntime *rt) {
+	/* Release prevent-GC self-references on all live streams so the
+	 * cycle collector (or simple refcount) can free the JS objects.
+	 * Called during runtime shutdown before JS_FreeRuntime. */
+	for (QNStream *s = stream_head; s; s = s->next) {
+		if (!JS_IsUndefined(s->this_val)) {
+			JS_FreeValueRT(rt, s->this_val);
+			s->this_val = JS_UNDEFINED;
+		}
+	}
 }

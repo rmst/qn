@@ -364,6 +364,49 @@ describe('node:net Socket client', () => {
 		})
 	})
 
+	testQnOnly('repeated connections do not crash', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { createServer, createConnection } from 'node:net'
+
+			const server = createServer((socket) => {
+				let chunks = []
+				socket.on('data', (chunk) => chunks.push(chunk))
+				socket.on('end', () => {
+					const total = chunks.reduce((s, c) => s + c.length, 0)
+					socket.write(String(total))
+					socket.end()
+				})
+			})
+
+			server.listen(0, '127.0.0.1', async () => {
+				const port = server.address().port
+				const size = 16384
+
+				for (let i = 0; i < 20; i++) {
+					const result = await new Promise((resolve, reject) => {
+						const client = createConnection(port, '127.0.0.1', () => {
+							client.write(new Uint8Array(size), () => client.end())
+						})
+						let resp = ''
+						client.on('data', (d) => resp += new TextDecoder().decode(d))
+						client.on('end', () => resolve(resp))
+						client.on('error', reject)
+					})
+					if (result !== String(size)) {
+						console.log('FAIL at ' + i + ': got ' + result)
+						server.close()
+						return
+					}
+				}
+				console.log('ok')
+				server.close()
+			})
+		`)
+		return execAsync(bin, [`${dir}/test.js`]).then(output => {
+			assert.equal(output, 'ok')
+		})
+	})
+
 	testQnOnly('end event on server disconnect', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { createServer, createConnection } from 'node:net'

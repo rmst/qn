@@ -22,6 +22,7 @@ typedef struct QNStream {
 	} h;
 	JSValue on_read, on_connection, on_connect, on_shutdown;
 	JSValue this_val;
+	struct QNStream *next; /* linked list of all streams */
 } QNStream;
 
 extern JSClassID qn_stream_class_id;
@@ -31,5 +32,9 @@ QNStream *qn_stream_new(JSContext *ctx);
 
 /* Wrap an initialized QNStream into a JS object. Sets this_val to prevent GC. */
 JSValue qn_stream_wrap(JSContext *ctx, QNStream *s);
+
+/* Release prevent-GC refs on all streams. Called during runtime shutdown
+ * so that the cycle collector can free remaining stream objects. */
+void qn_stream_cleanup(JSRuntime *rt);
 
 #endif /* QN_UV_STREAM_H */

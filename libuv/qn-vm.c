@@ -25,6 +25,19 @@
 #endif
 
 /* --------------------------------------------------------------------------
+ * Cleanup callback registry
+ * -------------------------------------------------------------------------- */
+
+#define MAX_CLEANUP_FNS 8
+static qn_cleanup_fn g_cleanup_fns[MAX_CLEANUP_FNS];
+static int g_cleanup_count = 0;
+
+void qn_vm_register_cleanup(qn_cleanup_fn fn) {
+	if (g_cleanup_count < MAX_CLEANUP_FNS)
+		g_cleanup_fns[g_cleanup_count++] = fn;
+}
+
+/* --------------------------------------------------------------------------
  * Loop ownership
  * -------------------------------------------------------------------------- */
 
@@ -730,6 +743,11 @@ void qn_vm_free(JSRuntime *rt) {
 
 	/* Free rejection tracking entries */
 	rejection_free_all(rt);
+
+	/* Release prevent-GC refs on all handles so objects can be freed. */
+	for (int i = 0; i < g_cleanup_count; i++)
+		g_cleanup_fns[i](rt);
+	g_cleanup_count = 0;
 
 	if (g_loop) {
 		/* Run to let pending close callbacks fire */

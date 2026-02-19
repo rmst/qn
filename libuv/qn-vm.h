@@ -61,6 +61,14 @@ void qn_vm_eval_binary_json_module(JSContext *ctx,
 void qn_vm_loop(JSContext *ctx);
 
 /*
+ * Register a cleanup callback to be called during qn_vm_free().
+ * Used by modules (stream, process) that need to release prevent-GC
+ * refs before runtime shutdown.
+ */
+typedef void (*qn_cleanup_fn)(JSRuntime *rt);
+void qn_vm_register_cleanup(qn_cleanup_fn fn);
+
+/*
  * Module init function for the qn_vm native module.
  * Exports: setTimeout, clearTimeout, setReadHandler, setWriteHandler
  */

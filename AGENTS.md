@@ -14,6 +14,10 @@ NOTE: We'd like to get rid of ar, patch and GNU make as requirements and just de
 
 
 
+### QuickJS GC and libuv handles
+
+When wrapping a libuv handle in a JS class, `JS_DupValue(ctx, obj)` alone does NOT prevent GC — QuickJS's cycle collector detects self-referential cycles and collects them despite the refcount. To keep a handle alive, store the DupValue'd ref (e.g. `this_val`) but do NOT pass it to `JS_MarkValue` in `gc_mark`. See `qn-uv-stream.c` for the correct pattern, including shutdown cleanup.
+
 ### Patch files
 Never edit a patch file directly. Instead update the resulting code file and then regenerate the patch file from that.
 
