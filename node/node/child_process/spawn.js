@@ -1,8 +1,8 @@
 import * as std from 'std'
-import * as os from 'os'
-import * as qn_native from 'qn_native'
+import { spawn as _uvSpawn } from 'qn/uv-process'
+import { pipeNew } from 'qn/uv-stream'
 import { ChildProcess } from './ChildProcess.js'
-import { parseStdio, setupStdioPipes, checkUnsupportedOptions } from './utils.js'
+import { parseStdio, checkUnsupportedOptions } from './utils.js'
 
 const UNSUPPORTED_OPTIONS = [
 	'uid',
@@ -57,6 +57,7 @@ export function spawn(command, args, options) {
 
 	const env = options.env || std.getenviron()
 	const cwd = options.cwd || undefined
+	const detached = options.detached || false
 
 	// Handle shell option
 	let execCommand = command
@@ -67,42 +68,58 @@ export function spawn(command, args, options) {
 		execCommand = shell
 	}
 
-	// Setup pipes using shared utility
+	// Setup stdio pipes
 	const stdio = parseStdio(options.stdio)
-	const { parentFds, execOptions, closeChildSide } = setupStdioPipes(stdio)
+	const stdinHandle = stdio[0] === 'pipe' ? pipeNew() : null
+	const stdoutHandle = stdio[1] === 'pipe' ? pipeNew() : null
+	const stderrHandle = stdio[2] === 'pipe' ? pipeNew() : null
 
-	// Add env and cwd to exec options
-	execOptions.block = false
-	execOptions.env = env
-	execOptions.cwd = cwd
+	// Build stdio array for uv_spawn:
+	//   QNStream handle = create pipe
+	//   null = ignore
+	//   undefined = inherit
+	//   number = inherit that fd
+	const uvStdio = stdio.map((mode, i) => {
+		if (mode === 'pipe') return [stdinHandle, stdoutHandle, stderrHandle][i]
+		if (mode === 'inherit') return undefined
+		if (mode === 'ignore') return null
+		if (typeof mode === 'number') return mode
+		return null // fallback to ignore
+	})
 
-	let pid
-	const detached = options.detached || false
+	// Convert env object to array of "KEY=VALUE" strings
+	const envArray = env
+		? Object.entries(env).map(([k, v]) => `${k}=${v}`)
+		: undefined
 
-	if (detached) {
-		// Use spawn_setsid for detached processes (creates new session/process group)
-		const setsidOptions = { cwd }
-		if (execOptions.stdin !== undefined) setsidOptions.stdin = execOptions.stdin
-		if (execOptions.stdout !== undefined) setsidOptions.stdout = execOptions.stdout
-		if (execOptions.stderr !== undefined) setsidOptions.stderr = execOptions.stderr
-		if (env) setsidOptions.env = env
-
-		pid = qn_native.spawn_setsid([execCommand, ...execArgs], setsidOptions)
-	} else {
-		// Normal spawn
-		pid = os.exec([execCommand, ...execArgs], execOptions)
+	// Spawn via libuv
+	let procHandle
+	try {
+		procHandle = _uvSpawn(execCommand, execArgs, {
+			cwd,
+			env: envArray,
+			stdio: uvStdio,
+			detached,
+		})
+	} catch (err) {
+		// Emit error asynchronously like Node.js does
+		const child = new ChildProcess(null, {
+			stdinHandle: null,
+			stdoutHandle: null,
+			stderrHandle: null,
+			detached,
+			spawnError: err,
+		})
+		return child
 	}
 
-	// Close child-side of pipes in parent
-	closeChildSide()
-
 	// Create ChildProcess instance
-	const childOpts = { detached }
-	if (parentFds.stdin !== null) childOpts.stdinFd = parentFds.stdin
-	if (parentFds.stdout !== null) childOpts.stdoutFd = parentFds.stdout
-	if (parentFds.stderr !== null) childOpts.stderrFd = parentFds.stderr
-
-	const child = new ChildProcess(pid, childOpts)
+	const child = new ChildProcess(procHandle, {
+		stdinHandle: stdio[0] === 'pipe' ? stdinHandle : null,
+		stdoutHandle: stdio[1] === 'pipe' ? stdoutHandle : null,
+		stderrHandle: stdio[2] === 'pipe' ? stderrHandle : null,
+		detached,
+	})
 
 	// Handle AbortSignal
 	if (options.signal) {

@@ -5,31 +5,10 @@
  * Two-phase destruction (closed + finalized) following txiki.js.
  */
 
-#include "qn-uv-utils.h"
+#include "qn-uv-stream.h"
 #include <string.h>
 
-/* ---- Stream handle struct ---- */
-
-typedef struct QNStream {
-	JSContext *ctx;
-	int closed;
-	int finalized;
-	union {
-		uv_handle_t handle;
-		uv_stream_t stream;
-		uv_tcp_t tcp;
-		uv_pipe_t pipe;
-		uv_tty_t tty;
-	} h;
-	/* JS callbacks: onread, onconnection, onconnect, onshutdown */
-	JSValue on_read;       /* function(buf_or_null, err_or_null) */
-	JSValue on_connection; /* function(client_handle) */
-	JSValue on_connect;    /* function(err_or_null) */
-	JSValue on_shutdown;   /* function(err_or_null) */
-	JSValue this_val;      /* prevent GC while libuv holds a reference */
-} QNStream;
-
-static JSClassID qn_stream_class_id;
+JSClassID qn_stream_class_id;
 
 static void qn_stream_maybe_free(QNStream *s) {
 	if (s->closed && s->finalized)
@@ -84,7 +63,7 @@ static QNStream *qn_stream_get(JSContext *ctx, JSValueConst obj) {
 
 /* ---- Alloc / init helpers ---- */
 
-static QNStream *qn_stream_new(JSContext *ctx) {
+QNStream *qn_stream_new(JSContext *ctx) {
 	QNStream *s = calloc(1, sizeof(*s));
 	if (!s) return NULL;
 	s->ctx = ctx;
@@ -97,7 +76,7 @@ static QNStream *qn_stream_new(JSContext *ctx) {
 	return s;
 }
 
-static JSValue qn_stream_wrap(JSContext *ctx, QNStream *s) {
+JSValue qn_stream_wrap(JSContext *ctx, QNStream *s) {
 	JSValue obj = JS_NewObjectClass(ctx, qn_stream_class_id);
 	if (JS_IsException(obj)) {
 		if (!uv_is_closing(&s->h.handle))
@@ -274,6 +253,8 @@ enum {
 	STREAM_SET_ON_CONNECTION,
 	STREAM_SET_ON_CONNECT,
 	STREAM_SET_ON_SHUTDOWN,
+	STREAM_PIPE_NEW,
+	STREAM_PIPE_OPEN,
 };
 
 /* ---- Single dispatch ---- */
@@ -521,6 +502,24 @@ static JSValue js_uv_stream_op(JSContext *ctx, JSValueConst this_val,
 		return JS_UNDEFINED;
 	}
 
+	case STREAM_PIPE_NEW: {
+		QNStream *s = qn_stream_new(ctx);
+		if (!s) return JS_ThrowOutOfMemory(ctx);
+		int r = uv_pipe_init(loop, &s->h.pipe, 0);
+		if (r < 0) { free(s); return qn_throw_errno(ctx, r); }
+		return qn_stream_wrap(ctx, s);
+	}
+
+	case STREAM_PIPE_OPEN: {
+		QNStream *s = qn_stream_get(ctx, args[0]);
+		if (!s) return JS_EXCEPTION;
+		int32_t fd;
+		if (JS_ToInt32(ctx, &fd, args[1])) return JS_EXCEPTION;
+		int r = uv_pipe_open(&s->h.pipe, fd);
+		if (r < 0) return qn_throw_errno(ctx, r);
+		return JS_UNDEFINED;
+	}
+
 	default:
 		return JS_ThrowRangeError(ctx, "unknown stream opcode: %d", op);
 	}
@@ -549,6 +548,8 @@ static const JSCFunctionListEntry js_uv_stream_funcs[] = {
 	QN_CONST2("SET_ON_CONNECTION", STREAM_SET_ON_CONNECTION),
 	QN_CONST2("SET_ON_CONNECT", STREAM_SET_ON_CONNECT),
 	QN_CONST2("SET_ON_SHUTDOWN", STREAM_SET_ON_SHUTDOWN),
+	QN_CONST2("PIPE_NEW", STREAM_PIPE_NEW),
+	QN_CONST2("PIPE_OPEN", STREAM_PIPE_OPEN),
 	/* Address family constants */
 	QN_CONST(AF_INET),
 	QN_CONST(AF_INET6),

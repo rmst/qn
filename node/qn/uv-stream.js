@@ -11,6 +11,7 @@ import {
 	READ_START, READ_STOP, WRITE, SHUTDOWN, CLOSE, FILENO,
 	TCP_NODELAY, TCP_KEEPALIVE, TCP_GETSOCKNAME, TCP_GETPEERNAME,
 	SET_ON_READ, SET_ON_CONNECTION, SET_ON_CONNECT, SET_ON_SHUTDOWN,
+	PIPE_NEW, PIPE_OPEN,
 	AF_INET, AF_INET6,
 } from 'qn_uv_stream'
 
@@ -35,6 +36,10 @@ export const tcpNodelay     = (handle, enable) => _op(TCP_NODELAY, handle, enabl
 export const tcpKeepalive   = (handle, enable) => _op(TCP_KEEPALIVE, handle, enable)
 export const tcpGetsockname = (handle) => _op(TCP_GETSOCKNAME, handle)
 export const tcpGetpeername = (handle) => _op(TCP_GETPEERNAME, handle)
+
+/* Pipe handles */
+export const pipeNew        = () => _op(PIPE_NEW)
+export const pipeOpen       = (handle, fd) => _op(PIPE_OPEN, handle, fd)
 
 /* Callback setters */
 export const setOnRead       = (handle, fn) => _op(SET_ON_READ, handle, fn)

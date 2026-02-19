@@ -1,7 +1,239 @@
-import * as os from 'os'
 import { EventEmitter } from 'node:events'
-import { Readable, Writable } from 'node:stream'
+import { Buffer } from 'node:buffer'
+import {
+	readStart, readStop, write as _streamWrite,
+	close as _streamClose, shutdown as _streamShutdown,
+	setOnRead, setOnShutdown,
+} from 'qn/uv-stream'
+import {
+	kill as _procKill, getPid, setOnExit,
+} from 'qn/uv-process'
 import { signals } from 'qn_uv_signals'
+import * as os from 'os'
+
+// Build reverse map (number → name)
+const signalNames = Object.fromEntries(
+	Object.entries(signals).map(([k, v]) => [v, k])
+)
+
+/**
+ * Incremental UTF-8 decoder for streaming.
+ */
+class Utf8Decoder {
+	#pending = null
+	decode(bytes) {
+		if (this.#pending) {
+			const combined = new Uint8Array(this.#pending.length + bytes.length)
+			combined.set(this.#pending)
+			combined.set(bytes, this.#pending.length)
+			this.#pending = null
+			bytes = combined
+		}
+		/* Check for incomplete multi-byte sequence at end */
+		let end = bytes.length
+		if (end > 0 && bytes[end - 1] >= 0x80) {
+			let start = end - 1
+			while (start > 0 && (bytes[start] & 0xC0) === 0x80) start--
+			const firstByte = bytes[start]
+			let expectedLen = 1
+			if ((firstByte & 0xE0) === 0xC0) expectedLen = 2
+			else if ((firstByte & 0xF0) === 0xE0) expectedLen = 3
+			else if ((firstByte & 0xF8) === 0xF0) expectedLen = 4
+			if (end - start < expectedLen) {
+				this.#pending = bytes.slice(start)
+				end = start
+			}
+		}
+		if (end === 0) return ''
+		return new TextDecoder().decode(bytes.subarray(0, end))
+	}
+	flush() {
+		if (!this.#pending) return ''
+		const result = new TextDecoder().decode(this.#pending)
+		this.#pending = null
+		return result
+	}
+}
+
+/**
+ * Readable stream backed by a libuv pipe handle.
+ */
+class PipeReadable extends EventEmitter {
+	#handle = null
+	#encoding = null
+	#decoder = null
+	#destroyed = false
+	#ended = false
+
+	constructor(handle) {
+		super()
+		this.#handle = handle
+		setOnRead(handle, (buf, err) => {
+			if (this.#destroyed) return
+			if (err) {
+				this.emit('error', err)
+				this.#close()
+				return
+			}
+			if (buf === null) {
+				/* EOF */
+				this.#ended = true
+				readStop(handle)
+				if (this.#decoder) {
+					const remaining = this.#decoder.flush()
+					if (remaining) this.emit('data', remaining)
+				}
+				this.emit('end')
+				this.#close()
+				return
+			}
+			if (this.#encoding) {
+				this.emit('data', this.#decoder.decode(buf))
+			} else {
+				this.emit('data', Buffer.from(buf))
+			}
+		})
+		readStart(handle)
+	}
+
+	setEncoding(encoding) {
+		if (encoding && encoding.toLowerCase().replace('-', '') !== 'utf8') {
+			throw new Error(`Unsupported encoding: ${encoding}. Only 'utf8' is supported.`)
+		}
+		this.#encoding = encoding ? 'utf8' : null
+		if (this.#encoding && !this.#decoder) {
+			this.#decoder = new Utf8Decoder()
+		}
+		return this
+	}
+
+	#close() {
+		if (this.#destroyed) return
+		this.#destroyed = true
+		if (this.#handle) {
+			_streamClose(this.#handle)
+			this.#handle = null
+		}
+		this.emit('close')
+	}
+
+	destroy() {
+		if (this.#destroyed) return
+		if (this.#handle) readStop(this.#handle)
+		this.#close()
+	}
+
+	on(event, fn) {
+		return super.on(event, fn)
+	}
+}
+
+/**
+ * Writable stream backed by a libuv pipe handle.
+ */
+class PipeWritable extends EventEmitter {
+	#handle = null
+	#destroyed = false
+	#ending = false
+	#finished = false
+
+	constructor(handle) {
+		super()
+		this.#handle = handle
+	}
+
+	write(chunk, encoding, callback) {
+		if (typeof encoding === 'function') {
+			callback = encoding
+			encoding = undefined
+		}
+
+		if (this.#destroyed || this.#ending) {
+			const err = new Error('write after end')
+			if (callback) callback(err)
+			return false
+		}
+
+		let bytes
+		if (chunk instanceof Uint8Array) {
+			bytes = chunk
+		} else if (typeof chunk === 'string') {
+			bytes = new TextEncoder().encode(chunk)
+		} else {
+			bytes = new TextEncoder().encode(String(chunk))
+		}
+
+		_streamWrite(this.#handle, bytes).then(
+			() => { if (callback) callback(null) },
+			(err) => { if (callback) callback(err); else this.emit('error', err) },
+		)
+
+		return true
+	}
+
+	end(data, encoding, callback) {
+		if (typeof data === 'function') {
+			callback = data
+			data = undefined
+		}
+		if (typeof encoding === 'function') {
+			callback = encoding
+			encoding = undefined
+		}
+		if (this.#ending) return
+		this.#ending = true
+
+		const doShutdown = () => {
+			if (this.#handle) {
+				setOnShutdown(this.#handle, () => {
+					this.#finished = true
+					this.emit('finish')
+					this.#close()
+					if (callback) callback()
+				})
+				try {
+					_streamShutdown(this.#handle)
+				} catch (e) {
+					this.#close()
+					if (callback) callback()
+				}
+			} else {
+				if (callback) callback()
+			}
+		}
+
+		if (data !== undefined && data !== null) {
+			let bytes
+			if (data instanceof Uint8Array) {
+				bytes = data
+			} else if (typeof data === 'string') {
+				bytes = new TextEncoder().encode(data)
+			} else {
+				bytes = new TextEncoder().encode(String(data))
+			}
+			_streamWrite(this.#handle, bytes).then(
+				() => doShutdown(),
+				(err) => { this.emit('error', err); doShutdown() },
+			)
+		} else {
+			doShutdown()
+		}
+	}
+
+	#close() {
+		if (this.#destroyed) return
+		this.#destroyed = true
+		if (this.#handle) {
+			_streamClose(this.#handle)
+			this.#handle = null
+		}
+		this.emit('close')
+	}
+
+	destroy() {
+		this.#close()
+	}
+}
 
 /**
  * Represents a spawned child process.
@@ -27,46 +259,51 @@ export class ChildProcess extends EventEmitter {
 	/** @type {boolean} */
 	killed = false
 
-	/** @type {Writable|null} */
+	/** @type {PipeWritable|null} */
 	stdin = null
 
-	/** @type {Readable|null} */
+	/** @type {PipeReadable|null} */
 	stdout = null
 
-	/** @type {Readable|null} */
+	/** @type {PipeReadable|null} */
 	stderr = null
 
-	/** @type {boolean} */
+	#procHandle = null
 	#stdoutClosed = false
-
-	/** @type {boolean} */
 	#stderrClosed = false
-
-	/** @type {boolean} */
 	#stdinClosed = false
-
-	/** @type {boolean} */
 	#exited = false
-
-	/** @type {boolean} */
 	#closed = false
-
-	/** @type {boolean} */
 	#detached = false
 
 	/**
-	 * @param {number} pid
-	 * @param {{ stdoutFd: number|null, stderrFd: number|null, stdinFd: number|null, detached?: boolean }} fds
+	 * @param {object|null} procHandle - libuv process handle (null on spawn error)
+	 * @param {{ stdinHandle, stdoutHandle, stderrHandle, detached, spawnError? }} opts
 	 */
-	constructor(pid, fds) {
+	constructor(procHandle, opts) {
 		super()
-		this.pid = pid
-		this.#detached = fds.detached || false
 
-		// Create streams for stdio
-		// Note: use != null to catch both null and undefined
-		if (fds.stdinFd != null) {
-			this.stdin = new Writable(fds.stdinFd)
+		this.#detached = opts.detached || false
+
+		/* Handle spawn failure */
+		if (!procHandle) {
+			this.#exited = true
+			this.#stdoutClosed = true
+			this.#stderrClosed = true
+			this.#stdinClosed = true
+			queueMicrotask(() => {
+				this.emit('error', opts.spawnError || new Error('spawn failed'))
+				this.#closed = true
+				this.emit('close', null, null)
+			})
+			return
+		}
+
+		this.#procHandle = procHandle
+		this.pid = getPid(procHandle)
+
+		if (opts.stdinHandle) {
+			this.stdin = new PipeWritable(opts.stdinHandle)
 			this.stdin.on('close', () => {
 				this.#stdinClosed = true
 			})
@@ -74,8 +311,8 @@ export class ChildProcess extends EventEmitter {
 			this.#stdinClosed = true
 		}
 
-		if (fds.stdoutFd != null) {
-			this.stdout = new Readable(fds.stdoutFd)
+		if (opts.stdoutHandle) {
+			this.stdout = new PipeReadable(opts.stdoutHandle)
 			this.stdout.on('close', () => {
 				this.#stdoutClosed = true
 				this.#checkClose()
@@ -84,8 +321,8 @@ export class ChildProcess extends EventEmitter {
 			this.#stdoutClosed = true
 		}
 
-		if (fds.stderrFd != null) {
-			this.stderr = new Readable(fds.stderrFd)
+		if (opts.stderrHandle) {
+			this.stderr = new PipeReadable(opts.stderrHandle)
 			this.stderr.on('close', () => {
 				this.#stderrClosed = true
 				this.#checkClose()
@@ -94,66 +331,28 @@ export class ChildProcess extends EventEmitter {
 			this.#stderrClosed = true
 		}
 
-		// Emit 'spawn' on next tick
-		os.setTimeout(() => this.emit('spawn'), 0)
-
-		// If all streams are already "closed" (i.e., inherited/ignored, no fds to monitor),
-		// we need to poll for process exit since there are no stream close events to trigger it
-		if (this.#stdoutClosed && this.#stderrClosed && this.#stdinClosed) {
-			this.#pollForExit()
-		}
-	}
-
-	#pollForExit() {
-		if (this.#exited) return
-		this.#checkExit()
-		if (!this.#exited) {
-			os.setTimeout(() => this.#pollForExit(), 10)
-		}
-	}
-
-	#checkExit() {
-		if (this.#exited) return
-
-		const [ret, status] = os.waitpid(this.pid, os.WNOHANG)
-		if (ret === this.pid) {
+		/* Listen for process exit via libuv callback */
+		setOnExit(procHandle, (exitStatus, termSignal) => {
 			this.#exited = true
-			// Decode waitpid status using POSIX macros
-			// WIFEXITED: (status & 0x7F) == 0
-			// WEXITSTATUS: (status >> 8) & 0xFF
-			// WIFSIGNALED: ((status & 0x7F) + 1) >> 1 > 0
-			// WTERMSIG: status & 0x7F
-			if ((status & 0x7F) === 0) {
-				// Normal exit
-				this.exitCode = (status >> 8) & 0xFF
+			if (termSignal > 0) {
+				this.signalCode = signalNames[termSignal] || `SIG${termSignal}`
 			} else {
-				// Killed by signal
-				this.signalCode = status & 0x7F
+				this.exitCode = exitStatus
 			}
 			this.emit('exit', this.exitCode, this.signalCode)
 			this.#checkClose()
-		}
+		})
+
+		/* Emit 'spawn' on next tick */
+		queueMicrotask(() => this.emit('spawn'))
 	}
 
 	#checkClose() {
-		// 'close' fires when both streams are closed AND process has exited
-		// Guard against multiple emissions
 		if (this.#closed) return
 
-		if (this.#stdoutClosed && this.#stderrClosed) {
-			// Check if process has exited
-			if (!this.#exited) {
-				this.#checkExit()
-			}
-			// Re-check #closed since checkExit may have triggered a nested checkClose
-			if (this.#exited && !this.#closed) {
-				this.#closed = true
-				this.emit('close', this.exitCode, this.signalCode)
-			} else if (!this.#exited) {
-				// Process hasn't exited yet but streams are closed
-				// Poll again after a short delay to avoid busy-waiting
-				os.setTimeout(() => this.#checkClose(), 1)
-			}
+		if (this.#stdoutClosed && this.#stderrClosed && this.#exited) {
+			this.#closed = true
+			this.emit('close', this.exitCode, this.signalCode)
 		}
 	}
 
@@ -173,11 +372,10 @@ export class ChildProcess extends EventEmitter {
 
 		try {
 			if (this.#detached) {
-				// For detached processes, kill the entire process group
-				// The child is the session/group leader, so its PGID == its PID
+				/* For detached processes, kill the entire process group */
 				os.kill(-this.pid, sig)
 			} else {
-				os.kill(this.pid, sig)
+				_procKill(this.#procHandle, sig)
 			}
 			this.killed = true
 			return true
