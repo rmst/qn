@@ -1,5 +1,7 @@
-import * as os from 'os'
 import * as std from 'std'
+import {
+	readSync, writeSync, closeSync, UV_EAGAIN,
+} from 'qn:uv-fs'
 import { EventEmitter } from 'node:events'
 import { Buffer } from 'node:buffer'
 import {
@@ -198,7 +200,8 @@ export class Readable extends EventEmitter {
 			const buf = new Uint8Array(4096)
 			let n
 			try {
-				n = os.read(this.#fd, buf.buffer, 0, buf.length)
+				// readSync with pos=-1 uses current file position (POSIX read)
+				n = readSync(this.#fd, buf)
 			} catch (e) {
 				this.#handleError(e)
 				return
@@ -250,7 +253,7 @@ export class Readable extends EventEmitter {
 	#close() {
 		if (this.#fd !== null) {
 			try {
-				os.close(this.#fd)
+				closeSync(this.#fd)
 			} catch (e) {
 				// Ignore close errors
 			}
@@ -527,10 +530,10 @@ export class Writable extends EventEmitter {
 
 			let written
 			try {
-				written = os.write(this.#fd, bytes.buffer, bytes.byteOffset, bytes.length)
+				written = writeSync(this.#fd, bytes)
 			} catch (e) {
 				// EAGAIN/EWOULDBLOCK - set up write handler for when fd is writable
-				if (e.errno === os.EAGAIN || e.errno === os.EWOULDBLOCK) {
+				if (e.errno === UV_EAGAIN) {
 					this.#setupWriteHandler()
 					return
 				}
@@ -585,7 +588,7 @@ export class Writable extends EventEmitter {
 	#close() {
 		if (this.#fd !== null) {
 			try {
-				os.close(this.#fd)
+				closeSync(this.#fd)
 			} catch (e) {
 				// Ignore close errors
 			}

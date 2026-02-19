@@ -1,22 +1,26 @@
 import * as std from 'std';
-import * as os from 'os';
 import { signal as uvSignal, signals as signalMap } from 'qn_uv_signals';
+import {
+	isatty as _isatty, ttyGetWinSize as _ttyGetWinSize,
+	getCwd as _getCwd, chdir as _chdir,
+	kill as _kill, getPid as _getPid, getPlatform as _getPlatform,
+} from 'qn_vm';
 
 // Create stream-like objects for stdin, stdout, stderr
 const createStream = (fd) => {
   const stream = {
     fd,
     get isTTY() {
-      return os.isatty(fd);
+      return _isatty(fd);
     },
     get columns() {
-      if (!os.isatty(fd)) return undefined
-      const size = os.ttyGetWinSize?.(fd)
+      if (!_isatty(fd)) return undefined
+      const size = _ttyGetWinSize(fd)
       return size ? size[0] : undefined
     },
     get rows() {
-      if (!os.isatty(fd)) return undefined
-      const size = os.ttyGetWinSize?.(fd)
+      if (!_isatty(fd)) return undefined
+      const size = _ttyGetWinSize(fd)
       return size ? size[1] : undefined
     },
   };
@@ -83,18 +87,13 @@ const process = {
   },
 
   // Current working directory
-  cwd: () => {
-    let [dir, error] = os.getcwd()
-    if(error != 0)
-      throw Error(`Couldn't get working directory`)
-
-    return dir
-  },
+  cwd: () => _getCwd(),
 
   // Change working directory
   chdir: (directory) => {
-    const errno = os.chdir(directory)
-    if (errno !== 0) {
+    try {
+      _chdir(directory)
+    } catch (e) {
       const err = new Error(`ENOENT: no such file or directory, chdir '${directory}'`)
       err.code = 'ENOENT'
       err.syscall = 'chdir'
@@ -109,12 +108,12 @@ const process = {
     if (sig === undefined) {
       throw new Error(`Unknown signal: ${signal}`)
     }
-    const ret = os.kill(pid, sig)
-    if (ret < 0) {
-      const errno = -ret
+    try {
+      _kill(pid, sig)
+    } catch (e) {
       const err = new Error(`kill ${pid}`)
-      err.code = errno === 3 ? 'ESRCH' : errno === 1 ? 'EPERM' : `E${errno}`
-      err.errno = errno
+      err.code = e.code || `E${-e.errno}`
+      err.errno = e.errno
       err.syscall = 'kill'
       throw err
     }
@@ -128,7 +127,7 @@ const process = {
 
   // Process ID
   get pid() {
-    return os.getpid();
+    return _getPid();
   },
 
   // User and group IDs (cached since they don't change)
@@ -151,7 +150,7 @@ const process = {
   },
 
   // Platform
-  platform: os.platform || 'quickjs',
+  platform: _getPlatform(),
 
   // Node version (return QuickJS version as placeholder)
   version: 'v1.0.0-quickjs',

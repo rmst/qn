@@ -24,7 +24,12 @@
  */
 import * as std from "std";
 import * as os from "os";
-import { setReadHandler as _setReadHandler } from 'qn_vm';
+import {
+    setReadHandler as _setReadHandler,
+    isatty as _isatty, ttyGetWinSize as _ttyGetWinSize,
+    ttySetRaw as _ttySetRaw, hrtime as _hrtime,
+} from 'qn_vm';
+import { readSync as _readSync } from 'qn:uv-fs';
 import { signal as _signal, signals as _signals } from 'qn_uv_signals';
 
 (function(g) {
@@ -120,16 +125,12 @@ import { signal as _signal, signals as _signals } from 'qn_uv_signals';
 
         /* get the terminal size */
         term_width = 80;
-        if (os.isatty(term_fd)) {
-            if (os.ttyGetWinSize) {
-                tab = os.ttyGetWinSize(term_fd);
-                if (tab)
-                    term_width = tab[0];
-            }
-            if (os.ttySetRaw) {
-                /* set the TTY to raw mode */
-                os.ttySetRaw(term_fd);
-            }
+        if (_isatty(term_fd)) {
+            tab = _ttyGetWinSize(term_fd);
+            if (tab)
+                term_width = tab[0];
+            /* set the TTY to raw mode */
+            _ttySetRaw(term_fd);
         }
 
         /* install a Ctrl-C signal handler */
@@ -147,7 +148,7 @@ import { signal as _signal, signals as _signals } from 'qn_uv_signals';
 
     function term_read_handler() {
         var l, i;
-        l = os.read(term_fd, term_read_buf.buffer, 0, term_read_buf.length);
+        l = _readSync(term_fd, term_read_buf);
         for(i = 0; i < l; i++)
             handle_byte(term_read_buf[i]);
     }
@@ -1001,7 +1002,7 @@ import { signal as _signal, signals as _signals } from 'qn_uv_signals';
         var result;
 
         try {
-            eval_start_time = os.now();
+            eval_start_time = _hrtime();
             /* eval as a script */
             result = std.evalScript(expr, { backtrace_barrier: true, async: true });
             /* result is a promise */
@@ -1015,7 +1016,7 @@ import { signal as _signal, signals as _signals } from 'qn_uv_signals';
         var default_print = true;
 
         result = result.value;
-        eval_time = os.now() - eval_start_time;
+        eval_time = _hrtime() - eval_start_time;
         std.puts(colors[styles.result]);
         if (hex_mode) {
             if (typeof result == "number" &&

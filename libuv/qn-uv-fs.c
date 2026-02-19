@@ -506,12 +506,43 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 	int r;
 	const char *s1 = NULL, *s2 = NULL;
 	int32_t i1, i2, i3;
+	int64_t i64;
 	double d1, d2;
+	size_t bufsize;
+	uint8_t *buf;
 	JSValue result = JS_UNDEFINED;
 
 	(void)argc;
 
 	switch (op) {
+
+	/* -- read(fd, Uint8Array, position) → bytes_read -- */
+	case FS_READ:
+		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		buf = qn_get_uint8array(ctx, &bufsize, args[1]);
+		if (!buf) return JS_EXCEPTION;
+		i64 = -1;
+		if (argc > 3 && !JS_IsUndefined(args[2]))
+			if (JS_ToInt64(ctx, &i64, args[2])) return JS_EXCEPTION;
+		{ uv_buf_t b = uv_buf_init((char *)buf, bufsize);
+		  r = uv_fs_read(NULL, &req, i1, &b, 1, i64, NULL); }
+		if (r >= 0)
+			result = JS_NewInt32(ctx, r);
+		break;
+
+	/* -- write(fd, Uint8Array, position) → bytes_written -- */
+	case FS_WRITE:
+		if (JS_ToInt32(ctx, &i1, args[0])) return JS_EXCEPTION;
+		buf = qn_get_uint8array(ctx, &bufsize, args[1]);
+		if (!buf) return JS_EXCEPTION;
+		i64 = -1;
+		if (argc > 3 && !JS_IsUndefined(args[2]))
+			if (JS_ToInt64(ctx, &i64, args[2])) return JS_EXCEPTION;
+		{ uv_buf_t b = uv_buf_init((char *)buf, bufsize);
+		  r = uv_fs_write(NULL, &req, i1, &b, 1, i64, NULL); }
+		if (r >= 0)
+			result = JS_NewInt32(ctx, r);
+		break;
 
 	/* -- path ops returning 0 -- */
 	case FS_CHMOD:
@@ -854,6 +885,8 @@ static const JSCFunctionListEntry js_uv_fs_funcs[] = {
 	QN_CONST2("LCHOWN", FS_LCHOWN),
 	QN_CONST2("COPYFILE", FS_COPYFILE),
 	QN_CONST2("MKDTEMP", FS_MKDTEMP),
+	/* libuv errno constants for non-blocking I/O */
+	QN_UVCONST(EAGAIN),
 };
 
 static int js_uv_fs_init(JSContext *ctx, JSModuleDef *m) {

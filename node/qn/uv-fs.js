@@ -14,6 +14,7 @@ import {
 	CHOWN, LCHOWN, COPYFILE, MKDTEMP,
 	O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, O_EXCL,
 	S_IFMT, S_IFREG, S_IFDIR, S_IFLNK, S_IFBLK, S_IFCHR, S_IFIFO, S_IFSOCK,
+	EAGAIN as UV_EAGAIN,
 	setNonBlock, getpgid,
 } from 'qn_uv_fs'
 
@@ -73,6 +74,8 @@ export const mkdtemp   = (template) => _fsop(MKDTEMP, template)
 
 export const openSync      = (path, flags, mode) => _fssync(OPEN, parseOpenFlags(flags), mode ?? 0o666, path)
 export const closeSync     = (fd) => _fssync(CLOSE, fd)
+export const readSync      = (fd, buf, pos) => _fssync(READ, fd, buf, pos)
+export const writeSync     = (fd, buf, pos) => _fssync(WRITE, fd, buf, pos)
 export const statSync      = (path) => _fssync(STAT, path)
 export const lstatSync     = (path) => _fssync(LSTAT, path)
 export const fstatSync     = (fd) => _fssync(FSTAT, fd)
@@ -103,3 +106,4 @@ export const fdatasyncSync = (fd) => _fssync(FDATASYNC, fd)
 export { O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, O_EXCL }
 export { S_IFMT, S_IFREG, S_IFDIR, S_IFLNK, S_IFBLK, S_IFCHR, S_IFIFO, S_IFSOCK }
 export { setNonBlock, getpgid, parseOpenFlags }
+export { UV_EAGAIN }

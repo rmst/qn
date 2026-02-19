@@ -1,5 +1,8 @@
-import * as os from 'os'
 import * as std from 'std'
+import {
+	openSync, closeSync, readSync, writeSync,
+	O_RDONLY, O_WRONLY, O_CREAT, O_APPEND, O_TRUNC,
+} from 'qn:uv-fs'
 import { Buffer } from 'node:buffer'
 import { EventEmitter } from 'node:events'
 import { setTimeout as _setTimeout } from 'qn_vm'
@@ -30,21 +33,13 @@ export class ReadStream extends EventEmitter {
 
 		// Open the file
 		try {
-			this.#fd = os.open(path, os.O_RDONLY)
-			if (this.#fd < 0) {
-				throw new Error(`Failed to open file: ${path}`)
-			}
+			this.#fd = openSync(path, 'r')
 		} catch (e) {
 			// Defer error to next tick
 			_setTimeout(() => {
 				this.emit('error', e instanceof Error ? e : new Error(String(e)))
 			}, 0)
 			return
-		}
-
-		// Seek to start position
-		if (this.#start > 0) {
-			os.seek(this.#fd, this.#start, os.SEEK_SET)
 		}
 
 		// Defer 'open' and start reading on next tick
@@ -70,10 +65,11 @@ export class ReadStream extends EventEmitter {
 			return
 		}
 
-		const buf = new ArrayBuffer(remaining)
+		const buf = new Uint8Array(remaining)
 		let n
 		try {
-			n = os.read(this.#fd, buf, 0, remaining)
+			// Use position parameter directly — no seek needed
+			n = readSync(this.#fd, buf, this.#pos)
 		} catch (e) {
 			this.emit('error', e instanceof Error ? e : new Error(String(e)))
 			this.destroy()
@@ -82,7 +78,7 @@ export class ReadStream extends EventEmitter {
 
 		if (n > 0) {
 			this.#pos += n
-			const chunk = Buffer.from(buf, 0, n)
+			const chunk = Buffer.from(buf.buffer, 0, n)
 			this.emit('data', chunk)
 			// Schedule next read
 			if (!this.#paused && !this.#destroyed) {
@@ -119,7 +115,7 @@ export class ReadStream extends EventEmitter {
 		if (this.#destroyed) return this
 		this.#destroyed = true
 		if (this.#fd !== null) {
-			try { os.close(this.#fd) } catch {}
+			try { closeSync(this.#fd) } catch {}
 			this.#fd = null
 		}
 		if (error) {
@@ -149,14 +145,11 @@ export class WriteStream extends EventEmitter {
 		this.#path = path
 		this.path = path
 
-		const flags = options.flags === 'a' ? (os.O_WRONLY | os.O_CREAT | os.O_APPEND)
-			: (os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+		const flags = options.flags === 'a' ? (O_WRONLY | O_CREAT | O_APPEND)
+			: (O_WRONLY | O_CREAT | O_TRUNC)
 
 		try {
-			this.#fd = os.open(path, flags, options.mode ?? 0o666)
-			if (this.#fd < 0) {
-				throw new Error(`Failed to open file for writing: ${path}`)
-			}
+			this.#fd = openSync(path, flags, options.mode ?? 0o666)
 		} catch (e) {
 			_setTimeout(() => {
 				this.emit('error', e instanceof Error ? e : new Error(String(e)))
@@ -194,7 +187,7 @@ export class WriteStream extends EventEmitter {
 		}
 
 		try {
-			const written = os.write(this.#fd, bytes.buffer, bytes.byteOffset, bytes.byteLength)
+			const written = writeSync(this.#fd, bytes)
 			this.bytesWritten += written
 			if (callback) callback(null)
 			return true
@@ -235,7 +228,7 @@ export class WriteStream extends EventEmitter {
 		if (this.#destroyed) return this
 		this.#destroyed = true
 		if (this.#fd !== null) {
-			try { os.close(this.#fd) } catch {}
+			try { closeSync(this.#fd) } catch {}
 			this.#fd = null
 		}
 		if (error) this.emit('error', error)

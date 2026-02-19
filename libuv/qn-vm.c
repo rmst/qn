@@ -17,6 +17,11 @@
 #include "quickjs/quickjs-libc.h"
 
 #include <string.h>
+#if !defined(_WIN32)
+#include <termios.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
 
 /* --------------------------------------------------------------------------
  * Loop ownership
@@ -427,6 +432,127 @@ static JSValue js_vm_randomFill(JSContext *ctx, JSValueConst this_val,
 }
 
 /* --------------------------------------------------------------------------
+ * Process / TTY utilities
+ *
+ * Simple POSIX + libuv wrappers for process and terminal operations.
+ * isatty uses uv_guess_handle (portable).
+ * ttyGetWinSize/ttySetRaw use POSIX directly (libuv requires uv_tty_t handle).
+ * cwd/chdir/kill/pid/hrtime use libuv utility functions.
+ * -------------------------------------------------------------------------- */
+
+/* JS: isatty(fd) → boolean */
+static JSValue js_vm_isatty(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv) {
+	int fd;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+	return JS_NewBool(ctx, uv_guess_handle(fd) == UV_TTY);
+}
+
+#if !defined(_WIN32)
+/* JS: ttyGetWinSize(fd) → [cols, rows] or null */
+static JSValue js_vm_ttyGetWinSize(JSContext *ctx, JSValueConst this_val,
+                                    int argc, JSValueConst *argv) {
+	int fd;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+	struct winsize ws;
+	if (ioctl(fd, TIOCGWINSZ, &ws) < 0)
+		return JS_NULL;
+	JSValue arr = JS_NewArray(ctx);
+	JS_DefinePropertyValueUint32(ctx, arr, 0,
+		JS_NewInt32(ctx, ws.ws_col), JS_PROP_C_W_E);
+	JS_DefinePropertyValueUint32(ctx, arr, 1,
+		JS_NewInt32(ctx, ws.ws_row), JS_PROP_C_W_E);
+	return arr;
+}
+
+/* JS: ttySetRaw(fd) → undefined
+ * Sets terminal to raw mode, matching QuickJS os.ttySetRaw behavior. */
+static JSValue js_vm_ttySetRaw(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv) {
+	int fd;
+	if (JS_ToInt32(ctx, &fd, argv[0]))
+		return JS_EXCEPTION;
+	struct termios tty;
+	if (tcgetattr(fd, &tty) < 0)
+		return qn_throw_errno(ctx, -errno);
+	tty.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP |
+	                  INLCR | IGNCR | ICRNL | IXON);
+	tty.c_oflag |= OPOST;
+	tty.c_cflag &= ~(CSIZE | PARENB);
+	tty.c_cflag |= CS8;
+	tty.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+	tty.c_cc[VMIN] = 1;
+	tty.c_cc[VTIME] = 0;
+	if (tcsetattr(fd, TCSANOW, &tty) < 0)
+		return qn_throw_errno(ctx, -errno);
+	return JS_UNDEFINED;
+}
+#endif
+
+/* JS: getCwd() → string */
+static JSValue js_vm_getCwd(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv) {
+	char buf[4096];
+	size_t size = sizeof(buf);
+	int r = uv_cwd(buf, &size);
+	if (r != 0)
+		return qn_throw_errno(ctx, r);
+	return JS_NewStringLen(ctx, buf, size);
+}
+
+/* JS: chdir(path) → undefined */
+static JSValue js_vm_chdir(JSContext *ctx, JSValueConst this_val,
+                            int argc, JSValueConst *argv) {
+	const char *path = JS_ToCString(ctx, argv[0]);
+	if (!path) return JS_EXCEPTION;
+	int r = uv_chdir(path);
+	JS_FreeCString(ctx, path);
+	if (r != 0)
+		return qn_throw_errno(ctx, r);
+	return JS_UNDEFINED;
+}
+
+/* JS: kill(pid, sig) → undefined */
+static JSValue js_vm_kill(JSContext *ctx, JSValueConst this_val,
+                           int argc, JSValueConst *argv) {
+	int pid, sig;
+	if (JS_ToInt32(ctx, &pid, argv[0])) return JS_EXCEPTION;
+	if (JS_ToInt32(ctx, &sig, argv[1])) return JS_EXCEPTION;
+	int r = uv_kill(pid, sig);
+	if (r != 0)
+		return qn_throw_errno(ctx, r);
+	return JS_UNDEFINED;
+}
+
+/* JS: getPid() → number */
+static JSValue js_vm_getPid(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv) {
+	return JS_NewInt32(ctx, uv_os_getpid());
+}
+
+/* JS: hrtime() → number (milliseconds, high resolution)
+ * Uses uv_hrtime() which returns nanoseconds. */
+static JSValue js_vm_hrtime(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv) {
+	return JS_NewFloat64(ctx, (double)uv_hrtime() / 1e6);
+}
+
+/* JS: getPlatform() → string ("linux", "darwin", etc.) */
+static JSValue js_vm_getPlatform(JSContext *ctx, JSValueConst this_val,
+                                  int argc, JSValueConst *argv) {
+	uv_utsname_t info;
+	int r = uv_os_uname(&info);
+	if (r != 0)
+		return qn_throw_errno(ctx, r);
+	/* Lowercase the sysname to match Node.js convention */
+	for (char *p = info.sysname; *p; p++)
+		*p = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
+	return JS_NewString(ctx, info.sysname);
+}
+
+/* --------------------------------------------------------------------------
  * JS module: qn_vm
  * -------------------------------------------------------------------------- */
 
@@ -436,6 +562,17 @@ static const JSCFunctionListEntry vm_funcs[] = {
 	QN_CFUNC_MAGIC_DEF("setReadHandler", 2, js_vm_setRWHandler, 0),
 	QN_CFUNC_MAGIC_DEF("setWriteHandler", 2, js_vm_setRWHandler, 1),
 	QN_CFUNC_DEF("randomFill", 1, js_vm_randomFill),
+	QN_CFUNC_DEF("isatty", 1, js_vm_isatty),
+#if !defined(_WIN32)
+	QN_CFUNC_DEF("ttyGetWinSize", 1, js_vm_ttyGetWinSize),
+	QN_CFUNC_DEF("ttySetRaw", 1, js_vm_ttySetRaw),
+#endif
+	QN_CFUNC_DEF("getCwd", 0, js_vm_getCwd),
+	QN_CFUNC_DEF("chdir", 1, js_vm_chdir),
+	QN_CFUNC_DEF("kill", 2, js_vm_kill),
+	QN_CFUNC_DEF("getPid", 0, js_vm_getPid),
+	QN_CFUNC_DEF("hrtime", 0, js_vm_hrtime),
+	QN_CFUNC_DEF("getPlatform", 0, js_vm_getPlatform),
 };
 
 static int js_vm_module_init(JSContext *ctx, JSModuleDef *m) {

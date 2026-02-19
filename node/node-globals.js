@@ -6,10 +6,10 @@
  */
 
 import * as std from "std"
-import * as os from "os"
 import {
 	setTimeout as _setTimeout, clearTimeout as _clearTimeout,
 	setReadHandler, setWriteHandler,
+	hrtime as _hrtime,
 } from 'qn_vm'
 
 // DOMException (Web standard, used by fetch and AbortController)
@@ -145,7 +145,7 @@ globalThis.queueMicrotask = (fn) => _setTimeout(fn, 0)
 
 // Performance API
 globalThis.performance = {
-	now: os.now
+	now: _hrtime
 }
 
 // Base64 encoding/decoding
