@@ -66,15 +66,18 @@ export function spawnSync(command, args, options) {
 	// Parse stdio config
 	const stdio = parseStdio(options.stdio)
 
-	// Prepare input as Uint8Array
+	// Prepare input as ArrayBuffer for the C layer (JS_GetArrayBuffer expects ArrayBuffer)
 	let inputBuf = null
 	if (options.input !== undefined) {
 		if (typeof options.input === 'string') {
 			inputBuf = std._encodeUtf8(options.input)
 		} else if (options.input instanceof ArrayBuffer) {
-			inputBuf = new Uint8Array(options.input)
+			inputBuf = options.input
 		} else if (ArrayBuffer.isView(options.input)) {
-			inputBuf = new Uint8Array(options.input.buffer, options.input.byteOffset, options.input.byteLength)
+			inputBuf = options.input.buffer.slice(
+				options.input.byteOffset,
+				options.input.byteOffset + options.input.byteLength
+			)
 		}
 	}
 

@@ -65,6 +65,21 @@ describe('node:child_process shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { match: true, inLen: 7, outLen: 7 })
 	})
 
+	test('execFileSync with Buffer subarray input', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFileSync } from 'node:child_process'
+			import { Buffer } from 'node:buffer'
+			// Create a Buffer subarray with non-zero byteOffset
+			const big = Buffer.from('XXXhello worldYYY')
+			const sub = big.subarray(3, 14)
+			const output = execFileSync('cat', [], { input: sub, encoding: 'utf8' })
+			console.log(JSON.stringify({ output: output.trim() }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { output: 'hello world' })
+	})
+
 	test('execFileSync with special characters in args', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { execFileSync } from 'node:child_process'

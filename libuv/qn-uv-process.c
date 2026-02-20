@@ -386,6 +386,8 @@ static JSValue js_spawn_sync(JSContext *ctx, int nargs, JSValueConst *args) {
 		if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
 			input_data = JS_GetArrayBuffer(ctx, &input_len, v);
 			if (!input_data) {
+				/* Clear exception from JS_GetArrayBuffer before fallback */
+				JS_FreeValue(ctx, JS_GetException(ctx));
 				size_t off, blen;
 				JSValue ab = JS_GetTypedArrayBuffer(ctx, v, &off, &blen, NULL);
 				if (!JS_IsException(ab)) {
