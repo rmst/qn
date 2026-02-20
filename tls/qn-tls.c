@@ -278,8 +278,19 @@ static int load_cert_chain_pem(const char *path,
 			} else if (event == BR_PEM_END_OBJ && in_cert) {
 				if (num >= cap) {
 					size_t new_cap = cap ? cap * 2 : 4;
-					chain = realloc(chain, new_cap * sizeof(br_x509_certificate));
-					bufs = realloc(bufs, new_cap * sizeof(unsigned char *));
+					br_x509_certificate *nc = realloc(chain, new_cap * sizeof(br_x509_certificate));
+					unsigned char **nb = realloc(bufs, new_cap * sizeof(unsigned char *));
+					if (!nc || !nb) {
+						/* On partial realloc success, the original pointer
+						 * is still valid — use it for cleanup below */
+						if (nc) chain = nc;
+						if (nb) bufs = nb;
+						bv_clear(&current);
+						in_cert = 0;
+						goto done_reading;
+					}
+					chain = nc;
+					bufs = nb;
 					cap = new_cap;
 				}
 				size_t der_len;
@@ -296,6 +307,7 @@ static int load_cert_chain_pem(const char *path,
 		}
 	}
 
+done_reading:
 	fclose(f);
 
 	if (num == 0) {
@@ -431,16 +443,11 @@ typedef struct {
 	int key_type;
 } tls_server_cred_t;
 
+static void free_server_cred(tls_server_cred_t *cred);
+
 static void tls_server_cred_finalizer(JSRuntime *rt, JSValue val)
 {
-	tls_server_cred_t *cred = JS_GetOpaque(val, tls_server_cred_class_id);
-	if (cred) {
-		for (size_t i = 0; i < cred->chain_len; i++)
-			free(cred->cert_bufs[i]);
-		free(cred->cert_bufs);
-		free(cred->chain);
-		free(cred);
-	}
+	free_server_cred(JS_GetOpaque(val, tls_server_cred_class_id));
 }
 
 static JSClassDef tls_server_cred_class = {
@@ -468,6 +475,15 @@ static JSValue js_tls_load_ca_certs(JSContext *ctx, JSValueConst this_val,
 /*
  * tlsLoadServerCert(certPemPath, keyPemPath) -> TLSServerCred object
  */
+static void free_server_cred(tls_server_cred_t *cred) {
+	if (!cred) return;
+	for (size_t i = 0; i < cred->chain_len; i++)
+		free(cred->cert_bufs[i]);
+	free(cred->cert_bufs);
+	free(cred->chain);
+	free(cred);
+}
+
 static JSValue js_tls_load_server_cert(JSContext *ctx, JSValueConst this_val,
                                         int argc, JSValueConst *argv)
 {
@@ -501,31 +517,19 @@ static JSValue js_tls_load_server_cert(JSContext *ctx, JSValueConst this_val,
 	JS_FreeCString(ctx, key_path);
 
 	if (ret < 0) {
-		for (size_t i = 0; i < cred->chain_len; i++)
-			free(cred->cert_bufs[i]);
-		free(cred->cert_bufs);
-		free(cred->chain);
-		free(cred);
+		free_server_cred(cred);
 		return JS_ThrowTypeError(ctx, "TLS: failed to load private key");
 	}
 
 	cred->key_type = br_skey_decoder_key_type(&cred->skey);
 	if (cred->key_type == 0) {
-		for (size_t i = 0; i < cred->chain_len; i++)
-			free(cred->cert_bufs[i]);
-		free(cred->cert_bufs);
-		free(cred->chain);
-		free(cred);
+		free_server_cred(cred);
 		return JS_ThrowTypeError(ctx, "TLS: unsupported key type");
 	}
 
 	JSValue obj = JS_NewObjectClass(ctx, tls_server_cred_class_id);
 	if (JS_IsException(obj)) {
-		for (size_t i = 0; i < cred->chain_len; i++)
-			free(cred->cert_bufs[i]);
-		free(cred->cert_bufs);
-		free(cred->chain);
-		free(cred);
+		free_server_cred(cred);
 		return obj;
 	}
 	JS_SetOpaque(obj, cred);

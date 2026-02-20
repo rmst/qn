@@ -98,19 +98,21 @@ static JSValue js_uv_signal(JSContext *ctx, JSValueConst this_val,
 		return JS_ThrowInternalError(ctx, "couldn't initialize Signal handle");
 	}
 
+	sh->ctx = ctx;
+	sh->sig_num = sig_num;
+	sh->handle.data = sh;
+
 	r = uv_signal_start(&sh->handle, uv__signal_cb, sig_num);
 	if (r != 0) {
 		JS_FreeValue(ctx, obj);
-		js_free(ctx, sh);
+		/* Handle was uv_signal_init'd — must close via uv_close */
+		uv_close((uv_handle_t *)&sh->handle, uv__signal_close_cb);
 		return qn_throw_errno(ctx, r);
 	}
 
 	/* Unref so signal handlers don't keep the event loop alive */
 	uv_unref((uv_handle_t *)&sh->handle);
 
-	sh->ctx = ctx;
-	sh->sig_num = sig_num;
-	sh->handle.data = sh;
 	sh->func = JS_DupValue(ctx, func);
 
 	JS_SetOpaque(obj, sh);

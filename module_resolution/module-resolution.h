@@ -124,7 +124,8 @@ static char *resolve_node_path(JSContext *ctx, const char *name) {
     if (!copy) return NULL;
 
     char *result = NULL;
-    for (char *path = strtok(copy, PATH_SEP); path && !result; path = strtok(NULL, PATH_SEP)) {
+    char *saveptr = NULL;
+    for (char *path = strtok_r(copy, PATH_SEP, &saveptr); path && !result; path = strtok_r(NULL, PATH_SEP, &saveptr)) {
         size_t len = strlen(path);
         if (len > 0 && strchr("/\\", path[len-1])) {
             path[len-1] = 0;
@@ -362,7 +363,8 @@ static char *resolve_node_path_canonical(JSContext *ctx, const char *name,
         }
 
         char *result = NULL;
-        for (char *path = strtok(copy, PATH_SEP); path && !result; path = strtok(NULL, PATH_SEP)) {
+        char *saveptr = NULL;
+        for (char *path = strtok_r(copy, PATH_SEP, &saveptr); path && !result; path = strtok_r(NULL, PATH_SEP, &saveptr)) {
             size_t path_len = strlen(path);
             if (path_len > 0 && strchr("/\\", path[path_len-1])) {
                 path[path_len-1] = 0;

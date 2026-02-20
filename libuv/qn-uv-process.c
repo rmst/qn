@@ -304,7 +304,9 @@ static void sync_buf_append(sync_buf_t *b, const char *src, size_t n) {
 	if (b->len + n > b->cap) {
 		size_t nc = b->cap ? b->cap * 2 : 4096;
 		while (nc < b->len + n) nc *= 2;
-		b->data = realloc(b->data, nc);
+		char *p = realloc(b->data, nc);
+		if (!p) return;
+		b->data = p;
 		b->cap = nc;
 	}
 	memcpy(b->data + b->len, src, n);

@@ -140,7 +140,8 @@ JSValue qn_stream_wrap(JSContext *ctx, QNStream *s) {
 /* ---- libuv callbacks ---- */
 
 static void qn_alloc_cb(uv_handle_t *handle, size_t suggested, uv_buf_t *buf) {
-	buf->base = malloc(suggested);
+	QNStream *s = handle->data;
+	buf->base = js_malloc(s->ctx, suggested);
 	buf->len = buf->base ? suggested : 0;
 }
 
@@ -149,13 +150,13 @@ static void qn_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) 
 	JSContext *ctx = s->ctx;
 
 	if (JS_IsUndefined(s->on_read)) {
-		free(buf->base);
+		js_free(ctx, buf->base);
 		return;
 	}
 
 	if (nread < 0) {
 		/* EOF or error */
-		free(buf->base);
+		js_free(ctx, buf->base);
 		uv_read_stop(stream);
 		if (nread == UV_EOF) {
 			JSValue args[2] = { JS_NULL, JS_NULL };
@@ -170,19 +171,13 @@ static void qn_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) 
 	}
 
 	if (nread == 0) {
-		free(buf->base);
+		js_free(ctx, buf->base);
 		return;
 	}
 
-	/* Transfer ownership of buf->base to a Uint8Array */
-	uint8_t *data = js_malloc(ctx, nread);
-	if (!data) {
-		free(buf->base);
-		return;
-	}
-	memcpy(data, buf->base, nread);
-	free(buf->base);
-	JSValue arr = qn_new_uint8array(ctx, data, nread);
+	/* buf->base was allocated with js_malloc in qn_alloc_cb,
+	 * so we can pass ownership directly to qn_new_uint8array */
+	JSValue arr = qn_new_uint8array(ctx, (uint8_t *)buf->base, nread);
 	JSValue args[2] = { arr, JS_NULL };
 	qn_call_handler(ctx, s->on_read, 2, args);
 	JS_FreeValue(ctx, arr);

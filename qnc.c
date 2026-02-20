@@ -81,9 +81,15 @@ static int import_map_cap = 0;
 
 static void record_import(const char *base, const char *specifier, const char *resolved) {
     if (import_map_count >= import_map_cap) {
-        import_map_cap = import_map_cap ? import_map_cap * 2 : 64;
-        import_map_records = realloc(import_map_records,
-                                     sizeof(ImportMapRecord) * import_map_cap);
+        int new_cap = import_map_cap ? import_map_cap * 2 : 64;
+        ImportMapRecord *p = realloc(import_map_records,
+                                     sizeof(ImportMapRecord) * new_cap);
+        if (!p) {
+            fprintf(stderr, "qnc: out of memory recording imports\n");
+            exit(1);
+        }
+        import_map_records = p;
+        import_map_cap = new_cap;
     }
     import_map_records[import_map_count].base = strdup(base);
     import_map_records[import_map_count].specifier = strdup(specifier);
@@ -125,7 +131,10 @@ void namelist_add(namelist_t *lp, const char *name, const char *short_name,
         size_t newsize = lp->size + (lp->size >> 1) + 4;
         namelist_entry_t *a =
             realloc(lp->array, sizeof(lp->array[0]) * newsize);
-        /* XXX: check for realloc failure */
+        if (!a) {
+            fprintf(stderr, "qnc: out of memory\n");
+            exit(1);
+        }
         lp->array = a;
         lp->size = newsize;
     }

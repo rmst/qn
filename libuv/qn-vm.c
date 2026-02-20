@@ -152,7 +152,7 @@ typedef struct QNTimer {
 } QNTimer;
 
 static QNTimer *timer_head = NULL;
-static int next_timer_id = 1;
+static int next_timer_id = 1;  /* wraps to 1 on overflow, skipping 0 */
 
 static void timer_unlink(QNTimer *t) {
 	QNTimer **pp = &timer_head;
@@ -206,6 +206,7 @@ static JSValue js_vm_setTimeout(JSContext *ctx, JSValueConst this_val,
 	if (!t) return JS_EXCEPTION;
 
 	t->id = next_timer_id++;
+	if (next_timer_id <= 0) next_timer_id = 1;
 	t->ctx = ctx;
 	t->func = JS_DupValue(ctx, func);
 	t->closed = false;
