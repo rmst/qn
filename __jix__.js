@@ -26,7 +26,6 @@ const binDir = () => {
 		cd repo
 		make build GIT_DIRTY=1
 		mkdir -p "$out"
-		cp ./bin/${platform}/qjsx "$out/"
 		cp ./bin/${platform}/qn "$out/"
 		cp ./bin/${platform}/qnc "$out/"
 		cp ./bin/${platform}/qx "$out/"
@@ -35,7 +34,6 @@ const binDir = () => {
 
 
 const bin = {
-	qjsx: () => `${binDir}/qjsx`,
 	qn: () => `${binDir}/qn`,
 	qnc: () => `${binDir}/qnc`,
 	qx: () => `${binDir}/qx`,
