@@ -335,6 +335,14 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
             return NULL;
         }
 
+        /* Apply source transform (e.g. TypeScript stripping) */
+        buf = js_std_apply_source_transform(ctx, buf, buf_len, resolved_name, &buf_len);
+        if (!buf) {
+            if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
+            if (index_resolved) js_free(ctx, index_resolved);
+            return NULL;
+        }
+
         res = js_module_test_json(ctx, attributes);
         if (has_suffix(disk_name, ".json") || res > 0) {
             /* compile as JSON or JSON5 depending on "type" */
@@ -425,9 +433,16 @@ static void compile_file(JSContext *ctx, FILE *fo,
         fprintf(stderr, "Could not load '%s'\n", filename);
         exit(1);
     }
+    /* Apply source transform (e.g. TypeScript stripping) */
+    buf = js_std_apply_source_transform(ctx, buf, buf_len, filename, &buf_len);
+    if (!buf) {
+        js_std_dump_error(ctx);
+        exit(1);
+    }
     eval_flags = JS_EVAL_FLAG_COMPILE_ONLY;
     if (module < 0) {
         module = (has_suffix(filename, ".mjs") ||
+                  has_suffix(filename, ".ts") ||
                   JS_DetectModule((const char *)buf, buf_len));
     }
     if (module)
@@ -858,9 +873,54 @@ int main(int argc, char **argv)
     outfile = fo;
 
     rt = JS_NewRuntime();
+    js_std_init_handlers(rt);
     ctx = JS_NewContext(rt);
 
     JS_SetStripInfo(rt, strip_flags);
+
+    /* Set up TypeScript source transform (if node:module / Sucrase are available).
+       Uses js_module_loader in non-compile mode to load the transform modules
+       without embedding them.  The transform hook persists across loader switches.
+       The init script stores the transform function in globalThis.__tsTransform,
+       then C reads it and sets the hook — avoids needing 'std' module during init
+       (which would interfere with the compilation phase's module tracking). */
+    {
+        static QJSXModuleResolverContext init_resolver_ctx = {
+            .embedded_modules = NULL,
+            .import_map = NULL,
+            .import_map_count = 0,
+            .compile_mode = 0,
+            .record_import = NULL,
+        };
+        JS_SetModuleLoaderFunc2(rt, qjsx_module_normalizer, js_module_loader,
+                                NULL, &init_resolver_ctx);
+        static const char ts_init_script[] =
+            "import { stripTypeScriptTypes } from 'node:module'\n"
+            "globalThis.__tsTransform = (source, filename) => {\n"
+            "  if (!filename.endsWith('.ts')) return source\n"
+            "  try { return stripTypeScriptTypes(source) }\n"
+            "  catch { return stripTypeScriptTypes(source, { mode: 'transform' }) }\n"
+            "}\n";
+        JSValue init_val = JS_Eval(ctx, ts_init_script, sizeof(ts_init_script) - 1,
+                                   "<ts-init>", JS_EVAL_TYPE_MODULE);
+        if (!JS_IsException(init_val)) {
+            JS_FreeValue(ctx, init_val);
+            /* Drain pending jobs to execute the module */
+            JSContext *ctx1;
+            while (JS_ExecutePendingJob(rt, &ctx1) > 0) {}
+            /* Read the transform function from globalThis and set the C hook */
+            JSValue global = JS_GetGlobalObject(ctx);
+            JSValue fn = JS_GetPropertyStr(ctx, global, "__tsTransform");
+            if (JS_IsFunction(ctx, fn)) {
+                js_std_set_source_transform_fn(ctx, fn);
+            }
+            JS_FreeValue(ctx, fn);
+            JS_FreeValue(ctx, global);
+        } else {
+            /* Transform not available — clear exception, TS files will fail later */
+            JS_FreeValue(ctx, JS_GetException(ctx));
+        }
+    }
 
     /* loader for ES6 modules (compile_mode context for embedded:// prefixing) */
     JS_SetModuleLoaderFunc2(rt, qjsx_module_normalizer, jsc_module_loader, NULL, &compile_resolver_ctx);
@@ -1045,6 +1105,7 @@ int main(int argc, char **argv)
                 "}\n");
     }
 
+    js_std_free_handlers(rt);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
 

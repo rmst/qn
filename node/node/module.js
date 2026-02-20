@@ -11,8 +11,10 @@ const TT_IMPORT = 90640
 const TT_EXPORT = 89104
 const TT_STRING = 4608
 const TT_ENUM = 113168
+const TT_BRACE_R = 11264
 const CK_TYPE = 38
 const CK_NAMESPACE = 23
+const CK_FROM = 13
 
 /**
  * Strips TypeScript type annotations from source code, returning plain JavaScript.
@@ -68,12 +70,24 @@ function blankTypeScriptTypes(code) {
 		if ((t.type === TT_IMPORT || t.type === TT_EXPORT) && i + 1 < tokens.length) {
 			const next = tokens[i + 1]
 			if (next.contextualKeyword === CK_TYPE && !next.isType) {
-				// Scan to the last token of this statement (before next import/export/eof)
+				// Find the end of this import/export type statement.
+				// Ends at the from-clause string literal (TT_STRING) if present,
+				// otherwise at the closing brace (e.g. `export type { Foo }`).
 				let lastIdx = i + 1
 				for (let j = i + 2; j < tokens.length; j++) {
 					if (tokens[j].start === tokens[j].end) continue
-					if (tokens[j].type === TT_IMPORT || tokens[j].type === TT_EXPORT) break
 					lastIdx = j
+					if (tokens[j].type === TT_STRING) break
+					if (tokens[j].type === TT_BRACE_R) {
+						// Check if next non-empty token is `from` — if so, continue
+						let hasFrom = false
+						for (let k = j + 1; k < tokens.length; k++) {
+							if (tokens[k].start === tokens[k].end) continue
+							if (tokens[k].contextualKeyword === CK_FROM) hasFrom = true
+							break
+						}
+						if (!hasFrom) break
+					}
 				}
 				const end = tokens[lastIdx].end
 				ranges.push(t.start, end)

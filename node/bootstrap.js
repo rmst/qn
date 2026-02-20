@@ -14,6 +14,19 @@
 import * as std from "std"
 import "node-globals"
 import { resolve } from "node:path"
+import { stripTypeScriptTypes } from "node:module"
+
+// Register source transform for .ts module loading.
+// Tries strip mode first (preserves source positions for accurate error locations),
+// falls back to full transform for constructs strip mode can't handle (enums, namespaces).
+std._setSourceTransform((source, filename) => {
+	if (!filename.endsWith(".ts")) return source
+	try {
+		return stripTypeScriptTypes(source)
+	} catch {
+		return stripTypeScriptTypes(source, { mode: "transform" })
+	}
+})
 import { globSync } from "node:fs"
 import { commit, buildTime } from "qn:version-info"
 import { isDirectory, resolveDirectoryEntry } from "./qn/bootstrap-utils.js"

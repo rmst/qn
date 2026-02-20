@@ -28,7 +28,9 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 - `sqlite/qjs-sqlite.c` (480) — SQLite bindings
 - `introspect/` (30) — closure introspection (bulk is in QuickJS patch)
 
-**Module resolution** ([`module_resolution/`](module_resolution/Readme.md)) — ~1.2K LOC C. NODE_PATH, node_modules walking, package.json resolution. For standalone binaries: `embedded://` namespace separation, compile-time import map, `file://` protocol for forced disk loading.
+**Module resolution** ([`module_resolution/`](module_resolution/Readme.md)) — ~1.2K LOC C. NODE_PATH, node_modules walking, package.json resolution, `.ts`/`.js` extension probing. For standalone binaries: `embedded://` namespace separation, compile-time import map, `file://` protocol for forced disk loading.
+
+**TypeScript support** — `.ts` files are transparently transformed on load via a source transform hook in the C module loader. The hook tries position-preserving strip mode first (accurate error locations), falling back to Sucrase's full transform for constructs like enums. Uses the same `stripTypeScriptTypes` / Sucrase infrastructure as the `node:module` shim.
 
 ## Vendored Dependencies
 

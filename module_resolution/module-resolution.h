@@ -93,6 +93,11 @@ static int file_exists(const char *path) {
  * MODULE RESOLUTION FUNCTIONS
  * ======================================================================== */
 
+/* Extension suffixes for module probing.
+ * Order matters: .js before .ts, file before directory index. */
+static const char *module_ext_suffixes[] = { ".js", ".ts", "/index.js", "/index.ts" };
+#define N_EXT_SUFFIXES 4
+
 /**
  * Get search paths from the NODE_PATH environment variable.
  */
@@ -129,15 +134,16 @@ static char *resolve_node_path(JSContext *ctx, const char *name) {
         char *buf = js_malloc(ctx, buflen);
         if (!buf) continue;
 
-        /* Try: path/name/index.js, path/name.js, path/name */
-        snprintf(buf, buflen, "%s" DIR_SEP "%s" DIR_SEP "index.js", path, name);
-        if (file_exists(buf)) { result = buf; break; }
-
-        snprintf(buf, buflen, "%s" DIR_SEP "%s.js", path, name);
-        if (file_exists(buf)) { result = buf; break; }
-
+        /* Try: path/name, path/name.js, path/name.ts, path/name/index.js, path/name/index.ts */
         snprintf(buf, buflen, "%s" DIR_SEP "%s", path, name);
         if (file_exists(buf)) { result = buf; break; }
+
+        int found = 0;
+        for (int si = 0; si < N_EXT_SUFFIXES; si++) {
+            snprintf(buf, buflen, "%s" DIR_SEP "%s%s", path, name, module_ext_suffixes[si]);
+            if (file_exists(buf)) { result = buf; found = 1; break; }
+        }
+        if (found) break;
 
         js_free(ctx, buf);
     }
@@ -166,23 +172,16 @@ static char *resolve_with_index(JSContext *ctx, const char *name) {
         return js_strdup(ctx, name);
     }
 
-    // Strategy 2: Try with .js extension
-    size_t buflen = name_len + 20;  // Extra room for ".js", "/index.js" + null terminator
+    // Strategy 2+: Try with extensions
+    size_t buflen = name_len + 20;
     char *buf = js_malloc(ctx, buflen);
     if (!buf) return NULL;
 
-    snprintf(buf, buflen, "%s.js", name);
-    if (file_exists(buf)) {
-        return buf;  // Return the allocated buffer
+    for (int i = 0; i < N_EXT_SUFFIXES; i++) {
+        snprintf(buf, buflen, "%s%s", name, module_ext_suffixes[i]);
+        if (file_exists(buf)) return buf;
     }
 
-    // Strategy 3: Try path/index.js
-    snprintf(buf, buflen, "%s" DIR_SEP "index.js", name);
-    if (file_exists(buf)) {
-        return buf;  // Return the allocated buffer
-    }
-
-    // Nothing found, clean up and return NULL
     js_free(ctx, buf);
     return NULL;
 }
@@ -341,13 +340,10 @@ static char *resolve_node_path_canonical(JSContext *ctx, const char *name,
             js_free(ctx, buf);
             return js_strdup(ctx, name);
         }
-        snprintf(buf, buflen, "%s/index.js", name);
-        if (embedded_module_exists(embedded_modules, buf)) {
-            return buf;
-        }
-        snprintf(buf, buflen, "%s.js", name);
-        if (embedded_module_exists(embedded_modules, buf)) {
-            return buf;
+        for (int i = 0; i < N_EXT_SUFFIXES; i++) {
+            snprintf(buf, buflen, "%s%s", name, module_ext_suffixes[i]);
+            if (embedded_module_exists(embedded_modules, buf))
+                return buf;
         }
     }
 
@@ -377,25 +373,7 @@ static char *resolve_node_path_canonical(JSContext *ctx, const char *name,
             char *full_path = js_malloc(ctx, full_buflen);
             if (!full_path) continue;
 
-            // Strategy 1: path/name/index.js -> return "name/index.js"
-            snprintf(full_path, full_buflen, "%s" DIR_SEP "%s" DIR_SEP "index.js", path, name);
-            if (file_exists(full_path)) {
-                snprintf(buf, buflen, "%s/index.js", name);
-                result = buf;
-                js_free(ctx, full_path);
-                break;
-            }
-
-            // Strategy 2: path/name.js -> return "name.js"
-            snprintf(full_path, full_buflen, "%s" DIR_SEP "%s.js", path, name);
-            if (file_exists(full_path)) {
-                snprintf(buf, buflen, "%s.js", name);
-                result = buf;
-                js_free(ctx, full_path);
-                break;
-            }
-
-            // Strategy 3: path/name -> return "name"
+            // Strategy 1: path/name -> return "name"
             snprintf(full_path, full_buflen, "%s" DIR_SEP "%s", path, name);
             if (file_exists(full_path)) {
                 js_free(ctx, buf);
@@ -404,7 +382,21 @@ static char *resolve_node_path_canonical(JSContext *ctx, const char *name,
                 break;
             }
 
-            js_free(ctx, full_path);
+            // Strategy 2+: try suffixes
+            {
+                int found = 0;
+                for (int si = 0; si < N_EXT_SUFFIXES; si++) {
+                    snprintf(full_path, full_buflen, "%s" DIR_SEP "%s%s", path, name, module_ext_suffixes[si]);
+                    if (file_exists(full_path)) {
+                        snprintf(buf, buflen, "%s%s", name, module_ext_suffixes[si]);
+                        result = buf;
+                        found = 1;
+                        break;
+                    }
+                }
+                js_free(ctx, full_path);
+                if (found) break;
+            }
         }
 
         js_free(ctx, copy);
@@ -429,31 +421,26 @@ static char *probe_module_with_extensions(JSContext *ctx, const char *name,
     char *buf = js_malloc(ctx, buflen);
     if (!buf) return NULL;
 
+    /* Extension probe order: exact, .js, .ts, /index.js, /index.ts */
     if (embedded_modules) {
         if (embedded_module_exists(embedded_modules, name)) {
             js_free(ctx, buf);
             return js_strdup(ctx, name);
         }
-        snprintf(buf, buflen, "%s.js", name);
-        if (embedded_module_exists(embedded_modules, buf)) {
-            return buf;
-        }
-        snprintf(buf, buflen, "%s/index.js", name);
-        if (embedded_module_exists(embedded_modules, buf)) {
-            return buf;
+        for (int i = 0; i < N_EXT_SUFFIXES; i++) {
+            snprintf(buf, buflen, "%s%s", name, module_ext_suffixes[i]);
+            if (embedded_module_exists(embedded_modules, buf))
+                return buf;
         }
     } else {
         if (file_exists(name)) {
             js_free(ctx, buf);
             return js_strdup(ctx, name);
         }
-        snprintf(buf, buflen, "%s.js", name);
-        if (file_exists(buf)) {
-            return buf;
-        }
-        snprintf(buf, buflen, "%s/index.js", name);
-        if (file_exists(buf)) {
-            return buf;
+        for (int i = 0; i < N_EXT_SUFFIXES; i++) {
+            snprintf(buf, buflen, "%s%s", name, module_ext_suffixes[i]);
+            if (file_exists(buf))
+                return buf;
         }
     }
 

@@ -5,14 +5,15 @@ Qn is a lightweight JavaScript runtime built on [QuickJS](https://bellard.org/qu
 Features:
 
 1. **libuv-based async I/O** — true async file I/O via thread pool (io_uring on supported kernels), TCP/TLS/HTTP networking, child process spawning, signal handling, DNS resolution
-2. **Node.js compatibility** — `node:fs`, `node:net`, `node:tls`, `node:http`, `node:child_process`, `node:stream`, `node:crypto`, `node:path`, `node:events`, `node:url`, `node:os`, `node:buffer`, `node:assert`, `node:test`, `node:sqlite`
-3. **Module resolution** with two modes (see [docs](module_resolution/Readme.md), [tests](test/module-resolution/)):
+2. **Node.js compatibility** — `node:fs`, `node:net`, `node:tls`, `node:http`, `node:child_process`, `node:stream`, `node:crypto`, `node:path`, `node:events`, `node:url`, `node:os`, `node:buffer`, `node:assert`, `node:test`, `node:sqlite`, `node:module`
+3. **TypeScript support** — `.ts` files run directly (`qn script.ts`), with source-position-preserving type stripping (falls back to full transform for enums/namespaces). Extension probing resolves `./foo` to `./foo.ts` when no `.js` exists.
+4. **Module resolution** with two modes (see [docs](module_resolution/Readme.md), [tests](test/module-resolution/)):
    - **Bundler mode** (default): `NODE_PATH` for bare imports, `node_modules` walking, `.js` and `/index.js` fallbacks
    - **Node mode** (`QJSX_MODULE_RESOLUTION=node`): matches Node.js ESM exactly
-4. `import.meta.dirname` and `import.meta.filename`
-5. `qn:http` — high-level HTTP server (`serve()` API)
-6. `qn:introspect` — closure introspection and function serialization (see [introspect/](introspect/Readme.md))
-7. Import errors include source location:
+5. `import.meta.dirname` and `import.meta.filename`
+6. `qn:http` — high-level HTTP server (`serve()` API)
+7. `qn:introspect` — closure introspection and function serialization (see [introspect/](introspect/Readme.md))
+8. Import errors include source location:
    - Export not found: `Could not find export 'foo' in module 'bar.js' (imported at main.js:5)`
    - Module not found: `could not load module filename 'foo.js' (imported from 'main.js')`
 
@@ -33,10 +34,11 @@ make build  # Builds ./bin/qn, ./bin/qx, and ./bin/qnc
 
 **Run a script**
 ```bash
-./bin/qn script.js
+./bin/qn script.js    # JavaScript
+./bin/qn script.ts    # TypeScript (types stripped on load)
 ```
 
-`script.js` can use `node:fs`, `node:net`, `node:http`, etc.
+Scripts can use `node:fs`, `node:net`, `node:http`, etc. TypeScript files are transparently transformed — type annotations are stripped while preserving source positions for accurate error messages.
 
 **Module resolution with NODE_PATH**
 ```bash
@@ -90,4 +92,4 @@ Key source files:
 - `qnc.c` — standalone compiler
 - `module_resolution/module-resolution.h` — shared module resolution logic
 - `quickjs.patch` — applied to `quickjs/quickjs.c` (import error locations)
-- `quickjs-libc.patch` — applied to `quickjs/quickjs-libc.c` (`import.meta.dirname/filename`, UTF-8 helpers)
+- `quickjs-libc.patch` — applied to `quickjs/quickjs-libc.c` (`import.meta.dirname/filename`, UTF-8 helpers, source transform hook for TypeScript)

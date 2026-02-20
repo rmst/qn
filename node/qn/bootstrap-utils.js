@@ -35,5 +35,14 @@ export function resolveDirectoryEntry(dirPath) {
 		// No package.json or invalid JSON - fall through to index.js
 	}
 
+	// Try index.js first, then index.ts
+	for (const name of ['index.js', 'index.ts']) {
+		const path = resolve(dirPath, name)
+		try {
+			const st = statSync(path)
+			if ((st.mode & S_IFMT) !== S_IFDIR) return path
+		} catch {}
+	}
+	// Default to index.js for error message consistency
 	return resolve(dirPath, 'index.js')
 }
