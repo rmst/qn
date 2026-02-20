@@ -8,3 +8,7 @@
 [submodule "vendor/libuv"]
 	path = vendor/libuv
 	url = https://github.com/libuv/libuv.git
+[submodule "vendor/sucrase-js"]
+	path = vendor/sucrase-js
+	url = /Users/simon/dev/sucrase-js
+	ignore = dirty

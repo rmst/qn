@@ -1,14 +1,14 @@
 # Architecture
 
-Qn is built from ~24K LOC of own code plus four vendored C dependencies. Everything compiles with just `make` and a C compiler — no cmake, autoconf, or other build tools.
+Qn is built from ~24K LOC of own code plus four vendored C dependencies and one vendored JS dependency. Everything compiles with just `make` and a C compiler — no cmake, autoconf, or other build tools.
 
 ## Own Code (~24K LOC)
 
-**Node.js compatibility** (`node/node/`) — ~12.6K LOC JS. Shims for `node:fs`, `node:net`, `node:tls`, `node:http`, `node:child_process`, `node:stream`, `node:crypto`, `node:path`, `node:events`, `node:url`, `node:os`, `node:buffer`, `node:assert`, `node:test`, `node:sqlite`, etc.
+**Node.js compatibility** (`node/node/`) — ~12.6K LOC JS. Shims for `node:fs`, `node:net`, `node:tls`, `node:http`, `node:child_process`, `node:stream`, `node:crypto`, `node:path`, `node:events`, `node:url`, `node:os`, `node:buffer`, `node:assert`, `node:test`, `node:sqlite`, `node:module`, etc.
 
 **Bootstrap and REPL** (`node/bootstrap.js`, `node/node-globals.js`, `node/repl.js`) — ~1.9K LOC JS. Startup, global setup, interactive shell.
 
-**qn modules** (`node/qn/`) — ~0.5K LOC JS. Higher-level APIs: HTTP server (`qn:http`), libuv JS wrappers.
+**qn modules** (`node/qn/`) — ~0.5K LOC JS. Higher-level APIs: HTTP server (`qn:http`), TypeScript transform (`qn:sucrase`), libuv JS wrappers.
 
 **qx** (`qx/`) — ~1K LOC JS. Shell scripting with `$` function (similar to zx).
 
@@ -51,3 +51,7 @@ Single-file amalgamation. Bound to JS via `qjs-sqlite.c`. ~281K LOC.
 ### [BearSSL](https://github.com/nickray/bearssl) (submodule: `vendor/bearssl/`)
 
 TLS library. BearSSL's state machine API fits well with libuv streams. Built via its own Makefile. ~90K LOC.
+
+### [Sucrase](https://github.com/alangpierce/sucrase) (submodule: `vendor/sucrase-js/`)
+
+TypeScript/JSX transformer with its own parser (no TypeScript compiler dependency). Used by `node:module` to implement `stripTypeScriptTypes()` — types are replaced with whitespace to preserve source positions, inspired by [ts-blank-space](https://github.com/bloomberg/ts-blank-space). The vendored copy is a pure-JS conversion of Sucrase's TypeScript source. ~20K LOC.
