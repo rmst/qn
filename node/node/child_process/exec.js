@@ -58,6 +58,7 @@ export function exec(command, options, callback) {
 		encoding: options.encoding,
 		timeout: options.timeout,
 		killSignal: options.killSignal,
+		maxBuffer: options.maxBuffer,
 	}
 
 	return execFile(shell, ['-c', command], execFileOptions, callback)

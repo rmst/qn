@@ -150,7 +150,7 @@ import { spawn, exec, execFile, execSync, execFileSync } from 'node:child_proces
 
 **Unsupported options** (throw `NodeCompatibilityError`): `uid`, `gid`, `detached`
 
-**Ignored options**: `maxBuffer`, `windowsHide`
+**Ignored options**: `windowsHide`
 
 ### `node:path`
 

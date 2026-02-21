@@ -16,6 +16,7 @@ import { setTimeout as _setTimeout, clearTimeout as _clearTimeout } from 'qn_vm'
  * @param {number} [options.timeout=0] - Timeout in milliseconds (0 means no timeout).
  * @param {string} [options.killSignal='SIGTERM'] - Signal to send when timeout expires.
  * @param {string} [options.encoding] - If 'utf8', callback receives strings; otherwise Uint8Array.
+ * @param {number} [options.maxBuffer=1048576] - Max bytes allowed on stdout or stderr. Child is killed if exceeded.
  * @param {AbortSignal} [options.signal] - AbortSignal to abort the child process.
  * @param {Function} [callback] - Called with (error, stdout, stderr) when process completes.
  * @returns {ChildProcess}
@@ -113,6 +114,19 @@ export function execFile(file, args, options, callback) {
 		}
 		const useUtf8 = encoding && encoding.toLowerCase().replace('-', '') === 'utf8'
 
+		// maxBuffer: default 1 MiB, matching Node.js
+		const maxBuffer = options.maxBuffer ?? 1024 * 1024
+		let stdoutLen = 0
+		let stderrLen = 0
+		let maxBufferExceeded = false
+
+		const killForMaxBuffer = (stream) => {
+			maxBufferExceeded = true
+			child.kill(killSignal)
+			if (child.stdout) child.stdout.destroy()
+			if (child.stderr) child.stderr.destroy()
+		}
+
 		// Set encoding on streams if specified
 		if (useUtf8) {
 			child.stdout.setEncoding('utf8')
@@ -124,6 +138,11 @@ export function execFile(file, args, options, callback) {
 		let stderrChunks = useUtf8 ? '' : []
 
 		child.stdout.on('data', (chunk) => {
+			stdoutLen += useUtf8 ? Buffer.byteLength(chunk) : chunk.length
+			if (stdoutLen > maxBuffer) {
+				killForMaxBuffer('stdout')
+				return
+			}
 			if (useUtf8) {
 				stdoutChunks += chunk
 			} else {
@@ -132,6 +151,11 @@ export function execFile(file, args, options, callback) {
 		})
 
 		child.stderr.on('data', (chunk) => {
+			stderrLen += useUtf8 ? Buffer.byteLength(chunk) : chunk.length
+			if (stderrLen > maxBuffer) {
+				killForMaxBuffer('stderr')
+				return
+			}
 			if (useUtf8) {
 				stderrChunks += chunk
 			} else {
@@ -151,7 +175,12 @@ export function execFile(file, args, options, callback) {
 			}
 
 			let error = null
-			if (timedOut) {
+			if (maxBufferExceeded) {
+				error = Object.assign(
+					new RangeError(`maxBuffer length exceeded`),
+					{ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', killed: true }
+				)
+			} else if (timedOut) {
 				error = Object.assign(new Error(`Command timed out: ${file}`), {
 					code,
 					killed: true,

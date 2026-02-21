@@ -933,6 +933,43 @@ describe('node:child_process shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { output: 'content from file' })
 	})
 
+	test('execFile maxBuffer kills child when stdout exceeds limit', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFile } from 'node:child_process'
+			execFile('awk', ['BEGIN { for(i=1;i<=10000;i++) print "line " i }'], { encoding: 'utf8', maxBuffer: 1024 }, (error, stdout, stderr) => {
+				console.log(JSON.stringify({
+					hasError: error !== null,
+					code: error ? error.code : null,
+					isRangeError: error instanceof RangeError,
+					gotPartialOutput: stdout.length > 0 && stdout.length <= 1024 + 200,
+				}))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.hasError, true)
+		assert.strictEqual(result.code, 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER')
+		assert.strictEqual(result.isRangeError, true)
+	})
+
+	test('execFile maxBuffer default allows reasonable output', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFile } from 'node:child_process'
+			// ~50KB output, well under 1MB default
+			execFile('awk', ['BEGIN { for(i=1;i<=1000;i++) print "line " i ": padding text here" }'], { encoding: 'utf8' }, (error, stdout) => {
+				const lines = stdout.trim().split('\\n')
+				console.log(JSON.stringify({
+					error: error ? error.message : null,
+					lineCount: lines.length,
+				}))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { error: null, lineCount: 1000 })
+	})
+
 	testQnOnly('spawn with detached creates new session and kills process group', ({ bin, dir }) => {
 		const marker = `${dir}/marker.txt`
 		writeFileSync(`${dir}/test.js`, `
