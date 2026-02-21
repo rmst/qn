@@ -4,7 +4,7 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 
 ## Own Code (~24K LOC)
 
-**Node.js compatibility** (`node/node/`) — ~12.6K LOC JS. Shims for `node:fs`, `node:net`, `node:tls`, `node:http`, `node:child_process`, `node:stream`, `node:crypto`, `node:path`, `node:events`, `node:url`, `node:os`, `node:buffer`, `node:assert`, `node:test`, `node:sqlite`, `node:module`, etc.
+**Node.js compatibility** (`node/node/`) — ~12.6K LOC JS. Shims for `node:fs`, `node:net`, `node:dgram`, `node:tls`, `node:http`, `node:child_process`, `node:stream`, `node:crypto`, `node:path`, `node:events`, `node:url`, `node:os`, `node:buffer`, `node:assert`, `node:test`, `node:sqlite`, `node:module`, etc.
 
 **Bootstrap and REPL** (`node/bootstrap.js`, `node/node-globals.js`, `node/repl.js`) — ~1.9K LOC JS. Startup, global setup, interactive shell.
 
@@ -16,6 +16,7 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 - `qn-vm.c` (761) — event loop ownership, timers, fd polling, microtask draining, promise rejection tracking
 - `qn-uv-fs.c` (903) — async/sync filesystem operations via `uv_fs_*`
 - `qn-uv-stream.c` (634) — unified TCP/Pipe/TTY stream abstraction
+- `qn-uv-dgram.c` (310) — UDP datagram sockets via `uv_udp_t`
 - `qn-uv-process.c` (698) — child process spawning via `uv_spawn`
 - `qn-uv-utils.c` (503) — shared promise plumbing, error handling
 - `qn-uv-signals.c` (181) — signal handling via `uv_signal_t`
