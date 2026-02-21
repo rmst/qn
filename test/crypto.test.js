@@ -106,4 +106,68 @@ describe('node:crypto shim', () => {
 			assert.deepStrictEqual(JSON.parse(output), { threw: true })
 		}
 	})
+
+	test('createHash sha256 with Buffer input', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { createHash } from 'node:crypto'
+			const buf = Buffer.from('hello world')
+			const hash = createHash('sha256').update(buf).digest('hex')
+			console.log(JSON.stringify({ hash }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			hash: 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9'
+		})
+	})
+
+	test('createHash sha256 with Uint8Array input', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { createHash } from 'node:crypto'
+			const arr = new Uint8Array([0x68, 0x65, 0x6c, 0x6c, 0x6f]) // "hello"
+			const hash = createHash('sha256').update(arr).digest('hex')
+			console.log(JSON.stringify({ hash }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			hash: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
+		})
+	})
+
+	test('createHash sha256 mixed string and buffer updates', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { createHash } from 'node:crypto'
+			const hash = createHash('sha256')
+				.update('hello')
+				.update(Buffer.from(' '))
+				.update('world')
+				.digest('hex')
+			console.log(JSON.stringify({ hash }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), {
+			hash: 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9'
+		})
+	})
+
+	test('createHash sha256 digest can be called without encoding', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { createHash } from 'node:crypto'
+			const hash = createHash('sha256').update('abc').digest()
+			// Known SHA-256 of "abc"
+			const expected = [
+				0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
+				0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+				0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
+				0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
+			]
+			const match = hash.length === 32 && expected.every((b, i) => hash[i] === b)
+			console.log(JSON.stringify({ match }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { match: true })
+	})
 })
