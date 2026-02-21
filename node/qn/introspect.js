@@ -2,9 +2,10 @@ import * as std from 'std';
 
 /**
  * Get the closure variables of a function.
+ * Each entry has { value, type } where type is "local", "arg", "ref", "global", or "module".
  *
  * @param {Function} fn - The function to inspect
- * @returns {Record<string, any> | undefined} Object with variable names and values, or undefined if not a function
+ * @returns {Record<string, { value: any, type: string }> | undefined} Object with variable metadata, or undefined if not a function
  */
 export function getClosureVars(fn) {
     return std.getClosureVars(fn);
@@ -85,7 +86,14 @@ function toSource(value, indent = '', seenFunctions = new WeakSet()) {
         seenFunctions.add(value);
 
         const code = value.toString();
-        const closureVars = std.getClosureVars(value) || {};
+        const rawClosureVars = std.getClosureVars(value) || {};
+        // Extract only non-global closure vars (locals, args, refs, module imports)
+        const closureVars = {}
+        for (const [name, entry] of Object.entries(rawClosureVars)) {
+            if (entry.type !== 'global') {
+                closureVars[name] = entry.value;
+            }
+        }
         const varNames = Object.keys(closureVars);
 
         // No closure vars - just return the function code

@@ -7,7 +7,8 @@
 #
 #   1. JS_GetClosureVars(ctx, func) - API to inspect closure variables
 #      Used by qn:introspect for function serialization.
-#      Returns JS object { varName: value, ... } for the closure.
+#      Returns JS object { varName: { value, type }, ... } where type is
+#      one of: "local", "arg", "ref", "global", "module".
 #
 #   2. Import error source locations
 #      Import resolution errors now include the importing file and line number.
@@ -21,21 +22,22 @@
 #      tried to import it.
 #      Example: "could not load module filename 'foo.js' (imported from 'main.js')"
 #
---- quickjs/quickjs.c	2026-01-23 16:19:38.366612932 +0000
-+++ bin/linux/quickjs/quickjs.c	2026-01-23 16:29:13.849390520 +0000
-@@ -794,6 +794,7 @@
+--- quickjs/quickjs.c	2026-02-21 11:28:24.635574389 +0000
++++ bin/linux/quickjs/quickjs.c	2026-02-21 15:33:15.900924578 +0000
+@@ -809,6 +809,7 @@
      BOOL is_star; /* import_name = '*' is a valid import name, so need a flag */
      JSAtom import_name;
      int req_module_idx; /* in req_module_entries */
 +    int line_num; /* line number of the import statement */
  } JSImportEntry;
- 
+
  typedef enum {
-@@ -15457,6 +15458,45 @@
+@@ -15731,6 +15732,71 @@
      return JS_UNDEFINED;
  }
- 
-+/* Get closure variables as a JS object { varName: value, ... } */
+
++/* Get closure variables as a JS object { varName: { value, type }, ... }
++   type is one of: "local", "arg", "ref", "global", "module" */
 +JSValue JS_GetClosureVars(JSContext *ctx, JSValueConst func_val)
 +{
 +    JSObject *p;
@@ -60,13 +62,38 @@
 +    for (i = 0; i < b->closure_var_count; i++) {
 +        JSClosureVar *cv = &b->closure_var[i];
 +        JSVarRef *var_ref = p->u.func.var_refs[i];
-+        JSValue val;
++        JSValue entry, val;
++        const char *type_str;
++
 +        if (var_ref) {
 +            val = JS_DupValue(ctx, *var_ref->pvalue);
 +        } else {
 +            val = JS_UNDEFINED;
 +        }
-+        if (JS_SetProperty(ctx, obj, cv->var_name, val) < 0) {
++
++        switch (cv->closure_type) {
++        case JS_CLOSURE_LOCAL:   type_str = "local"; break;
++        case JS_CLOSURE_ARG:     type_str = "arg"; break;
++        case JS_CLOSURE_REF:     type_str = "ref"; break;
++        case JS_CLOSURE_GLOBAL_REF:
++        case JS_CLOSURE_GLOBAL_DECL:
++        case JS_CLOSURE_GLOBAL:  type_str = "global"; break;
++        case JS_CLOSURE_MODULE_DECL:
++        case JS_CLOSURE_MODULE_IMPORT:
++                                 type_str = "module"; break;
++        default:                 type_str = "unknown"; break;
++        }
++
++        entry = JS_NewObject(ctx);
++        if (JS_IsException(entry)) {
++            JS_FreeValue(ctx, val);
++            JS_FreeValue(ctx, obj);
++            return JS_EXCEPTION;
++        }
++        JS_SetPropertyStr(ctx, entry, "value", val);
++        JS_SetPropertyStr(ctx, entry, "type", JS_NewString(ctx, type_str));
++
++        if (JS_SetProperty(ctx, obj, cv->var_name, entry) < 0) {
 +            JS_FreeValue(ctx, obj);
 +            return JS_EXCEPTION;
 +        }
@@ -77,7 +104,7 @@
  static int js_arguments_define_own_property(JSContext *ctx,
                                              JSValueConst this_obj,
                                              JSAtom prop, JSValueConst val,
-@@ -29209,8 +29249,25 @@
+@@ -29946,8 +30012,25 @@
          m1 = js_host_resolve_imported_module_atom(ctx, m->module_name,
                                                    rme->module_name,
                                                    rme->attributes);
@@ -104,7 +131,7 @@
          rme->module = m1;
          /* already done in js_host_resolve_imported_module() except if
             the module was loaded with JS_EvalBinary() */
-@@ -29454,7 +29511,29 @@
+@@ -30145,7 +30228,29 @@
                  ret = js_resolve_export(ctx, &res_m,
                                          &res_me, m1, mi->import_name);
                  if (ret != JS_RESOLVE_RES_FOUND) {
@@ -135,7 +162,7 @@
                      goto fail;
                  }
                  if (res_me->local_name == JS_ATOM__star_) {
-@@ -30605,6 +30684,11 @@
+@@ -31297,6 +31402,11 @@
      mi->import_name = JS_DupAtom(ctx, import_name);
      mi->var_idx = var_idx;
      mi->is_star = is_star;
@@ -146,15 +173,15 @@
 +    }
      return 0;
  }
- 
---- quickjs/quickjs.h	2026-01-23 16:19:38.372321882 +0000
-+++ bin/linux/quickjs/quickjs.h	2026-01-23 16:27:10.789349972 +0000
-@@ -760,6 +760,8 @@
+
+--- quickjs/quickjs.h	2026-02-21 11:28:24.637597145 +0000
++++ bin/linux/quickjs/quickjs.h	2026-02-21 14:51:20.051543213 +0000
+@@ -759,6 +759,8 @@
  JS_BOOL JS_IsConstructor(JSContext* ctx, JSValueConst val);
  JS_BOOL JS_SetConstructorBit(JSContext *ctx, JSValueConst func_obj, JS_BOOL val);
- 
+
 +JSValue JS_GetClosureVars(JSContext *ctx, JSValueConst func_val);
 +
  JSValue JS_NewArray(JSContext *ctx);
  int JS_IsArray(JSContext *ctx, JSValueConst val);
- 
+

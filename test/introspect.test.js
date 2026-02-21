@@ -4,16 +4,22 @@ import { writeFileSync } from 'node:fs'
 import { testQnOnly, $ } from './util.js'
 
 describe('qn:introspect getClosureVars', () => {
-    testQnOnly('returns closure variables for a simple closure', ({ bin, dir }) => {
+    testQnOnly('returns closure variables with type metadata', ({ bin, dir }) => {
         writeFileSync(`${dir}/test.js`, `
             import { getClosureVars } from "qn:introspect";
             let foo = 3;
             let bar = "hello";
             let f = () => { console.log(foo, bar); };
-            console.log(JSON.stringify(getClosureVars(f)));
+            const vars = getClosureVars(f);
+            console.log(JSON.stringify({
+                foo: vars.foo,
+                bar: vars.bar,
+            }));
         `)
         const output = $`${bin} ${dir}/test.js`
-        assert.deepStrictEqual(JSON.parse(output), { foo: 3, bar: "hello" })
+        const result = JSON.parse(output)
+        assert.deepStrictEqual(result.foo, { value: 3, type: "ref" })
+        assert.deepStrictEqual(result.bar, { value: "hello", type: "ref" })
     })
 
     testQnOnly('only returns variables actually captured', ({ bin, dir }) => {
@@ -21,10 +27,14 @@ describe('qn:introspect getClosureVars', () => {
             import { getClosureVars } from "qn:introspect";
             let a = 1, b = 2, c = 3;
             let f = () => a + c;
-            console.log(JSON.stringify(getClosureVars(f)));
+            const vars = getClosureVars(f);
+            console.log(JSON.stringify({ a: vars.a, c: vars.c, hasB: 'b' in vars }));
         `)
         const output = $`${bin} ${dir}/test.js`
-        assert.deepStrictEqual(JSON.parse(output), { a: 1, c: 3 })
+        const result = JSON.parse(output)
+        assert.deepStrictEqual(result.a, { value: 1, type: "ref" })
+        assert.deepStrictEqual(result.c, { value: 3, type: "ref" })
+        assert.strictEqual(result.hasB, false)
     })
 
     testQnOnly('returns current value after mutation', ({ bin, dir }) => {
@@ -37,7 +47,25 @@ describe('qn:introspect getClosureVars', () => {
             console.log(JSON.stringify(getClosureVars(increment)));
         `)
         const output = $`${bin} ${dir}/test.js`
-        assert.deepStrictEqual(JSON.parse(output), { counter: 2 })
+        const result = JSON.parse(output)
+        assert.deepStrictEqual(result.counter, { value: 2, type: "ref" })
+    })
+
+    testQnOnly('includes globals with type "global"', ({ bin, dir }) => {
+        writeFileSync(`${dir}/test.js`, `
+            import { getClosureVars } from "qn:introspect";
+            let x = 1;
+            let f = () => console.log(x);
+            const vars = getClosureVars(f);
+            console.log(JSON.stringify({
+                xType: vars.x?.type,
+                consoleType: vars.console?.type,
+            }));
+        `)
+        const output = $`${bin} ${dir}/test.js`
+        const result = JSON.parse(output)
+        assert.notStrictEqual(result.xType, "global")
+        assert.strictEqual(result.consoleType, "global")
     })
 
     testQnOnly('returns undefined for non-function values', ({ bin, dir }) => {
