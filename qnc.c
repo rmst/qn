@@ -42,6 +42,113 @@
 #include "quickjs-libc.h"
 #include "module_resolution/module-resolution.h"
 
+/* --- TypeScript transform (isolated runtime) --- */
+
+static JSRuntime *ts_rt;
+static JSContext *ts_ctx;
+static JSValue ts_fn;
+static BOOL ts_available;
+
+static void ts_init(void)
+{
+    ts_available = FALSE;
+    ts_rt = JS_NewRuntime();
+    js_std_init_handlers(ts_rt);
+    ts_ctx = JS_NewContext(ts_rt);
+
+    static QJSXModuleResolverContext resolver_ctx = {
+        .embedded_modules = NULL,
+        .import_map = NULL,
+        .import_map_count = 0,
+        .compile_mode = 0,
+        .record_import = NULL,
+    };
+    JS_SetModuleLoaderFunc2(ts_rt, qjsx_module_normalizer, js_module_loader,
+                            NULL, &resolver_ctx);
+
+    static const char script[] =
+        "import { stripTypeScriptTypes } from 'node:module'\n"
+        "globalThis.__tsTransform = (source, filename) => {\n"
+        "  if (!filename.endsWith('.ts')) return source\n"
+        "  try { return stripTypeScriptTypes(source) }\n"
+        "  catch { return stripTypeScriptTypes(source, { mode: 'transform' }) }\n"
+        "}\n";
+    JSValue val = JS_Eval(ts_ctx, script, sizeof(script) - 1,
+                          "<ts-init>", JS_EVAL_TYPE_MODULE);
+    if (!JS_IsException(val)) {
+        JS_FreeValue(ts_ctx, val);
+        JSContext *ctx1;
+        while (JS_ExecutePendingJob(ts_rt, &ctx1) > 0) {}
+        JSValue global = JS_GetGlobalObject(ts_ctx);
+        ts_fn = JS_GetPropertyStr(ts_ctx, global, "__tsTransform");
+        JS_FreeValue(ts_ctx, global);
+        if (JS_IsFunction(ts_ctx, ts_fn)) {
+            ts_available = TRUE;
+        } else {
+            JS_FreeValue(ts_ctx, ts_fn);
+        }
+    } else {
+        JS_FreeValue(ts_ctx, JS_GetException(ts_ctx));
+    }
+}
+
+/* Transform source via the isolated TS runtime.
+   Returns a new buffer (allocated with js_malloc on compile_ctx) or the
+   original buf unchanged.  On error returns NULL. */
+static uint8_t *ts_transform(JSContext *compile_ctx, uint8_t *buf,
+                              size_t buf_len, const char *filename,
+                              size_t *out_len)
+{
+    *out_len = buf_len;
+    if (!ts_available)
+        return buf;
+
+    /* Call transform function in the isolated ts_ctx */
+    JSValue args[2];
+    args[0] = JS_NewStringLen(ts_ctx, (char *)buf, buf_len);
+    args[1] = JS_NewString(ts_ctx, filename);
+    JSValue result = JS_Call(ts_ctx, ts_fn, JS_UNDEFINED, 2, args);
+    JS_FreeValue(ts_ctx, args[0]);
+    JS_FreeValue(ts_ctx, args[1]);
+    if (JS_IsException(result)) {
+        js_std_dump_error(ts_ctx);
+        return NULL;
+    }
+
+    /* Extract result string and copy into compile_ctx's allocator */
+    size_t new_len;
+    const char *str = JS_ToCStringLen(ts_ctx, &new_len, result);
+    JS_FreeValue(ts_ctx, result);
+    if (!str)
+        return NULL;
+
+    uint8_t *new_buf = js_malloc(compile_ctx, new_len + 1);
+    if (!new_buf) {
+        JS_FreeCString(ts_ctx, str);
+        return NULL;
+    }
+    memcpy(new_buf, str, new_len + 1);
+    JS_FreeCString(ts_ctx, str);
+    js_free(compile_ctx, buf);
+    *out_len = new_len;
+    return new_buf;
+}
+
+static void ts_free(void)
+{
+    if (!ts_rt) return;
+    if (ts_available)
+        JS_FreeValue(ts_ctx, ts_fn);
+    js_std_free_handlers(ts_rt);
+    JS_FreeContext(ts_ctx);
+    JS_FreeRuntime(ts_rt);
+    ts_rt = NULL;
+    ts_ctx = NULL;
+    ts_available = FALSE;
+}
+
+/* --- End TypeScript transform --- */
+
 typedef struct {
     char *name;
     char *short_name;
@@ -345,7 +452,7 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
         }
 
         /* Apply source transform (e.g. TypeScript stripping) */
-        buf = js_std_apply_source_transform(ctx, buf, buf_len, resolved_name, &buf_len);
+        buf = ts_transform(ctx, buf, buf_len, resolved_name, &buf_len);
         if (!buf) {
             if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
             if (index_resolved) js_free(ctx, index_resolved);
@@ -443,7 +550,7 @@ static void compile_file(JSContext *ctx, FILE *fo,
         exit(1);
     }
     /* Apply source transform (e.g. TypeScript stripping) */
-    buf = js_std_apply_source_transform(ctx, buf, buf_len, filename, &buf_len);
+    buf = ts_transform(ctx, buf, buf_len, filename, &buf_len);
     if (!buf) {
         js_std_dump_error(ctx);
         exit(1);
@@ -882,54 +989,12 @@ int main(int argc, char **argv)
     outfile = fo;
 
     rt = JS_NewRuntime();
-    js_std_init_handlers(rt);
     ctx = JS_NewContext(rt);
 
     JS_SetStripInfo(rt, strip_flags);
 
-    /* Set up TypeScript source transform (if node:module / Sucrase are available).
-       Uses js_module_loader in non-compile mode to load the transform modules
-       without embedding them.  The transform hook persists across loader switches.
-       The init script stores the transform function in globalThis.__tsTransform,
-       then C reads it and sets the hook — avoids needing 'std' module during init
-       (which would interfere with the compilation phase's module tracking). */
-    {
-        static QJSXModuleResolverContext init_resolver_ctx = {
-            .embedded_modules = NULL,
-            .import_map = NULL,
-            .import_map_count = 0,
-            .compile_mode = 0,
-            .record_import = NULL,
-        };
-        JS_SetModuleLoaderFunc2(rt, qjsx_module_normalizer, js_module_loader,
-                                NULL, &init_resolver_ctx);
-        static const char ts_init_script[] =
-            "import { stripTypeScriptTypes } from 'node:module'\n"
-            "globalThis.__tsTransform = (source, filename) => {\n"
-            "  if (!filename.endsWith('.ts')) return source\n"
-            "  try { return stripTypeScriptTypes(source) }\n"
-            "  catch { return stripTypeScriptTypes(source, { mode: 'transform' }) }\n"
-            "}\n";
-        JSValue init_val = JS_Eval(ctx, ts_init_script, sizeof(ts_init_script) - 1,
-                                   "<ts-init>", JS_EVAL_TYPE_MODULE);
-        if (!JS_IsException(init_val)) {
-            JS_FreeValue(ctx, init_val);
-            /* Drain pending jobs to execute the module */
-            JSContext *ctx1;
-            while (JS_ExecutePendingJob(rt, &ctx1) > 0) {}
-            /* Read the transform function from globalThis and set the C hook */
-            JSValue global = JS_GetGlobalObject(ctx);
-            JSValue fn = JS_GetPropertyStr(ctx, global, "__tsTransform");
-            if (JS_IsFunction(ctx, fn)) {
-                js_std_set_source_transform_fn(ctx, fn);
-            }
-            JS_FreeValue(ctx, fn);
-            JS_FreeValue(ctx, global);
-        } else {
-            /* Transform not available — clear exception, TS files will fail later */
-            JS_FreeValue(ctx, JS_GetException(ctx));
-        }
-    }
+    /* TypeScript transform in an isolated runtime (no interference with compile tracking) */
+    ts_init();
 
     /* loader for ES6 modules (compile_mode context for embedded:// prefixing) */
     JS_SetModuleLoaderFunc2(rt, qjsx_module_normalizer, jsc_module_loader, NULL, &compile_resolver_ctx);
@@ -1114,7 +1179,7 @@ int main(int argc, char **argv)
                 "}\n");
     }
 
-    js_std_free_handlers(rt);
+    ts_free();
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
 
