@@ -186,7 +186,7 @@ static ImportMapRecord *import_map_records = NULL;
 static int import_map_count = 0;
 static int import_map_cap = 0;
 
-/* --- Native module embedding via binding.gyp --- */
+/* --- Native module embedding via package.json "qnc" field --- */
 
 typedef struct {
     char *target_name;    /* e.g. "sqlite_native" */
@@ -227,160 +227,112 @@ static NativeModule *native_module_add(void) {
     return nm;
 }
 
-/* Parse a binding.gyp file using the compile QuickJS context.
-   Returns 1 on success, 0 if no binding.gyp found, -1 on error.
-   Populates the NativeModule struct for the first matching target. */
-static int parse_binding_gyp(JSContext *ctx, const char *gyp_dir,
-                             const char *target_name_match,
-                             NativeModule *nm) {
-    char gyp_path[PATH_MAX];
-    snprintf(gyp_path, sizeof(gyp_path), "%s/binding.gyp", gyp_dir);
+/* Helper: parse a JSON string array into a C string array.
+   If make_absolute is true, paths are resolved relative to base_dir. */
+static int parse_json_string_array(JSContext *ctx, JSValue arr,
+                                   const char *base_dir, int make_absolute,
+                                   char ***out, int *out_count) {
+    if (!JS_IsArray(ctx, arr)) return 0;
+    JSValue len_val = JS_GetPropertyStr(ctx, arr, "length");
+    int len;
+    JS_ToInt32(ctx, &len, len_val);
+    JS_FreeValue(ctx, len_val);
+    *out = calloc(len, sizeof(char *));
+    *out_count = 0;
+    for (int i = 0; i < len; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, arr, i);
+        const char *s = JS_ToCString(ctx, v);
+        if (s) {
+            if (make_absolute && base_dir) {
+                char abs_path[PATH_MAX];
+                snprintf(abs_path, sizeof(abs_path), "%s/%s", base_dir, s);
+                (*out)[(*out_count)++] = strdup(abs_path);
+            } else {
+                (*out)[(*out_count)++] = strdup(s);
+            }
+            JS_FreeCString(ctx, s);
+        }
+        JS_FreeValue(ctx, v);
+    }
+    return len;
+}
+
+/* Parse the "qnc" field from a package.json file.
+   Returns 1 on success, 0 if no package.json or no "qnc" field, -1 on error.
+   If target_name_match is non-NULL, only succeeds if target_name matches. */
+static int parse_native_package(JSContext *ctx, const char *pkg_dir,
+                                const char *target_name_match,
+                                NativeModule *nm) {
+    char pkg_path[PATH_MAX];
+    snprintf(pkg_path, sizeof(pkg_path), "%s/package.json", pkg_dir);
 
     size_t buf_len;
-    uint8_t *buf = js_load_file(ctx, &buf_len, gyp_path);
+    uint8_t *buf = js_load_file(ctx, &buf_len, pkg_path);
     if (!buf) return 0;
 
-    JSValue gyp = JS_ParseJSON(ctx, (char *)buf, buf_len, gyp_path);
+    JSValue pkg = JS_ParseJSON(ctx, (char *)buf, buf_len, pkg_path);
     js_free(ctx, buf);
-    if (JS_IsException(gyp)) {
+    if (JS_IsException(pkg)) {
         JSValue ex = JS_GetException(ctx);
         JS_FreeValue(ctx, ex);
-        fprintf(stderr, "qnc: failed to parse %s\n", gyp_path);
+        fprintf(stderr, "qnc: failed to parse %s\n", pkg_path);
         return -1;
     }
 
-    JSValue targets = JS_GetPropertyStr(ctx, gyp, "targets");
-    if (!JS_IsArray(ctx, targets)) {
-        JS_FreeValue(ctx, targets);
-        JS_FreeValue(ctx, gyp);
-        fprintf(stderr, "qnc: binding.gyp missing 'targets' array in %s\n", gyp_path);
-        return -1;
+    JSValue qnc_val = JS_GetPropertyStr(ctx, pkg, "qnc");
+    if (JS_IsUndefined(qnc_val) || JS_IsNull(qnc_val)) {
+        JS_FreeValue(ctx, qnc_val);
+        JS_FreeValue(ctx, pkg);
+        return 0;
     }
 
-    int found = 0;
-    JSValue length_val = JS_GetPropertyStr(ctx, targets, "length");
-    int length;
-    JS_ToInt32(ctx, &length, length_val);
-    JS_FreeValue(ctx, length_val);
-
-    for (int ti = 0; ti < length && !found; ti++) {
-        JSValue target = JS_GetPropertyUint32(ctx, targets, ti);
-        if (JS_IsException(target)) continue;
-
-        /* Check target_name */
-        JSValue tn_val = JS_GetPropertyStr(ctx, target, "target_name");
-        const char *tn = JS_ToCString(ctx, tn_val);
-        if (!tn || (target_name_match && strcmp(tn, target_name_match) != 0)) {
-            if (tn) JS_FreeCString(ctx, tn);
-            JS_FreeValue(ctx, tn_val);
-            JS_FreeValue(ctx, target);
-            continue;
-        }
-
-        nm->target_name = strdup(tn);
+    /* Read target_name */
+    JSValue tn_val = JS_GetPropertyStr(ctx, qnc_val, "target_name");
+    const char *tn = JS_ToCString(ctx, tn_val);
+    if (!tn) {
+        JS_FreeValue(ctx, tn_val);
+        JS_FreeValue(ctx, qnc_val);
+        JS_FreeValue(ctx, pkg);
+        fprintf(stderr, "qnc: package.json \"qnc\" missing \"target_name\" in %s\n", pkg_path);
+        return -1;
+    }
+    if (target_name_match && strcmp(tn, target_name_match) != 0) {
         JS_FreeCString(ctx, tn);
         JS_FreeValue(ctx, tn_val);
-
-        /* Build init function name */
-        char init_name[256];
-        snprintf(init_name, sizeof(init_name), "js_init_module_%s", nm->target_name);
-        nm->init_name = strdup(init_name);
-
-        /* Parse sources */
-        JSValue srcs = JS_GetPropertyStr(ctx, target, "sources");
-        if (JS_IsArray(ctx, srcs)) {
-            JSValue slen_val = JS_GetPropertyStr(ctx, srcs, "length");
-            int slen;
-            JS_ToInt32(ctx, &slen, slen_val);
-            JS_FreeValue(ctx, slen_val);
-            nm->sources = calloc(slen, sizeof(char *));
-            nm->source_count = 0;
-            for (int si = 0; si < slen; si++) {
-                JSValue sv = JS_GetPropertyUint32(ctx, srcs, si);
-                const char *s = JS_ToCString(ctx, sv);
-                if (s) {
-                    char abs_path[PATH_MAX];
-                    snprintf(abs_path, sizeof(abs_path), "%s/%s", gyp_dir, s);
-                    nm->sources[nm->source_count++] = strdup(abs_path);
-                    JS_FreeCString(ctx, s);
-                }
-                JS_FreeValue(ctx, sv);
-            }
-        }
-        JS_FreeValue(ctx, srcs);
-
-        /* Parse include_dirs */
-        JSValue incs = JS_GetPropertyStr(ctx, target, "include_dirs");
-        if (JS_IsArray(ctx, incs)) {
-            JSValue ilen_val = JS_GetPropertyStr(ctx, incs, "length");
-            int ilen;
-            JS_ToInt32(ctx, &ilen, ilen_val);
-            JS_FreeValue(ctx, ilen_val);
-            nm->include_dirs = calloc(ilen, sizeof(char *));
-            nm->include_dir_count = 0;
-            for (int ii = 0; ii < ilen; ii++) {
-                JSValue iv = JS_GetPropertyUint32(ctx, incs, ii);
-                const char *s = JS_ToCString(ctx, iv);
-                if (s) {
-                    char abs_path[PATH_MAX];
-                    snprintf(abs_path, sizeof(abs_path), "%s/%s", gyp_dir, s);
-                    nm->include_dirs[nm->include_dir_count++] = strdup(abs_path);
-                    JS_FreeCString(ctx, s);
-                }
-                JS_FreeValue(ctx, iv);
-            }
-        }
-        JS_FreeValue(ctx, incs);
-
-        /* Parse defines */
-        JSValue defs = JS_GetPropertyStr(ctx, target, "defines");
-        if (JS_IsArray(ctx, defs)) {
-            JSValue dlen_val = JS_GetPropertyStr(ctx, defs, "length");
-            int dlen;
-            JS_ToInt32(ctx, &dlen, dlen_val);
-            JS_FreeValue(ctx, dlen_val);
-            nm->defines = calloc(dlen, sizeof(char *));
-            nm->define_count = 0;
-            for (int di = 0; di < dlen; di++) {
-                JSValue dv = JS_GetPropertyUint32(ctx, defs, di);
-                const char *s = JS_ToCString(ctx, dv);
-                if (s) {
-                    nm->defines[nm->define_count++] = strdup(s);
-                    JS_FreeCString(ctx, s);
-                }
-                JS_FreeValue(ctx, dv);
-            }
-        }
-        JS_FreeValue(ctx, defs);
-
-        /* Parse cflags */
-        JSValue cfs = JS_GetPropertyStr(ctx, target, "cflags");
-        if (JS_IsArray(ctx, cfs)) {
-            JSValue cflen_val = JS_GetPropertyStr(ctx, cfs, "length");
-            int cflen;
-            JS_ToInt32(ctx, &cflen, cflen_val);
-            JS_FreeValue(ctx, cflen_val);
-            nm->cflags = calloc(cflen, sizeof(char *));
-            nm->cflag_count = 0;
-            for (int ci = 0; ci < cflen; ci++) {
-                JSValue cv = JS_GetPropertyUint32(ctx, cfs, ci);
-                const char *s = JS_ToCString(ctx, cv);
-                if (s) {
-                    nm->cflags[nm->cflag_count++] = strdup(s);
-                    JS_FreeCString(ctx, s);
-                }
-                JS_FreeValue(ctx, cv);
-            }
-        }
-        JS_FreeValue(ctx, cfs);
-
-        found = 1;
-        JS_FreeValue(ctx, target);
+        JS_FreeValue(ctx, qnc_val);
+        JS_FreeValue(ctx, pkg);
+        return 0;
     }
 
-    JS_FreeValue(ctx, targets);
-    JS_FreeValue(ctx, gyp);
-    return found;
+    nm->target_name = strdup(tn);
+    JS_FreeCString(ctx, tn);
+    JS_FreeValue(ctx, tn_val);
+
+    /* Build init function name */
+    char init_name[256];
+    snprintf(init_name, sizeof(init_name), "js_init_module_%s", nm->target_name);
+    nm->init_name = strdup(init_name);
+
+    /* Parse arrays */
+    JSValue srcs = JS_GetPropertyStr(ctx, qnc_val, "sources");
+    parse_json_string_array(ctx, srcs, pkg_dir, 1, &nm->sources, &nm->source_count);
+    JS_FreeValue(ctx, srcs);
+
+    JSValue incs = JS_GetPropertyStr(ctx, qnc_val, "include_dirs");
+    parse_json_string_array(ctx, incs, pkg_dir, 1, &nm->include_dirs, &nm->include_dir_count);
+    JS_FreeValue(ctx, incs);
+
+    JSValue defs = JS_GetPropertyStr(ctx, qnc_val, "defines");
+    parse_json_string_array(ctx, defs, NULL, 0, &nm->defines, &nm->define_count);
+    JS_FreeValue(ctx, defs);
+
+    JSValue cfs = JS_GetPropertyStr(ctx, qnc_val, "cflags");
+    parse_json_string_array(ctx, cfs, NULL, 0, &nm->cflags, &nm->cflag_count);
+    JS_FreeValue(ctx, cfs);
+
+    JS_FreeValue(ctx, qnc_val);
+    JS_FreeValue(ctx, pkg);
+    return 1;
 }
 
 #if defined(CONFIG_CC) && !defined(_WIN32)
@@ -701,7 +653,7 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
         /* create a dummy module */
         m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);
     } else if (has_suffix(disk_name, ".so")) {
-        /* Native module: try to find binding.gyp for static embedding */
+        /* Native module: try to find package.json with "qnc" field for static embedding */
         char so_dir[PATH_MAX];
         pstrcpy(so_dir, sizeof(so_dir), disk_name);
         char *slash = strrchr(so_dir, '/');
@@ -716,9 +668,9 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
         if (dot) *dot = '\0';
 
         NativeModule *nm = native_module_add();
-        int gyp_ret = parse_binding_gyp(ctx, so_dir, so_target, nm);
-        if (gyp_ret > 0) {
-            /* Found binding.gyp with matching target */
+        int pkg_ret = parse_native_package(ctx, so_dir, so_target, nm);
+        if (pkg_ret > 0) {
+            /* Found package.json with matching "qnc" config */
             nm->reg_name = strdup(reg_name);
 
             /* Register like -M: add to init_module_list for codegen.
@@ -733,7 +685,7 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
 
             m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);
         } else {
-            /* No binding.gyp — fall back to dynamic loading warning */
+            /* No package.json "qnc" field — fall back to dynamic loading warning */
             native_module_count--;  /* undo the add */
             fprintf(stderr, "Warning: binary module '%s' will be dynamically loaded\n", disk_name);
             m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);

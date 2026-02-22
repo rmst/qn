@@ -155,7 +155,7 @@ $(BIN_DIR)/obj/introspect.o: introspect/introspect.c introspect/introspect.h qui
 $(BIN_DIR)/obj/sandboxed-worker.o: sandboxed-worker/sandboxed-worker.c sandboxed-worker/sandboxed-worker.h quickjs-deps | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
-# SQLite is now built automatically by qnc via binding.gyp in node/node/sqlite/
+# SQLite is now built automatically by qnc via package.json "qnc" field in node/node/sqlite/
 
 # Build BearSSL static library
 BEARSSL_LIB = $(BIN_DIR)/bearssl/libbearssl.a
@@ -230,7 +230,7 @@ QNC_MODULES = -D node-globals -D repl -D node:fs -D node:process \
 QNC_EXTRA_LINK = $(patsubst %,--link %,$(NATIVE_OBJS)) --link $(BEARSSL_LIB)
 
 # Build qn (standalone executable with embedded node modules, qx, sqlite, and native extensions)
-# SQLite is auto-embedded via binding.gyp; other native modules still use -M + --link
+# SQLite is auto-embedded via package.json "qnc" field; other native modules still use -M + --link
 $(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js $(QNC_PROG) $(NATIVE_OBJS) $(BEARSSL_LIB) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
 	NODE_PATH=./node:./qx:$(BIN_DIR)/obj $(QNC_PROG) $(QNC_FLAGS) $(QNC_MODULES) $(QNC_EXTRA_LINK) -o $@ node/bootstrap.js
 

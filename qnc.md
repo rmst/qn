@@ -80,15 +80,15 @@ import { sqlite_db } from './sqlite_native.so'
 When qnc encounters a `.so` import during compilation, it:
 
 1. Finds the `.so` file's directory
-2. Looks for a `binding.gyp` in that directory
-3. Parses `binding.gyp` to find C source files, include dirs, defines
+2. Reads `package.json` in that directory, looking for a `"qnc"` field
+3. Parses the build config (sources, include dirs, defines, cflags)
 4. Compiles each source with gcc (using `-Djs_init_module=js_init_module_<target>` to avoid symbol collisions)
 5. Links the resulting `.o` files into the final binary
 6. Registers the module under its `embedded://` name at startup
 
 At runtime, `import ... from './sqlite_native.so'` resolves to the statically linked module. No dlopen, no `.so` file needed.
 
-If no `binding.gyp` is found, qnc emits a warning and falls back to dynamic loading (the binary will need the `.so` at runtime).
+If no `package.json` or no `"qnc"` field is found, qnc emits a warning and falls back to dynamic loading (the binary will need the `.so` at runtime).
 
 ### Package structure
 
@@ -96,11 +96,7 @@ A native module package contains both JS and C code:
 
 ```
 node/node/sqlite/
-  package.json        { "gypfile": true }
-  binding.gyp         { "targets": [{ "target_name": "sqlite_native",
-                                       "sources": ["sqlite3.c", "qjs-sqlite.c"],
-                                       "include_dirs": ["."],
-                                       "defines": ["SQLITE_OMIT_LOAD_EXTENSION"] }] }
+  package.json        (includes "qnc" build config, see below)
   index.js            JS wrapper (the public API)
   qjs-sqlite.c        QuickJS C bindings (exports js_init_module)
   sqlite3.c           SQLite amalgamation
@@ -109,25 +105,26 @@ node/node/sqlite/
 
 The same package works in both modes:
 - **Runtime (dlopen)**: build the `.so` from the C sources, JS imports it via `dlopen`
-- **Compile time (qnc)**: qnc reads `binding.gyp`, compiles C sources, links statically
+- **Compile time (qnc)**: qnc reads `package.json` `"qnc"` field, compiles C sources, links statically
 
-### binding.gyp format
+A `binding.gyp` can coexist in the same directory for Node.js compatibility via `node-gyp`, with its own N-API source files. The two build systems don't interfere.
 
-Uses a subset of the [node-gyp binding.gyp format](https://github.com/nodejs/node-gyp):
+### package.json `"qnc"` field
 
 ```json
 {
-  "targets": [{
+  "name": "node:sqlite",
+  "qnc": {
     "target_name": "sqlite_native",
     "sources": ["sqlite3.c", "qjs-sqlite.c"],
     "include_dirs": ["."],
     "defines": ["SQLITE_OMIT_LOAD_EXTENSION"],
     "cflags": ["-O2"]
-  }]
+  }
 }
 ```
 
-Supported fields per target: `target_name`, `sources`, `include_dirs`, `defines`, `cflags`. Paths are relative to the `binding.gyp` file. qnc automatically adds QuickJS include dirs so native modules can `#include "quickjs.h"`.
+Supported fields: `target_name`, `sources`, `include_dirs`, `defines`, `cflags`. Paths are relative to the `package.json` file. `target_name` must match the `.so` filename without extension. qnc automatically adds QuickJS include dirs so native modules can `#include "quickjs.h"`.
 
 ### Symbol collision handling
 
@@ -135,7 +132,7 @@ When multiple native modules are statically linked, they'd all export `js_init_m
 
 ### The `--link` flag
 
-`--link` passes `.o` or `.a` files directly to the linker, for native modules that aren't packaged with `binding.gyp`:
+`--link` passes `.o` or `.a` files directly to the linker, for native modules that don't have a `package.json` `"qnc"` config:
 
 ```bash
 qnc -M qn_tls,qn_tls --link qn-tls.o --link libbearssl.a -o app main.js
@@ -145,7 +142,7 @@ This is used in the qn Makefile for modules like TLS and libuv bindings that are
 
 ### The `-M` flag (legacy)
 
-`-M name,cname` registers an external C module by declaring its init function. This is the manual equivalent of what `binding.gyp` detection does automatically. With `-M qn_tls,qn_tls`, qnc emits a call to `js_init_module_qn_tls()` at startup. The corresponding `.o` file must be provided via `--link`.
+`-M name,cname` registers an external C module by declaring its init function. This is the manual equivalent of what automatic `package.json` `"qnc"` detection does. With `-M qn_tls,qn_tls`, qnc emits a call to `js_init_module_qn_tls()` at startup. The corresponding `.o` file must be provided via `--link`.
 
 ## How qn is built
 
@@ -159,4 +156,4 @@ NODE_PATH=./node:./qx qnc \
   -o bin/qn node/bootstrap.js
 ```
 
-This embeds all Node.js shims, the qx shell scripting module, and links native C modules (libuv bindings, TLS, SQLite). SQLite is auto-detected via `binding.gyp`; other native modules still use `-M` + `--link`.
+This embeds all Node.js shims, the qx shell scripting module, and links native C modules (libuv bindings, TLS, SQLite). SQLite is auto-detected via its `package.json` `"qnc"` field; other native modules still use `-M` + `--link`.

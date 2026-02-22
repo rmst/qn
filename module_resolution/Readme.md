@@ -99,7 +99,7 @@ The `qn` bootstrap uses `file://` when loading user scripts to prevent this shad
 
 When qnc encounters a `.so` import, it can automatically compile the native C sources and statically link them into the binary. At runtime, `import ... from './sqlite_native.so'` resolves to the embedded module — no dlopen, no `.so` file needed.
 
-See [qnc.md](../qnc.md) for the full specification: package structure, `binding.gyp` format, symbol collision handling, and the `--link`/`-M` flags.
+See [qnc.md](../qnc.md) for the full specification: package structure, `package.json` `"qnc"` field format, symbol collision handling, and the `--link`/`-M` flags.
 
 ## Debugging
 
