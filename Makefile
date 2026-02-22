@@ -119,8 +119,11 @@ $(LIBUV_LIB): $(addprefix $(LIBUV_DIR)/,$(LIBUV_SRCS)) | $(BIN_DIR)
 	@ar rcs $@ $(BIN_DIR)/obj/libuv/*.o
 
 # Build qnc executable (compiler)
-$(QNC_PROG): $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o $(BIN_DIR)/obj/introspect.o $(BIN_DIR)/obj/qn-vm.o $(BIN_DIR)/obj/qn-uv-utils.o quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)
-	$(CC) $(LDFLAGS) -o $@ $(BIN_DIR)/obj/qnc.o $(QUICKJS_OBJS) $(LIBUV_LIB) $(LIBS)
+# After linking, copy support files next to it (for local builds) and embed them
+# into the binary (for standalone distribution).
+QNC_PACK = $(BIN_DIR)/qnc-pack
+$(QNC_PROG): $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/qnc-embed.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o $(BIN_DIR)/obj/introspect.o $(BIN_DIR)/obj/qn-vm.o $(BIN_DIR)/obj/qn-uv-utils.o quickjs-deps $(LIBUV_LIB) $(QNC_PACK) | $(BIN_DIR)
+	$(CC) $(LDFLAGS) -o $@ $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/qnc-embed.o $(QUICKJS_OBJS) $(LIBUV_LIB) $(LIBS)
 	chmod +x $@
 	cp $(BIN_DIR)/quickjs/*.h $(BIN_DIR)/
 	mkdir -p $(BIN_DIR)/module_resolution
@@ -134,10 +137,35 @@ $(QNC_PROG): $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/s
 	ar d $(BIN_DIR)/libquickjs.a quickjs-libc.nolto.o 2>/dev/null || true
 	ar r $(BIN_DIR)/libquickjs.a $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o $(BIN_DIR)/obj/introspect.o $(BIN_DIR)/obj/qn-vm.o $(BIN_DIR)/obj/qn-uv-utils.o
 	# libuv.a is already in $(BIN_DIR) via $(LIBUV_LIB)
+	# Embed support files into the qnc binary for standalone use.
+	# Headers are embedded at both top level (for generated C includes)
+	# and quickjs/ subdirectory (for module-resolution.h includes).
+	$(QNC_PACK) $@ \
+		quickjs.h:$(BIN_DIR)/quickjs/quickjs.h \
+		quickjs-libc.h:$(BIN_DIR)/quickjs/quickjs-libc.h \
+		cutils.h:$(BIN_DIR)/quickjs/cutils.h \
+		list.h:$(BIN_DIR)/quickjs/list.h \
+		quickjs/quickjs.h:$(BIN_DIR)/quickjs/quickjs.h \
+		quickjs/quickjs-libc.h:$(BIN_DIR)/quickjs/quickjs-libc.h \
+		quickjs/cutils.h:$(BIN_DIR)/quickjs/cutils.h \
+		quickjs/list.h:$(BIN_DIR)/quickjs/list.h \
+		module_resolution/module-resolution.h:module_resolution/module-resolution.h \
+		exit-handler.h:exit-handler.h \
+		libuv/qn-vm.h:libuv/qn-vm.h \
+		libquickjs.a:$(BIN_DIR)/libquickjs.a \
+		libuv.a:$(LIBUV_LIB)
 
 # Build qnc.o from standalone source
-$(BIN_DIR)/obj/qnc.o: qnc.c module_resolution/module-resolution.h quickjs-deps | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -DCONFIG_CC=\"$(CC)\" -DCONFIG_PREFIX=\"/usr/local\" -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
+$(BIN_DIR)/obj/qnc.o: qnc/main.c qnc/embed.h module_resolution/module-resolution.h quickjs-deps | $(BIN_DIR)/obj
+	$(CC) $(CFLAGS_OPT) -DCONFIG_CC=\"$(CC)\" -DCONFIG_PREFIX=\"/usr/local\" -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
+
+# Build qnc embed extraction module
+$(BIN_DIR)/obj/qnc-embed.o: qnc/embed.c qnc/embed.h | $(BIN_DIR)/obj
+	$(CC) $(CFLAGS_OPT) -I. -c -o $@ $<
+
+# Build qnc-pack tool (used at build time to embed support files)
+$(QNC_PACK): qnc/pack.c qnc/embed.h | $(BIN_DIR)
+	$(CC) $(CFLAGS_OPT) -I. -o $@ $<
 
 # Patch and build quickjs-libc (adds import.meta.dirname, sandbox support, introspection)
 $(BIN_DIR)/obj/quickjs-libc.c: quickjs/quickjs-libc.c quickjs-libc.patch introspect/introspect.patch | $(BIN_DIR)/obj

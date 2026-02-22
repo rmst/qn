@@ -9,7 +9,9 @@ NODE_PATH=./my_modules qnc -o my-app main.js
 
 ## Dependencies
 
-qnc itself is a standalone binary, but to produce executables (`-o` mode) it invokes a C compiler (gcc by default, configured at build time via `-DCONFIG_CC`). It also needs a set of support files that must be present alongside the qnc binary:
+qnc is a fully standalone binary. To produce executables (`-o` mode) it only needs a C compiler (gcc by default, configured at build time via `-DCONFIG_CC`). All required support files (headers, static libraries) are embedded in the qnc binary itself and extracted to a temporary directory during compilation.
+
+The embedded support files are:
 
 | File | Purpose |
 |---|---|
@@ -20,9 +22,14 @@ qnc itself is a standalone binary, but to produce executables (`-o` mode) it inv
 | `libquickjs.a` | Pre-built QuickJS static library (includes patched quickjs-libc, introspect, vm, uv-utils) |
 | `libuv.a` | Pre-built libuv static library |
 
-These files are copied next to the qnc binary during `make build`. A user can distribute the `bin/<platform>/` directory as a self-contained toolchain — only a C compiler is needed on the target system.
+### Support file resolution order
 
-qnc locates these files relative to its own executable path. If `quickjs.h` is found in the same directory as the binary, that directory is used for both includes and libraries. Otherwise it falls back to `$PREFIX/include/quickjs` and `$PREFIX/lib/quickjs`.
+qnc resolves support files in this order:
+1. **Directory of the executable** — if `quickjs.h` is found next to the binary (used during development / `make build`)
+2. **Embedded archive** — extracted from the qnc binary itself to a temp dir (for standalone distribution)
+3. **System prefix** — `$PREFIX/include/quickjs` and `$PREFIX/lib/quickjs` (fallback)
+
+The embedded archive uses a simple append-to-binary format: support files are appended after the ELF/Mach-O binary with a directory footer. The `qnc-pack` tool (built during `make build`) handles the packing. At runtime, qnc reads its own executable via `uv_exepath()`, checks for the archive footer, and extracts to `/tmp/qnc_XXXXXX/` which is cleaned up after compilation.
 
 ## Output Modes
 

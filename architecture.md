@@ -23,7 +23,7 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 - `qn-uv-dns.c` (163) — async DNS resolution via `uv_getaddrinfo`
 
 **Other C modules** — ~3.5K LOC C:
-- `qnc.c` (1068) — standalone compiler for building executables, with native module auto-embedding via `package.json` `"qnc"` field
+- `qnc/` — standalone compiler for building executables, with native module auto-embedding via `package.json` `"qnc"` field and self-extracting embedded support files (headers + static libs)
 - `sandboxed-worker/` (978) — sandboxed JS execution (currently broken, pending libuv integration)
 - `introspect/` (30) — closure introspection (bulk is in QuickJS patch)
 

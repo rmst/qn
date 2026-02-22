@@ -89,7 +89,7 @@ Key source files:
 - `libuv/` — C modules for libuv integration (event loop, streams, fs, process, DNS, signals)
 - `node/node/` — Node.js API shims in JS
 - `node/qn/` — qn-specific modules (`qn:http`, libuv JS wrappers)
-- `qnc.c` — standalone compiler
+- `qnc/` — standalone compiler (main.c, embed.c for self-extracting support files, pack.c for build-time packing)
 - `module_resolution/module-resolution.h` — shared module resolution logic
 - `quickjs.patch` — applied to `quickjs/quickjs.c` (import error locations)
 - `quickjs-libc.patch` — applied to `quickjs/quickjs-libc.c` (`import.meta.dirname/filename`, UTF-8 helpers, source transform hook for TypeScript)

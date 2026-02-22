@@ -40,9 +40,12 @@
 #include <sys/wait.h>
 #endif
 
+#include <uv.h>
+
 #include "cutils.h"
 #include "quickjs-libc.h"
 #include "module_resolution/module-resolution.h"
+#include "qnc/embed.h"
 
 /* --- TypeScript transform (isolated runtime) --- */
 
@@ -393,22 +396,61 @@ static int parse_native_package(JSContext *ctx, const char *pkg_dir,
 /* Forward declaration (defined later) */
 int exec_cmd(char **argv);
 
-/* Compile native module C sources to .o files.
-   Returns 0 on success, non-zero on error. */
-static int compile_native_modules(const char *exename, BOOL verbose) {
-    char exe_dir[1024], inc_dir[1024], buf[1024], *p;
+/*
+ * Resolve the support directory containing headers and libraries.
+ * Tries in order:
+ *   1. Directory containing the qnc executable (quickjs.h next to binary)
+ *   2. Embedded files appended to the qnc binary (extracted to tmpdir)
+ *   3. System prefix ($PREFIX/include/quickjs)
+ *
+ * Sets inc_dir and lib_dir. If embedded files were extracted, returns
+ * the tmpdir path (caller must clean up). Otherwise returns NULL.
+ */
+static char *resolve_support_dir(const char *exename,
+                                 char *inc_dir, size_t inc_size,
+                                 char *lib_dir, size_t lib_size) {
+    char exe_dir[1024], buf[1024], *p;
 
-    /* get the directory of the executable (for QuickJS headers) */
+    /* Get the directory of the executable */
     pstrcpy(exe_dir, sizeof(exe_dir), exename);
     p = strrchr(exe_dir, '/');
     if (p) *p = '\0';
     else pstrcpy(exe_dir, sizeof(exe_dir), ".");
 
+    /* Try 1: files next to the executable */
     snprintf(buf, sizeof(buf), "%s/quickjs.h", exe_dir);
-    if (access(buf, R_OK) == 0)
-        pstrcpy(inc_dir, sizeof(inc_dir), exe_dir);
-    else
-        snprintf(inc_dir, sizeof(inc_dir), "%s/include/quickjs", CONFIG_PREFIX);
+    if (access(buf, R_OK) == 0) {
+        pstrcpy(inc_dir, inc_size, exe_dir);
+        pstrcpy(lib_dir, lib_size, exe_dir);
+        return NULL;
+    }
+
+    /* Try 2: embedded files in the binary itself */
+    char exe_path[4096];
+    size_t exe_path_size = sizeof(exe_path);
+    if (uv_exepath(exe_path, &exe_path_size) == 0) {
+        char *tmpdir = qnc_embed_extract(exe_path);
+        if (tmpdir) {
+            snprintf(buf, sizeof(buf), "%s/quickjs.h", tmpdir);
+            if (access(buf, R_OK) == 0) {
+                pstrcpy(inc_dir, inc_size, tmpdir);
+                pstrcpy(lib_dir, lib_size, tmpdir);
+                return tmpdir;
+            }
+            qnc_embed_cleanup(tmpdir);
+            free(tmpdir);
+        }
+    }
+
+    /* Try 3: system prefix */
+    snprintf(inc_dir, inc_size, "%s/include/quickjs", CONFIG_PREFIX);
+    snprintf(lib_dir, lib_size, "%s/lib/quickjs", CONFIG_PREFIX);
+    return NULL;
+}
+
+/* Compile native module C sources to .o files.
+   Returns 0 on success, non-zero on error. */
+static int compile_native_modules(const char *inc_dir, BOOL verbose) {
 
     for (int mi = 0; mi < native_module_count; mi++) {
         NativeModule *nm = &native_modules[mi];
@@ -1004,6 +1046,11 @@ int exec_cmd(char **argv)
 static int output_executable(const char *out_filename, const char *cfilename,
                              BOOL use_lto, BOOL verbose, const char *exename)
 {
+    /* Resolve support directory (headers + libraries) */
+    char inc_dir[1024], lib_dir[1024];
+    char *embed_tmpdir = resolve_support_dir(exename, inc_dir, sizeof(inc_dir),
+                                             lib_dir, sizeof(lib_dir));
+
     /* Max argv slots: base args + native module .o files + extra link files */
     int total_sources = 0;
     for (int mi = 0; mi < native_module_count; mi++)
@@ -1013,36 +1060,17 @@ static int output_executable(const char *out_filename, const char *cfilename,
     const char **arg, *bn_suffix, *lto_suffix;
     char libjsname[1024];
     char libuvname[1024];
-    char exe_dir[1024], inc_dir[1024], lib_dir[1024], buf[1024], *p;
     int ret;
 
     /* Compile native module C sources to .o files */
     if (native_module_count > 0) {
-        ret = compile_native_modules(exename, verbose);
+        ret = compile_native_modules(inc_dir, verbose);
         if (ret != 0) {
             free(argv);
+            qnc_embed_cleanup(embed_tmpdir);
+            free(embed_tmpdir);
             return ret;
         }
-    }
-
-    /* get the directory of the executable */
-    pstrcpy(exe_dir, sizeof(exe_dir), exename);
-    p = strrchr(exe_dir, '/');
-    if (p) {
-        *p = '\0';
-    } else {
-        pstrcpy(exe_dir, sizeof(exe_dir), ".");
-    }
-
-    /* if 'quickjs.h' is present at the same path as the executable, we
-       use it as include and lib directory */
-    snprintf(buf, sizeof(buf), "%s/quickjs.h", exe_dir);
-    if (access(buf, R_OK) == 0) {
-        pstrcpy(inc_dir, sizeof(inc_dir), exe_dir);
-        pstrcpy(lib_dir, sizeof(lib_dir), exe_dir);
-    } else {
-        snprintf(inc_dir, sizeof(inc_dir), "%s/include/quickjs", CONFIG_PREFIX);
-        snprintf(lib_dir, sizeof(lib_dir), "%s/lib/quickjs", CONFIG_PREFIX);
     }
 
     lto_suffix = "";
@@ -1057,8 +1085,6 @@ static int output_executable(const char *out_filename, const char *cfilename,
         lto_suffix = ".lto";
     }
 #endif
-    /* XXX: use the executable path to find the includes files and
-       libraries */
     *arg++ = "-D";
     *arg++ = "_GNU_SOURCE";
     *arg++ = "-I";
@@ -1111,6 +1137,10 @@ static int output_executable(const char *out_filename, const char *cfilename,
             unlink(nm->obj_files[oi]);
         }
     }
+
+    /* Clean up embedded tmpdir if we extracted one */
+    qnc_embed_cleanup(embed_tmpdir);
+    free(embed_tmpdir);
 
     free(argv);
     return ret;
