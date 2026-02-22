@@ -196,6 +196,13 @@ const process = {
     return this;
   },
 
+  nextTick(callback, ...args) {
+    if (typeof callback !== 'function') {
+      throw new TypeError('Callback must be a function')
+    }
+    queueMicrotask(() => callback(...args))
+  },
+
   removeAllListeners(event) {
     if (event) {
       eventHandlers.delete(event);

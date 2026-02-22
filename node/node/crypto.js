@@ -1,47 +1,58 @@
-import { randomFill, sha256Init, sha256Update, sha256Out } from 'qn_vm'
+import {
+	randomFill,
+	sha256Init, sha256Update, sha256Out,
+	sha1Init, sha1Update, sha1Out,
+} from 'qn_vm'
 import { Buffer } from 'node:buffer'
 
 const algorithms = {
-	sha256: 1,
+	sha256: { init: sha256Init, update: sha256Update, out: sha256Out },
+	sha1: { init: sha1Init, update: sha1Update, out: sha1Out },
 }
 
 const hex32 = num => (num + 0x100000000).toString(16).slice(-8)
 
 export function createHash(algorithm, options) {
-	if (algorithm && !algorithms[algorithm] && !algorithms[algorithm.toLowerCase()]) {
+	const alg = algorithm && algorithms[algorithm.toLowerCase()]
+	if (!alg) {
 		throw new Error("Digest method not supported")
 	}
 	if (options && options.jsImpl)
 		return new JSHash()
-	return new Hash()
+	return new Hash(alg)
 }
 
 /**
- * Native SHA-256 Hash using BearSSL via C bindings.
+ * Native Hash using BearSSL via C bindings.
+ * Supports SHA-256 and SHA-1.
  */
 export class Hash {
-	constructor() {
-		this._ctx = sha256Init()
+	constructor(alg) {
+		this._alg = alg
+		this._ctx = alg.init()
 	}
 	update(data) {
 		if (data == null) {
 			throw new TypeError("Invalid type: " + typeof data)
 		}
 		if (typeof data === 'string') {
-			sha256Update(this._ctx, data)
+			this._alg.update(this._ctx, data)
 		} else {
 			// Buffer / TypedArray / ArrayBuffer
 			const bytes = data.buffer
 				? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
 				: new Uint8Array(data)
-			sha256Update(this._ctx, bytes)
+			this._alg.update(this._ctx, bytes)
 		}
 		return this
 	}
 	digest(encoding) {
-		const bin = sha256Out(this._ctx)
+		const bin = this._alg.out(this._ctx)
 		if (encoding === 'hex') {
 			return [...bin].map(b => b.toString(16).padStart(2, '0')).join('')
+		}
+		if (encoding === 'base64') {
+			return Buffer.from(bin).toString('base64')
 		}
 		return Buffer.from(bin)
 	}
@@ -311,6 +322,20 @@ export function randomBytes(size) {
 		throw new TypeError(`The "size" argument must be a non-negative integer. Received ${size}`)
 	}
 	return Buffer.from(randomFill(size))
+}
+
+/**
+ * Synchronously fill a buffer with cryptographically strong random bytes.
+ * @param {Buffer|Uint8Array} buffer - Buffer to fill
+ * @param {number} [offset=0] - Offset in buffer to start filling
+ * @param {number} [size=buffer.length - offset] - Number of bytes to fill
+ * @returns {Buffer|Uint8Array} The filled buffer
+ */
+export function randomFillSync(buffer, offset = 0, size) {
+	if (size === undefined) size = buffer.length - offset
+	const bytes = randomFill(size)
+	buffer.set(bytes, offset)
+	return buffer
 }
 
 /**

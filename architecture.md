@@ -55,6 +55,10 @@ Single-file amalgamation. Bound to JS via `qjs-sqlite.c`. ~281K LOC.
 
 TLS library. BearSSL's state machine API fits well with libuv streams. Built via its own Makefile. ~90K LOC.
 
+### [ws](https://github.com/websockets/ws) (vendored: `vendor/ws/`)
+
+WebSocket client and server implementation (RFC 6455). Vendored from ws v8.19.0 (MIT license, Luigi Pinca), converted from CJS to ESM, with compression (permessage-deflate) removed. Importable as `"ws"`. ~3.5K LOC.
+
 ### [Sucrase](https://github.com/alangpierce/sucrase) (submodule: `vendor/sucrase-js/`)
 
 TypeScript/JSX transformer with its own parser (no TypeScript compiler dependency). Used by `node:module` to implement `stripTypeScriptTypes()` — types are replaced with whitespace to preserve source positions, inspired by [ts-blank-space](https://github.com/bloomberg/ts-blank-space). The vendored copy is a pure-JS conversion of Sucrase's TypeScript source. ~20K LOC.

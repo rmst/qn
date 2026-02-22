@@ -653,6 +653,87 @@ static JSValue js_vm_sha256Out(JSContext *ctx, JSValueConst this_val,
 }
 
 /* --------------------------------------------------------------------------
+ * SHA-1 hashing via BearSSL (same pattern as SHA-256 above)
+ *
+ * sha1Init()              → opaque handle
+ * sha1Update(handle, data) — feed string or TypedArray
+ * sha1Out(handle)         → Uint8Array(20), does not consume context
+ * -------------------------------------------------------------------------- */
+
+static JSClassID sha1_class_id;
+
+static void sha1_finalizer(JSRuntime *rt, JSValue val) {
+	br_sha1_context *sc = JS_GetOpaque(val, sha1_class_id);
+	if (sc) js_free_rt(rt, sc);
+}
+
+static JSClassDef sha1_class = {
+	"SHA1Context",
+	.finalizer = sha1_finalizer,
+};
+
+static JSValue js_vm_sha1Init(JSContext *ctx, JSValueConst this_val,
+                               int argc, JSValueConst *argv) {
+	br_sha1_context *sc = js_mallocz(ctx, sizeof(*sc));
+	if (!sc) return JS_EXCEPTION;
+	br_sha1_init(sc);
+
+	JSValue obj = JS_NewObjectClass(ctx, sha1_class_id);
+	if (JS_IsException(obj)) {
+		js_free(ctx, sc);
+		return obj;
+	}
+	JS_SetOpaque(obj, sc);
+	return obj;
+}
+
+static JSValue js_vm_sha1Update(JSContext *ctx, JSValueConst this_val,
+                                 int argc, JSValueConst *argv) {
+	br_sha1_context *sc = JS_GetOpaque2(ctx, argv[0], sha1_class_id);
+	if (!sc) return JS_EXCEPTION;
+
+	/* Try ArrayBuffer */
+	size_t len;
+	uint8_t *buf = JS_GetArrayBuffer(ctx, &len, argv[1]);
+	if (buf) {
+		br_sha1_update(sc, buf, len);
+		return JS_UNDEFINED;
+	}
+	JS_FreeValue(ctx, JS_GetException(ctx));
+
+	/* Try TypedArray */
+	size_t offset, blen;
+	JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[1], &offset, &blen, NULL);
+	if (!JS_IsException(abuf)) {
+		buf = JS_GetArrayBuffer(ctx, &len, abuf);
+		JS_FreeValue(ctx, abuf);
+		if (buf)
+			br_sha1_update(sc, buf + offset, blen);
+		return JS_UNDEFINED;
+	}
+	JS_FreeValue(ctx, JS_GetException(ctx));
+
+	/* Try string */
+	const char *str = JS_ToCStringLen(ctx, &len, argv[1]);
+	if (!str) return JS_EXCEPTION;
+	br_sha1_update(sc, str, len);
+	JS_FreeCString(ctx, str);
+	return JS_UNDEFINED;
+}
+
+static JSValue js_vm_sha1Out(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv) {
+	br_sha1_context *sc = JS_GetOpaque2(ctx, argv[0], sha1_class_id);
+	if (!sc) return JS_EXCEPTION;
+
+	uint8_t *out = js_malloc(ctx, br_sha1_SIZE);
+	if (!out) return JS_EXCEPTION;
+	br_sha1_out(sc, out);
+
+	return qn_new_uint8array(ctx, out, br_sha1_SIZE);
+}
+
+/* --------------------------------------------------------------------------
  * JS module: qn_vm
  * -------------------------------------------------------------------------- */
 
@@ -665,6 +746,9 @@ static const JSCFunctionListEntry vm_funcs[] = {
 	QN_CFUNC_DEF("sha256Init", 0, js_vm_sha256Init),
 	QN_CFUNC_DEF("sha256Update", 2, js_vm_sha256Update),
 	QN_CFUNC_DEF("sha256Out", 1, js_vm_sha256Out),
+	QN_CFUNC_DEF("sha1Init", 0, js_vm_sha1Init),
+	QN_CFUNC_DEF("sha1Update", 2, js_vm_sha1Update),
+	QN_CFUNC_DEF("sha1Out", 1, js_vm_sha1Out),
 	QN_CFUNC_DEF("isatty", 1, js_vm_isatty),
 #if !defined(_WIN32)
 	QN_CFUNC_DEF("ttyGetWinSize", 1, js_vm_ttyGetWinSize),
@@ -681,6 +765,8 @@ static const JSCFunctionListEntry vm_funcs[] = {
 static int js_vm_module_init(JSContext *ctx, JSModuleDef *m) {
 	JS_NewClassID(&sha256_class_id);
 	JS_NewClass(JS_GetRuntime(ctx), sha256_class_id, &sha256_class);
+	JS_NewClassID(&sha1_class_id);
+	JS_NewClass(JS_GetRuntime(ctx), sha1_class_id, &sha1_class);
 
 	return JS_SetModuleExportList(ctx, m, vm_funcs, countof(vm_funcs));
 }
