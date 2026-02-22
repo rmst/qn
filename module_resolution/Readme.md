@@ -80,17 +80,7 @@ When a standalone binary resolves an import, it proceeds in this order:
 
 ### The `-D` flag
 
-`-D <name>` embeds a module that isn't directly imported by the entry point. At compile time, it resolves `<name>` as if imported from a virtual `embedded://<input>` base and records the result in the import map.
-
-At runtime, any script (embedded or disk) importing `<name>` as a bare import can find it via the `embedded://<input>` import map entries. This is how `qn` makes `node:fs`, `node:path`, etc. available to user scripts.
-
-```bash
-# Embed node:fs for dynamic use by external scripts
-NODE_PATH=./node qnc -D node:fs -o runtime bootstrap.js
-
-# External scripts can now import it
-./runtime user-script.js  # can use: import { readFileSync } from "node:fs"
-```
+`-D <name>` embeds a module not directly imported by the entry point, making it available to dynamically loaded scripts at runtime. See [qnc.md](../qnc.md) for details.
 
 ### The `file://` protocol
 
@@ -104,6 +94,12 @@ const mod = await import("file:///path/to/plugin.js")
 This is necessary because embedded importers check the embedded namespace first for filesystem path imports. Without `file://`, a disk file at a path matching an embedded module name would be shadowed by the embedded version.
 
 The `qn` bootstrap uses `file://` when loading user scripts to prevent this shadowing.
+
+## Native Module Embedding
+
+When qnc encounters a `.so` import, it can automatically compile the native C sources and statically link them into the binary. At runtime, `import ... from './sqlite_native.so'` resolves to the embedded module — no dlopen, no `.so` file needed.
+
+See [qnc.md](../qnc.md) for the full specification: package structure, `package.json` `"qnc"` field format, symbol collision handling, and the `--link`/`-M` flags.
 
 ## Debugging
 

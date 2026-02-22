@@ -5,7 +5,7 @@
  * https://nodejs.org/api/sqlite.html
  */
 
-import { sqlite_db } from 'sqlite_native';
+import { sqlite_db } from './sqlite_native.so';
 
 export class DatabaseSync {
     #db;
