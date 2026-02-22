@@ -7,6 +7,7 @@
  */
 
 import { EventEmitter } from 'node:events'
+import { Buffer } from 'node:buffer'
 import {
 	tcpNew, tcpBind, listen as _listen, tcpConnect,
 	readStart, readStop, write as _write, shutdown as _shutdown, close as _close,
@@ -45,6 +46,8 @@ export class Socket extends EventEmitter {
 	#readEnded = false
 	#writeEnded = false
 	#allowHalfOpen = false
+	#paused = false
+	#unshiftBuf = null
 	remoteAddress = null
 	remotePort = null
 	remoteFamily = null
@@ -116,7 +119,7 @@ export class Socket extends EventEmitter {
 				}
 				return
 			}
-			this.emit('data', buf)
+			this.emit('data', Buffer.isBuffer(buf) ? buf : Buffer.from(buf))
 		})
 		readStart(this.#handle)
 	}
@@ -320,6 +323,41 @@ export class Socket extends EventEmitter {
 		} catch (e) {
 			return null
 		}
+	}
+
+	get readable() { return this.#connected && !this.#readEnded && !this.#destroyed }
+	get writable() { return this.#connected && !this.#writeEnded && !this.#destroyed }
+	get destroyed() { return this.#destroyed }
+
+	pause() {
+		if (this.#handle && !this.#paused) {
+			this.#paused = true
+			readStop(this.#handle)
+		}
+		return this
+	}
+
+	resume() {
+		if (this.#handle && this.#paused) {
+			this.#paused = false
+			readStart(this.#handle)
+		}
+		return this
+	}
+
+	get isPaused() { return this.#paused }
+
+	unshift(chunk) {
+		if (!chunk || chunk.length === 0) return
+		// Queue the chunk to be re-emitted as 'data' on the next microtask,
+		// so listeners added after unshift() but in the same tick receive it.
+		this.#unshiftBuf = chunk
+		process.nextTick(() => {
+			if (this.#destroyed || !this.#unshiftBuf) return
+			const buf = this.#unshiftBuf
+			this.#unshiftBuf = null
+			this.emit('data', buf)
+		})
 	}
 
 	ref() { return this }

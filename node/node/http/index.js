@@ -4,6 +4,7 @@
  */
 
 import { EventEmitter } from 'node:events'
+import { Buffer } from 'node:buffer'
 import { createServer as createTcpServer, Socket } from 'node:net'
 import { socketReader, readRequestHead, requestBodyStream, chunkedRequestBodyStream } from 'node:http/parse'
 
@@ -247,7 +248,7 @@ export class ServerResponse extends EventEmitter {
 /**
  * HTTP Server
  *
- * Events: 'request', 'listening', 'close', 'error'
+ * Events: 'request', 'upgrade', 'listening', 'close', 'error'
  */
 const DEFAULT_MAX_HEADER_SIZE = 64 * 1024  // 64 KB
 const DEFAULT_MAX_HEADER_COUNT = 128
@@ -323,6 +324,32 @@ export class HTTPServer extends EventEmitter {
 
 			const connectionHeader = (head.headers['connection'] || '').toLowerCase()
 			const isHttp11 = head.httpVersion === '1.1'
+
+			// HTTP Upgrade (WebSocket, etc.)
+			const connectionParts = connectionHeader.split(/\s*,\s*/)
+			if (connectionParts.includes('upgrade') && head.headers['upgrade']) {
+				const req = new IncomingMessage(socket)
+				req.method = head.method
+				req.url = head.url
+				req.httpVersion = head.httpVersion
+				req.headers = head.headers
+				req.rawHeaders = head.rawHeaders
+				req.complete = true
+
+				// leftover bytes from the header read become the "head" buffer
+				const headBuf = head.leftover && head.leftover.length > 0
+					? Buffer.from(head.leftover)
+					: Buffer.alloc(0)
+
+				if (this.listenerCount('upgrade') > 0) {
+					this.emit('upgrade', req, socket, headBuf)
+				} else {
+					// No upgrade handler — destroy socket
+					socket.destroy()
+				}
+				return
+			}
+
 			const keepAlive = connectionHeader === 'close' ? false :
 				connectionHeader === 'keep-alive' ? true : isHttp11
 
@@ -420,7 +447,7 @@ const STATUS_CODES = {
 	400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
 	404: 'Not Found', 405: 'Method Not Allowed', 408: 'Request Timeout',
 	409: 'Conflict', 410: 'Gone', 413: 'Payload Too Large',
-	415: 'Unsupported Media Type', 429: 'Too Many Requests',
+	415: 'Unsupported Media Type', 426: 'Upgrade Required', 429: 'Too Many Requests',
 	500: 'Internal Server Error', 502: 'Bad Gateway',
 	503: 'Service Unavailable', 504: 'Gateway Timeout',
 }

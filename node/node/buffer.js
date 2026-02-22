@@ -285,8 +285,88 @@ class Buffer extends Uint8Array {
 		return 0
 	}
 
+	indexOf(value, byteOffset, encoding) {
+		if (typeof value === 'number') {
+			return super.indexOf(value, byteOffset)
+		}
+		if (typeof value === 'string') {
+			const needle = Buffer.from(value, encoding)
+			const start = byteOffset || 0
+			outer: for (let i = start; i <= this.length - needle.length; i++) {
+				for (let j = 0; j < needle.length; j++) {
+					if (this[i + j] !== needle[j]) continue outer
+				}
+				return i
+			}
+			return -1
+		}
+		if (value instanceof Uint8Array) {
+			const start = byteOffset || 0
+			outer2: for (let i = start; i <= this.length - value.length; i++) {
+				for (let j = 0; j < value.length; j++) {
+					if (this[i + j] !== value[j]) continue outer2
+				}
+				return i
+			}
+			return -1
+		}
+		return super.indexOf(value, byteOffset)
+	}
+
+	includes(value, byteOffset, encoding) {
+		return this.indexOf(value, byteOffset, encoding) !== -1
+	}
+
 	slice(start, end) {
 		return new Buffer(this.subarray(start, end))
+	}
+
+	// Big-endian integer read methods
+	readUInt8(offset = 0) { return this[offset] }
+	readUInt16BE(offset = 0) { return (this[offset] << 8) | this[offset + 1] }
+	readUInt16LE(offset = 0) { return this[offset] | (this[offset + 1] << 8) }
+	readUInt32BE(offset = 0) {
+		return (this[offset] * 0x1000000) + ((this[offset + 1] << 16) | (this[offset + 2] << 8) | this[offset + 3])
+	}
+	readUInt32LE(offset = 0) {
+		return (this[offset] | (this[offset + 1] << 8) | (this[offset + 2] << 16)) + (this[offset + 3] * 0x1000000)
+	}
+	readInt8(offset = 0) { const v = this[offset]; return v > 127 ? v - 256 : v }
+	readInt16BE(offset = 0) { const v = this.readUInt16BE(offset); return v > 0x7fff ? v - 0x10000 : v }
+	readInt32BE(offset = 0) { return (this[offset] << 24) | (this[offset + 1] << 16) | (this[offset + 2] << 8) | this[offset + 3] }
+
+	readUIntBE(offset, byteLength) {
+		let val = 0
+		for (let i = 0; i < byteLength; i++) val = val * 256 + this[offset + i]
+		return val
+	}
+
+	// Big-endian integer write methods
+	writeUInt8(value, offset = 0) { this[offset] = value & 0xff; return offset + 1 }
+	writeUInt16BE(value, offset = 0) {
+		this[offset] = (value >>> 8) & 0xff
+		this[offset + 1] = value & 0xff
+		return offset + 2
+	}
+	writeUInt16LE(value, offset = 0) {
+		this[offset] = value & 0xff
+		this[offset + 1] = (value >>> 8) & 0xff
+		return offset + 2
+	}
+	writeUInt32BE(value, offset = 0) {
+		this[offset] = (value >>> 24) & 0xff
+		this[offset + 1] = (value >>> 16) & 0xff
+		this[offset + 2] = (value >>> 8) & 0xff
+		this[offset + 3] = value & 0xff
+		return offset + 4
+	}
+
+	writeUIntBE(value, offset, byteLength) {
+		for (let i = byteLength - 1; i >= 0; i--) {
+			this[offset + i] = value & 0xff
+			value = Math.floor(value / 256)
+		}
+		return offset + byteLength
 	}
 
 	toJSON() {

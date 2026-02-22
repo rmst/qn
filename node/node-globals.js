@@ -21,6 +21,16 @@ globalThis.DOMException = class DOMException extends Error {
 	}
 }
 
+// Error.captureStackTrace (V8 API, used by ws and many npm packages)
+if (!Error.captureStackTrace) {
+	Error.captureStackTrace = (targetObject, constructorOpt) => {
+		const err = new Error()
+		if (err.stack) {
+			targetObject.stack = err.stack
+		}
+	}
+}
+
 // Node.js compatibility error for unsupported features
 export class NodeCompatibilityError extends Error {
 	constructor(message) {
@@ -38,6 +48,11 @@ globalThis.setTimeout = (fn, delay, ...args) => {
 }
 
 globalThis.clearTimeout = _clearTimeout
+
+globalThis.setImmediate = (fn, ...args) => {
+	return _setTimeout(() => fn(...args), 0)
+}
+globalThis.clearImmediate = _clearTimeout
 
 const _intervals = new Map()
 let _intervalId = 1
