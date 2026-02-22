@@ -178,7 +178,6 @@ static namelist_t embedded_module_names;  /* tracks actual module names for prob
 static uint64_t feature_bitmap;
 static FILE *outfile;
 static BOOL byte_swap;
-static BOOL dynamic_export;
 
 /* Import map recording for compile-time resolution replay at runtime */
 typedef struct {
@@ -785,7 +784,6 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
             native_module_count--;  /* undo the add */
             fprintf(stderr, "Warning: binary module '%s' will be dynamically loaded\n", disk_name);
             m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);
-            dynamic_export = TRUE;
         }
     } else {
         size_t buf_len;
@@ -1091,8 +1089,9 @@ static int output_executable(const char *out_filename, const char *cfilename,
     *arg++ = inc_dir;
     *arg++ = "-o";
     *arg++ = out_filename;
-    if (dynamic_export)
-        *arg++ = "-rdynamic";
+    /* Export symbols so dlopen'd .so modules can resolve QuickJS/libuv symbols
+       back from the host binary at runtime */
+    *arg++ = "-rdynamic";
     *arg++ = cfilename;
 
     /* Add native module .o files */
