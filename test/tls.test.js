@@ -80,10 +80,10 @@ function startHttpsServer() {
 describe('qn_tls native module', () => {
 	testQnOnly('CA certificates can be loaded', async ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
-			import { tlsLoadCACerts, tlsCaCertCount } from 'qn_tls'
-			const before = tlsCaCertCount()
-			tlsLoadCACerts(${JSON.stringify(certFile)})
-			const after = tlsCaCertCount()
+			import { loadCACerts, caCertCount } from 'node:tls'
+			const before = caCertCount()
+			loadCACerts(${JSON.stringify(certFile)})
+			const after = caCertCount()
 			console.log(before === 0 && after > 0 ? 'ok' : 'bad: ' + before + ' ' + after)
 		`)
 		const output = await execAsync(bin, [`${dir}/test.js`])
@@ -267,8 +267,8 @@ function startQnTlsServer(serverScript) {
 describe('TLS server', { concurrency: true }, () => {
 	testQnOnly('Server credentials can be loaded', async ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
-			import { tlsLoadServerCert } from 'qn_tls'
-			const cred = tlsLoadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
+			import { loadServerCert } from 'node:tls'
+			const cred = loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
 			console.log(cred ? 'ok' : 'fail')
 		`)
 		const output = await execAsync(bin, [`${dir}/test.js`])

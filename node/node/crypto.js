@@ -1,4 +1,5 @@
-import { randomFill, sha256Init, sha256Update, sha256Out } from 'qn_vm'
+import { randomFill } from 'qn_vm'
+import { sha256Init, sha256Update, sha256Out } from './tls/qn_tls.so'
 import { Buffer } from 'node:buffer'
 
 const algorithms = {
@@ -39,7 +40,7 @@ export class Hash {
 		return this
 	}
 	digest(encoding) {
-		const bin = sha256Out(this._ctx)
+		const bin = new Uint8Array(sha256Out(this._ctx))
 		if (encoding === 'hex') {
 			return [...bin].map(b => b.toString(16).padStart(2, '0')).join('')
 		}

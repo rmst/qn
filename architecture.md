@@ -23,11 +23,13 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 - `qn-uv-dns.c` (163) — async DNS resolution via `uv_getaddrinfo`
 
 **Other C modules** — ~3.5K LOC C:
-- `qnc.c` (1068) — standalone compiler for building executables
+- `qnc.c` (1068) — standalone compiler for building executables, with native module auto-embedding via `package.json` `"qnc"` field
 - `sandboxed-worker/` (978) — sandboxed JS execution (currently broken, pending libuv integration)
-- `tls/qn-tls.c` (921) — TLS bindings using BearSSL
-- `sqlite/qjs-sqlite.c` (480) — SQLite bindings
 - `introspect/` (30) — closure introspection (bulk is in QuickJS patch)
+
+**Native module packages** — C modules auto-compiled and embedded by qnc at build time via `package.json` `"qnc"` field:
+- `node/node/tls/qn-tls.c` — TLS bindings + SHA-256 crypto, compiled with BearSSL sources
+- `node/node/sqlite/qjs-sqlite.c` — SQLite bindings, compiled with amalgamation
 
 **Module resolution** ([`module_resolution/`](module_resolution/Readme.md)) — ~1.2K LOC C. NODE_PATH, node_modules walking, package.json resolution, `.ts`/`.js` extension probing. For standalone binaries: `embedded://` namespace separation, compile-time import map, `file://` protocol for forced disk loading.
 
@@ -37,7 +39,7 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 
 ### [libuv](https://libuv.org) (submodule: `vendor/libuv/`)
 
-Cross-platform async I/O library. Powers the event loop, networking, filesystem, child processes, signals, and DNS. libuv uses CMake upstream, but its source files are well-organized by platform (`src/unix/*.c` for POSIX, `src/win/*.c` for Windows). We compile them directly in our Makefile, same as QuickJS and BearSSL. ~57K LOC.
+Cross-platform async I/O library. Powers the event loop, networking, filesystem, child processes, signals, and DNS. libuv uses CMake upstream, but its source files are well-organized by platform (`src/unix/*.c` for POSIX, `src/win/*.c` for Windows). We compile them directly in our Makefile, same as QuickJS. ~57K LOC.
 
 ### [QuickJS](https://github.com/bellard/quickjs) (submodule: `quickjs/`)
 
@@ -51,9 +53,9 @@ The JavaScript engine. Qn patches it lightly:
 
 Single-file amalgamation. Bound to JS via `qjs-sqlite.c`. ~281K LOC.
 
-### [BearSSL](https://github.com/nickray/bearssl) (submodule: `vendor/bearssl/`)
+### [BearSSL](https://github.com/nickray/bearssl) (submodule: `node/node/tls/bearssl/`)
 
-TLS library. BearSSL's state machine API fits well with libuv streams. Built via its own Makefile. ~90K LOC.
+TLS library. BearSSL's state machine API fits well with libuv streams. Lives inside the `qn_tls` native module package and is compiled as part of it via qnc's `source_dirs` feature. ~90K LOC.
 
 ### [Sucrase](https://github.com/alangpierce/sucrase) (submodule: `vendor/sucrase-js/`)
 

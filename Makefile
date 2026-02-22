@@ -157,15 +157,7 @@ $(BIN_DIR)/obj/sandboxed-worker.o: sandboxed-worker/sandboxed-worker.c sandboxed
 
 # SQLite is now built automatically by qnc via package.json "qnc" field in node/node/sqlite/
 
-# Build BearSSL static library
-BEARSSL_LIB = $(BIN_DIR)/bearssl/libbearssl.a
-$(BEARSSL_LIB):
-	@echo "Building BearSSL..."
-	@$(MAKE) -s -C vendor/bearssl BUILD=$(abspath $(BIN_DIR)/bearssl) lib
-
-# Build qn-tls (TLS client bindings using BearSSL)
-$(BIN_DIR)/obj/qn-tls.o: tls/qn-tls.c $(BEARSSL_LIB) quickjs-deps | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/bearssl/inc -c -o $@ $<
+# TLS (qn_tls + BearSSL) is now built automatically by qnc via package.json "qnc" field in node/node/tls/
 
 # Build qn-uv-utils (shared utility infrastructure for libuv modules)
 $(BIN_DIR)/obj/qn-uv-utils.o: libuv/qn-uv-utils.c libuv/qn-uv-utils.h quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)/obj
@@ -195,12 +187,12 @@ $(BIN_DIR)/obj/qn-uv-dgram.o: libuv/qn-uv-dgram.c libuv/qn-uv-dgram.h libuv/qn-u
 $(BIN_DIR)/obj/qn-uv-process.o: libuv/qn-uv-process.c libuv/qn-uv-stream.h libuv/qn-uv-utils.h quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
 
-# Build qn-vm (event loop ownership: timers, poll, uv_run, sha256 via BearSSL)
-$(BIN_DIR)/obj/qn-vm.o: libuv/qn-vm.c libuv/qn-vm.h libuv/qn-uv-utils.h quickjs-deps $(LIBUV_LIB) $(BEARSSL_LIB) | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -Ivendor/bearssl/inc -c -o $@ $<
+# Build qn-vm (event loop ownership: timers, poll, uv_run)
+$(BIN_DIR)/obj/qn-vm.o: libuv/qn-vm.c libuv/qn-vm.h libuv/qn-uv-utils.h quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)/obj
+	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
 
 # Native C extensions for linking (sqlite is now auto-embedded via binding.gyp)
-NATIVE_OBJS = $(BIN_DIR)/obj/qn-tls.o $(BIN_DIR)/obj/qn-uv-utils.o $(BIN_DIR)/obj/qn-uv-fs.o $(BIN_DIR)/obj/qn-uv-dns.o $(BIN_DIR)/obj/qn-uv-signals.o $(BIN_DIR)/obj/qn-uv-stream.o $(BIN_DIR)/obj/qn-uv-dgram.o $(BIN_DIR)/obj/qn-uv-process.o $(BIN_DIR)/obj/qn-vm.o
+NATIVE_OBJS = $(BIN_DIR)/obj/qn-uv-utils.o $(BIN_DIR)/obj/qn-uv-fs.o $(BIN_DIR)/obj/qn-uv-dns.o $(BIN_DIR)/obj/qn-uv-signals.o $(BIN_DIR)/obj/qn-uv-stream.o $(BIN_DIR)/obj/qn-uv-dgram.o $(BIN_DIR)/obj/qn-uv-process.o $(BIN_DIR)/obj/qn-vm.o
 # Generate version info module for qn/qx --version
 # Uses FORCE + cmp to always check but only update when content changes,
 # avoiding unnecessary rebuilds of qn/qx.
@@ -214,7 +206,7 @@ $(BIN_DIR)/obj/qn/version-info.js: FORCE | $(BIN_DIR)/obj
 	@cmp -s $@ $@.tmp && rm $@.tmp || mv $@.tmp $@
 
 # Common qnc flags for building qn/qx
-QNC_FLAGS = -M qn_tls,qn_tls -M qn_uv_fs,qn_uv_fs -M qn_uv_dns,qn_uv_dns \
+QNC_FLAGS = -M qn_uv_fs,qn_uv_fs -M qn_uv_dns,qn_uv_dns \
             -M qn_uv_signals,qn_uv_signals -M qn_uv_stream,qn_uv_stream \
             -M qn_uv_dgram,qn_uv_dgram -M qn_uv_process,qn_uv_process -M qn_vm,qn_vm
 QNC_MODULES = -D node-globals -D repl -D node:fs -D node:process \
@@ -227,15 +219,15 @@ QNC_MODULES = -D node-globals -D repl -D node:fs -D node:process \
               -D node:os -D qn:introspect -D qn:http -D qn:version-info \
               -D qn:sucrase -D node:module -D qx
 # Extra .o/.a files to pass through to the linker (non-packaged native modules)
-QNC_EXTRA_LINK = $(patsubst %,--link %,$(NATIVE_OBJS)) --link $(BEARSSL_LIB)
+QNC_EXTRA_LINK = $(patsubst %,--link %,$(NATIVE_OBJS))
 
 # Build qn (standalone executable with embedded node modules, qx, sqlite, and native extensions)
 # SQLite is auto-embedded via package.json "qnc" field; other native modules still use -M + --link
-$(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js $(QNC_PROG) $(NATIVE_OBJS) $(BEARSSL_LIB) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
+$(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js $(QNC_PROG) $(NATIVE_OBJS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
 	NODE_PATH=./node:./qx:$(BIN_DIR)/obj $(QNC_PROG) $(QNC_FLAGS) $(QNC_MODULES) $(QNC_EXTRA_LINK) -o $@ node/bootstrap.js
 
 # Build qx (zx-compatible shell scripting with $ function)
-$(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js $(QNC_PROG) $(NATIVE_OBJS) $(BEARSSL_LIB) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
+$(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js $(QNC_PROG) $(NATIVE_OBJS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
 	NODE_PATH=./node:./qx:$(BIN_DIR)/obj $(QNC_PROG) $(QNC_FLAGS) $(QNC_MODULES) $(QNC_EXTRA_LINK) -o $@ qx/bootstrap.js
 
 # Create convenience symlinks in bin/ directory

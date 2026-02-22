@@ -16,7 +16,7 @@ import {
 	tlsSendApp, tlsRecvApp, tlsFlush as _tlsFlush, tlsClose as _tlsClose,
 	tlsGetSendRec, tlsSendRecAck, tlsRecvRecPush,
 	TLS_CLOSED, TLS_SENDREC, TLS_RECVREC, TLS_SENDAPP, TLS_RECVAPP,
-} from 'qn_tls'
+} from './qn_tls.so'
 import {
 	readStart, readStop, write as _streamWrite,
 	close as _streamClose, setOnRead,

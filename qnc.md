@@ -124,7 +124,20 @@ A `binding.gyp` can coexist in the same directory for Node.js compatibility via 
 }
 ```
 
-Supported fields: `target_name`, `sources`, `include_dirs`, `defines`, `cflags`. Paths are relative to the `package.json` file. `target_name` must match the `.so` filename without extension. qnc automatically adds QuickJS include dirs so native modules can `#include "quickjs.h"`.
+Supported fields: `target_name`, `sources`, `source_dirs`, `include_dirs`, `defines`, `cflags`. Paths are relative to the `package.json` file. `target_name` must match the `.so` filename without extension. qnc automatically adds QuickJS include dirs so native modules can `#include "quickjs.h"`.
+
+The `source_dirs` field recursively collects all `.c` files from the listed directories. This is useful for large vendored libraries like BearSSL (~294 source files across subdirectories):
+
+```json
+{
+  "qnc": {
+    "target_name": "qn_tls",
+    "sources": ["qn-tls.c"],
+    "source_dirs": ["bearssl/src"],
+    "include_dirs": [".", "bearssl/inc", "bearssl/src"]
+  }
+}
+```
 
 ### Symbol collision handling
 
@@ -135,10 +148,10 @@ When multiple native modules are statically linked, they'd all export `js_init_m
 `--link` passes `.o` or `.a` files directly to the linker, for native modules that don't have a `package.json` `"qnc"` config:
 
 ```bash
-qnc -M qn_tls,qn_tls --link qn-tls.o --link libbearssl.a -o app main.js
+qnc -M qn_vm,qn_vm --link qn-vm.o -o app main.js
 ```
 
-This is used in the qn Makefile for modules like TLS and libuv bindings that aren't yet structured as self-contained packages.
+This is used in the qn Makefile for libuv binding modules that are core infrastructure rather than self-contained packages.
 
 ### The `-M` flag (legacy)
 
@@ -150,10 +163,10 @@ The qn runtime itself is built using qnc:
 
 ```bash
 NODE_PATH=./node:./qx qnc \
-  -M qn_tls,qn_tls -M qn_uv_fs,qn_uv_fs ...  \
+  -M qn_uv_fs,qn_uv_fs -M qn_vm,qn_vm ...     \
   -D node:fs -D node:path -D node:sqlite ...    \
-  --link qn-tls.o --link libbearssl.a ...        \
+  --link qn-uv-fs.o --link qn-vm.o ...          \
   -o bin/qn node/bootstrap.js
 ```
 
-This embeds all Node.js shims, the qx shell scripting module, and links native C modules (libuv bindings, TLS, SQLite). SQLite is auto-detected via its `package.json` `"qnc"` field; other native modules still use `-M` + `--link`.
+This embeds all Node.js shims, the qx shell scripting module, and links native C modules. SQLite and TLS (including BearSSL) are auto-detected via their `package.json` `"qnc"` fields. Libuv binding modules use `-M` + `--link` as core infrastructure.

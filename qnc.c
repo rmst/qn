@@ -34,6 +34,8 @@
 #include <assert.h>
 #include <unistd.h>
 #include <errno.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #if !defined(_WIN32)
 #include <sys/wait.h>
 #endif
@@ -257,6 +259,32 @@ static int parse_json_string_array(JSContext *ctx, JSValue arr,
     return len;
 }
 
+/* Recursively collect all .c files from a directory into an existing source list.
+   Grows the sources array as needed. */
+static void collect_c_sources(const char *dir, char ***sources,
+                              int *count, int *cap) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            collect_c_sources(path, sources, count, cap);
+        } else if (has_suffix(ent->d_name, ".c")) {
+            if (*count >= *cap) {
+                *cap = *cap ? *cap * 2 : 64;
+                *sources = realloc(*sources, *cap * sizeof(char *));
+            }
+            (*sources)[(*count)++] = strdup(path);
+        }
+    }
+    closedir(d);
+}
+
 /* Parse the "qnc" field from a package.json file.
    Returns 1 on success, 0 if no package.json or no "qnc" field, -1 on error.
    If target_name_match is non-NULL, only succeeds if target_name matches. */
@@ -317,6 +345,32 @@ static int parse_native_package(JSContext *ctx, const char *pkg_dir,
     JSValue srcs = JS_GetPropertyStr(ctx, qnc_val, "sources");
     parse_json_string_array(ctx, srcs, pkg_dir, 1, &nm->sources, &nm->source_count);
     JS_FreeValue(ctx, srcs);
+
+    /* Parse source_dirs: walk directories recursively, collect all .c files */
+    JSValue sdirs = JS_GetPropertyStr(ctx, qnc_val, "source_dirs");
+    if (JS_IsArray(ctx, sdirs)) {
+        JSValue sdlen_val = JS_GetPropertyStr(ctx, sdirs, "length");
+        int sdlen;
+        JS_ToInt32(ctx, &sdlen, sdlen_val);
+        JS_FreeValue(ctx, sdlen_val);
+        int cap = nm->source_count ? nm->source_count * 2 : 64;
+        if (nm->sources)
+            nm->sources = realloc(nm->sources, cap * sizeof(char *));
+        else
+            nm->sources = calloc(cap, sizeof(char *));
+        for (int i = 0; i < sdlen; i++) {
+            JSValue sv = JS_GetPropertyUint32(ctx, sdirs, i);
+            const char *s = JS_ToCString(ctx, sv);
+            if (s) {
+                char abs_dir[PATH_MAX];
+                snprintf(abs_dir, sizeof(abs_dir), "%s/%s", pkg_dir, s);
+                collect_c_sources(abs_dir, &nm->sources, &nm->source_count, &cap);
+                JS_FreeCString(ctx, s);
+            }
+            JS_FreeValue(ctx, sv);
+        }
+    }
+    JS_FreeValue(ctx, sdirs);
 
     JSValue incs = JS_GetPropertyStr(ctx, qnc_val, "include_dirs");
     parse_json_string_array(ctx, incs, pkg_dir, 1, &nm->include_dirs, &nm->include_dir_count);
@@ -951,7 +1005,10 @@ static int output_executable(const char *out_filename, const char *cfilename,
                              BOOL use_lto, BOOL verbose, const char *exename)
 {
     /* Max argv slots: base args + native module .o files + extra link files */
-    int max_argv = 64 + native_module_count * 32 + extra_link_files.count;
+    int total_sources = 0;
+    for (int mi = 0; mi < native_module_count; mi++)
+        total_sources += native_modules[mi].source_count;
+    int max_argv = 64 + total_sources + extra_link_files.count;
     const char **argv = malloc(sizeof(const char *) * max_argv);
     const char **arg, *bn_suffix, *lto_suffix;
     char libjsname[1024];
