@@ -709,12 +709,14 @@ function initAsClient(websocket, address, protocols, options) {
 
 	websocket._socket = socket
 
-	socket.on('error', (err) => {
+	function onConnectError(err) {
 		if (socket[kWebSocket] === undefined) return
 
 		socket[kWebSocket] = undefined
 		emitErrorAndClose(websocket, err)
-	})
+	}
+
+	socket.on('error', onConnectError)
 
 	const onConnect = () => {
 		// Build and send the HTTP upgrade request
@@ -805,6 +807,12 @@ function initAsClient(websocket, address, protocols, options) {
 				)
 				return
 			}
+
+			// Remove the connect-time error handler now that setSocket will
+			// register its own (socketOnError). Leaving both causes the
+			// connect handler to clear kWebSocket before socketOnClose
+			// can read it, preventing close-timer cleanup.
+			socket.removeListener('error', onConnectError)
 
 			websocket.setSocket(socket, remaining, {
 				allowSynchronousEvents: opts.allowSynchronousEvents,

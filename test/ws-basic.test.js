@@ -36,7 +36,8 @@ test('WebSocket server basic echo', async () => {
 			resolve(data.toString())
 		})
 		client.on('error', reject)
-		setTimeout(() => reject(new Error('timeout')), 5000)
+		const t = setTimeout(() => reject(new Error('timeout')), 5000)
+		client.on('message', () => clearTimeout(t))
 	})
 
 	assert.strictEqual(received, 'hello world')
@@ -76,12 +77,13 @@ test('WebSocket server binary messages', async () => {
 			resolve(data)
 		})
 		client.on('error', reject)
-		setTimeout(() => reject(new Error('timeout')), 5000)
+		const t = setTimeout(() => reject(new Error('timeout')), 5000)
+		client.on('message', () => clearTimeout(t))
 	})
 
 	assert.deepStrictEqual(Buffer.from(received), Buffer.from([1, 2, 3, 4, 5]))
 
-	client.close()
+	await new Promise((resolve) => { client.on('close', resolve); client.close() })
 	await new Promise((resolve) => wss.close(resolve))
 })
 
@@ -99,10 +101,11 @@ test('WebSocket close codes', async () => {
 
 	const { code, reason } = await new Promise((resolve, reject) => {
 		client.on('close', (code, reason) => {
+			clearTimeout(t)
 			resolve({ code, reason: reason.toString() })
 		})
 		client.on('error', reject)
-		setTimeout(() => reject(new Error('timeout')), 5000)
+		const t = setTimeout(() => reject(new Error('timeout')), 5000)
 	})
 
 	assert.strictEqual(code, 1000)
@@ -146,7 +149,8 @@ test('WebSocket multiple clients', async () => {
 	assert.ok(messages.includes('from-2'))
 	assert.strictEqual(wss.clients.size, 2)
 
-	client1.close()
-	client2.close()
+	const c1 = new Promise(r => { client1.on('close', r); client1.close() })
+	const c2 = new Promise(r => { client2.on('close', r); client2.close() })
+	await Promise.all([c1, c2])
 	await new Promise((resolve) => wss.close(resolve))
 })
