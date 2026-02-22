@@ -155,13 +155,7 @@ $(BIN_DIR)/obj/introspect.o: introspect/introspect.c introspect/introspect.h qui
 $(BIN_DIR)/obj/sandboxed-worker.o: sandboxed-worker/sandboxed-worker.c sandboxed-worker/sandboxed-worker.h quickjs-deps | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
 
-# Build SQLite amalgamation
-$(BIN_DIR)/obj/sqlite3.o: sqlite/sqlite3.c | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -DSQLITE_OMIT_LOAD_EXTENSION -c -o $@ $<
-
-# Build SQLite QuickJS bindings
-$(BIN_DIR)/obj/qjs-sqlite.o: sqlite/qjs-sqlite.c sqlite/sqlite3.h | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Isqlite -c -o $@ $<
+# SQLite is now built automatically by qnc via binding.gyp in node/node/sqlite/
 
 # Build BearSSL static library
 BEARSSL_LIB = $(BIN_DIR)/bearssl/libbearssl.a
@@ -205,8 +199,8 @@ $(BIN_DIR)/obj/qn-uv-process.o: libuv/qn-uv-process.c libuv/qn-uv-stream.h libuv
 $(BIN_DIR)/obj/qn-vm.o: libuv/qn-vm.c libuv/qn-vm.h libuv/qn-uv-utils.h quickjs-deps $(LIBUV_LIB) $(BEARSSL_LIB) | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -Ivendor/bearssl/inc -c -o $@ $<
 
-# Native C extensions for linking
-NATIVE_OBJS = $(BIN_DIR)/obj/sqlite3.o $(BIN_DIR)/obj/qjs-sqlite.o $(BIN_DIR)/obj/qn-tls.o $(BIN_DIR)/obj/qn-uv-utils.o $(BIN_DIR)/obj/qn-uv-fs.o $(BIN_DIR)/obj/qn-uv-dns.o $(BIN_DIR)/obj/qn-uv-signals.o $(BIN_DIR)/obj/qn-uv-stream.o $(BIN_DIR)/obj/qn-uv-dgram.o $(BIN_DIR)/obj/qn-uv-process.o $(BIN_DIR)/obj/qn-vm.o
+# Native C extensions for linking (sqlite is now auto-embedded via binding.gyp)
+NATIVE_OBJS = $(BIN_DIR)/obj/qn-tls.o $(BIN_DIR)/obj/qn-uv-utils.o $(BIN_DIR)/obj/qn-uv-fs.o $(BIN_DIR)/obj/qn-uv-dns.o $(BIN_DIR)/obj/qn-uv-signals.o $(BIN_DIR)/obj/qn-uv-stream.o $(BIN_DIR)/obj/qn-uv-dgram.o $(BIN_DIR)/obj/qn-uv-process.o $(BIN_DIR)/obj/qn-vm.o
 # Generate version info module for qn/qx --version
 # Uses FORCE + cmp to always check but only update when content changes,
 # avoiding unnecessary rebuilds of qn/qx.
@@ -219,15 +213,30 @@ $(BIN_DIR)/obj/qn/version-info.js: FORCE | $(BIN_DIR)/obj
 	fi
 	@cmp -s $@ $@.tmp && rm $@.tmp || mv $@.tmp $@
 
+# Common qnc flags for building qn/qx
+QNC_FLAGS = -M qn_tls,qn_tls -M qn_uv_fs,qn_uv_fs -M qn_uv_dns,qn_uv_dns \
+            -M qn_uv_signals,qn_uv_signals -M qn_uv_stream,qn_uv_stream \
+            -M qn_uv_dgram,qn_uv_dgram -M qn_uv_process,qn_uv_process -M qn_vm,qn_vm
+QNC_MODULES = -D node-globals -D repl -D node:fs -D node:process \
+              -D node:child_process -D node:crypto -D node:path -D node:events \
+              -D node:stream -D node:stream/promises -D node:fs/promises \
+              -D node:buffer -D node:url -D node:abort -D node:fetch \
+              -D node:fetch/Headers -D node:fetch/Response -D node:dgram \
+              -D node:net -D node:tls -D node:http -D node:http/parse \
+              -D node:sqlite -D node:util -D node:assert -D node:test \
+              -D node:os -D qn:introspect -D qn:http -D qn:version-info \
+              -D qn:sucrase -D node:module -D qx
+# Extra .o/.a files to pass through to the linker (non-packaged native modules)
+QNC_EXTRA_LINK = $(patsubst %,--link %,$(NATIVE_OBJS)) --link $(BEARSSL_LIB)
+
 # Build qn (standalone executable with embedded node modules, qx, sqlite, and native extensions)
+# SQLite is auto-embedded via binding.gyp; other native modules still use -M + --link
 $(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js $(QNC_PROG) $(NATIVE_OBJS) $(BEARSSL_LIB) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
-	NODE_PATH=./node:./qx:$(BIN_DIR)/obj $(QNC_PROG) -e -M sqlite_native,sqlite -M qn_tls,qn_tls -M qn_uv_fs,qn_uv_fs -M qn_uv_dns,qn_uv_dns -M qn_uv_signals,qn_uv_signals -M qn_uv_stream,qn_uv_stream -M qn_uv_dgram,qn_uv_dgram -M qn_uv_process,qn_uv_process -M qn_vm,qn_vm -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:stream/promises -D node:fs/promises -D node:buffer -D node:url -D node:abort -D node:fetch -D node:fetch/Headers -D node:fetch/Response -D node:dgram -D node:net -D node:tls -D node:http -D node:http/parse -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:http -D qn:version-info -D qn:sucrase -D node:module -D qx -o $(BIN_DIR)/obj/qn.c node/bootstrap.js
-	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I. -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qn.c $(NATIVE_OBJS) $(BEARSSL_LIB) $(BIN_DIR)/libquickjs.a $(LIBUV_LIB) $(LIBS)
+	NODE_PATH=./node:./qx:$(BIN_DIR)/obj $(QNC_PROG) $(QNC_FLAGS) $(QNC_MODULES) $(QNC_EXTRA_LINK) -o $@ node/bootstrap.js
 
 # Build qx (zx-compatible shell scripting with $ function)
 $(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js $(QNC_PROG) $(NATIVE_OBJS) $(BEARSSL_LIB) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
-	NODE_PATH=./node:./qx:$(BIN_DIR)/obj $(QNC_PROG) -e -M sqlite_native,sqlite -M qn_tls,qn_tls -M qn_uv_fs,qn_uv_fs -M qn_uv_dns,qn_uv_dns -M qn_uv_signals,qn_uv_signals -M qn_uv_stream,qn_uv_stream -M qn_uv_dgram,qn_uv_dgram -M qn_uv_process,qn_uv_process -M qn_vm,qn_vm -D node-globals -D repl -D node:fs -D node:process -D node:child_process -D node:crypto -D node:path -D node:events -D node:stream -D node:stream/promises -D node:fs/promises -D node:buffer -D node:url -D node:abort -D node:fetch -D node:fetch/Headers -D node:fetch/Response -D node:dgram -D node:net -D node:tls -D node:http -D node:http/parse -D node:sqlite -D node:util -D node:assert -D node:test -D node:os -D qn:introspect -D qn:http -D qn:version-info -D qn:sucrase -D node:module -D qx -o $(BIN_DIR)/obj/qx.c qx/bootstrap.js
-	$(CC) $(CFLAGS_OPT) $(LDFLAGS) -I. -I$(BIN_DIR) -o $@ $(BIN_DIR)/obj/qx.c $(NATIVE_OBJS) $(BEARSSL_LIB) $(BIN_DIR)/libquickjs.a $(LIBUV_LIB) $(LIBS)
+	NODE_PATH=./node:./qx:$(BIN_DIR)/obj $(QNC_PROG) $(QNC_FLAGS) $(QNC_MODULES) $(QNC_EXTRA_LINK) -o $@ qx/bootstrap.js
 
 # Create convenience symlinks in bin/ directory
 convenience-links: $(QN_PROG) $(QX_PROG) $(QNC_PROG)
@@ -251,7 +260,7 @@ quickjs-deps: $(BIN_DIR)/quickjs/.patched
 	@$(MAKE) -s -C $(BIN_DIR)/quickjs .obj/quickjs.o .obj/libregexp.o .obj/libunicode.o .obj/cutils.o .obj/dtoa.o .obj/repl.o libquickjs.a
 
 # Objects using -I$(BIN_DIR)/quickjs need quickjs-deps to exist first
-$(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/qjs-sqlite.o: quickjs-deps
+$(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/quickjs-libc.o: quickjs-deps
 
 # Clean build artifacts
 clean:

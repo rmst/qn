@@ -186,6 +186,295 @@ static ImportMapRecord *import_map_records = NULL;
 static int import_map_count = 0;
 static int import_map_cap = 0;
 
+/* --- Native module embedding via binding.gyp --- */
+
+typedef struct {
+    char *target_name;    /* e.g. "sqlite_native" */
+    char *init_name;      /* C init function name: "js_init_module_<target_name>" */
+    char *reg_name;       /* module registration name (embedded:// prefixed) */
+    char **sources;       /* absolute paths to C source files */
+    int source_count;
+    char **include_dirs;  /* absolute paths to include directories */
+    int include_dir_count;
+    char **defines;       /* preprocessor definitions */
+    int define_count;
+    char **cflags;        /* additional compiler flags */
+    int cflag_count;
+    char **obj_files;     /* paths to compiled .o files (filled during compile step) */
+    int obj_count;
+} NativeModule;
+
+static NativeModule *native_modules = NULL;
+static int native_module_count = 0;
+static int native_module_cap = 0;
+
+/* Extra files to pass to the linker (--link flag) */
+static namelist_t extra_link_files;
+
+static NativeModule *native_module_add(void) {
+    if (native_module_count >= native_module_cap) {
+        int new_cap = native_module_cap ? native_module_cap * 2 : 4;
+        NativeModule *p = realloc(native_modules, sizeof(NativeModule) * new_cap);
+        if (!p) {
+            fprintf(stderr, "qnc: out of memory\n");
+            exit(1);
+        }
+        native_modules = p;
+        native_module_cap = new_cap;
+    }
+    NativeModule *nm = &native_modules[native_module_count++];
+    memset(nm, 0, sizeof(*nm));
+    return nm;
+}
+
+/* Parse a binding.gyp file using the compile QuickJS context.
+   Returns 1 on success, 0 if no binding.gyp found, -1 on error.
+   Populates the NativeModule struct for the first matching target. */
+static int parse_binding_gyp(JSContext *ctx, const char *gyp_dir,
+                             const char *target_name_match,
+                             NativeModule *nm) {
+    char gyp_path[PATH_MAX];
+    snprintf(gyp_path, sizeof(gyp_path), "%s/binding.gyp", gyp_dir);
+
+    size_t buf_len;
+    uint8_t *buf = js_load_file(ctx, &buf_len, gyp_path);
+    if (!buf) return 0;
+
+    JSValue gyp = JS_ParseJSON(ctx, (char *)buf, buf_len, gyp_path);
+    js_free(ctx, buf);
+    if (JS_IsException(gyp)) {
+        JSValue ex = JS_GetException(ctx);
+        JS_FreeValue(ctx, ex);
+        fprintf(stderr, "qnc: failed to parse %s\n", gyp_path);
+        return -1;
+    }
+
+    JSValue targets = JS_GetPropertyStr(ctx, gyp, "targets");
+    if (!JS_IsArray(ctx, targets)) {
+        JS_FreeValue(ctx, targets);
+        JS_FreeValue(ctx, gyp);
+        fprintf(stderr, "qnc: binding.gyp missing 'targets' array in %s\n", gyp_path);
+        return -1;
+    }
+
+    int found = 0;
+    JSValue length_val = JS_GetPropertyStr(ctx, targets, "length");
+    int length;
+    JS_ToInt32(ctx, &length, length_val);
+    JS_FreeValue(ctx, length_val);
+
+    for (int ti = 0; ti < length && !found; ti++) {
+        JSValue target = JS_GetPropertyUint32(ctx, targets, ti);
+        if (JS_IsException(target)) continue;
+
+        /* Check target_name */
+        JSValue tn_val = JS_GetPropertyStr(ctx, target, "target_name");
+        const char *tn = JS_ToCString(ctx, tn_val);
+        if (!tn || (target_name_match && strcmp(tn, target_name_match) != 0)) {
+            if (tn) JS_FreeCString(ctx, tn);
+            JS_FreeValue(ctx, tn_val);
+            JS_FreeValue(ctx, target);
+            continue;
+        }
+
+        nm->target_name = strdup(tn);
+        JS_FreeCString(ctx, tn);
+        JS_FreeValue(ctx, tn_val);
+
+        /* Build init function name */
+        char init_name[256];
+        snprintf(init_name, sizeof(init_name), "js_init_module_%s", nm->target_name);
+        nm->init_name = strdup(init_name);
+
+        /* Parse sources */
+        JSValue srcs = JS_GetPropertyStr(ctx, target, "sources");
+        if (JS_IsArray(ctx, srcs)) {
+            JSValue slen_val = JS_GetPropertyStr(ctx, srcs, "length");
+            int slen;
+            JS_ToInt32(ctx, &slen, slen_val);
+            JS_FreeValue(ctx, slen_val);
+            nm->sources = calloc(slen, sizeof(char *));
+            nm->source_count = 0;
+            for (int si = 0; si < slen; si++) {
+                JSValue sv = JS_GetPropertyUint32(ctx, srcs, si);
+                const char *s = JS_ToCString(ctx, sv);
+                if (s) {
+                    char abs_path[PATH_MAX];
+                    snprintf(abs_path, sizeof(abs_path), "%s/%s", gyp_dir, s);
+                    nm->sources[nm->source_count++] = strdup(abs_path);
+                    JS_FreeCString(ctx, s);
+                }
+                JS_FreeValue(ctx, sv);
+            }
+        }
+        JS_FreeValue(ctx, srcs);
+
+        /* Parse include_dirs */
+        JSValue incs = JS_GetPropertyStr(ctx, target, "include_dirs");
+        if (JS_IsArray(ctx, incs)) {
+            JSValue ilen_val = JS_GetPropertyStr(ctx, incs, "length");
+            int ilen;
+            JS_ToInt32(ctx, &ilen, ilen_val);
+            JS_FreeValue(ctx, ilen_val);
+            nm->include_dirs = calloc(ilen, sizeof(char *));
+            nm->include_dir_count = 0;
+            for (int ii = 0; ii < ilen; ii++) {
+                JSValue iv = JS_GetPropertyUint32(ctx, incs, ii);
+                const char *s = JS_ToCString(ctx, iv);
+                if (s) {
+                    char abs_path[PATH_MAX];
+                    snprintf(abs_path, sizeof(abs_path), "%s/%s", gyp_dir, s);
+                    nm->include_dirs[nm->include_dir_count++] = strdup(abs_path);
+                    JS_FreeCString(ctx, s);
+                }
+                JS_FreeValue(ctx, iv);
+            }
+        }
+        JS_FreeValue(ctx, incs);
+
+        /* Parse defines */
+        JSValue defs = JS_GetPropertyStr(ctx, target, "defines");
+        if (JS_IsArray(ctx, defs)) {
+            JSValue dlen_val = JS_GetPropertyStr(ctx, defs, "length");
+            int dlen;
+            JS_ToInt32(ctx, &dlen, dlen_val);
+            JS_FreeValue(ctx, dlen_val);
+            nm->defines = calloc(dlen, sizeof(char *));
+            nm->define_count = 0;
+            for (int di = 0; di < dlen; di++) {
+                JSValue dv = JS_GetPropertyUint32(ctx, defs, di);
+                const char *s = JS_ToCString(ctx, dv);
+                if (s) {
+                    nm->defines[nm->define_count++] = strdup(s);
+                    JS_FreeCString(ctx, s);
+                }
+                JS_FreeValue(ctx, dv);
+            }
+        }
+        JS_FreeValue(ctx, defs);
+
+        /* Parse cflags */
+        JSValue cfs = JS_GetPropertyStr(ctx, target, "cflags");
+        if (JS_IsArray(ctx, cfs)) {
+            JSValue cflen_val = JS_GetPropertyStr(ctx, cfs, "length");
+            int cflen;
+            JS_ToInt32(ctx, &cflen, cflen_val);
+            JS_FreeValue(ctx, cflen_val);
+            nm->cflags = calloc(cflen, sizeof(char *));
+            nm->cflag_count = 0;
+            for (int ci = 0; ci < cflen; ci++) {
+                JSValue cv = JS_GetPropertyUint32(ctx, cfs, ci);
+                const char *s = JS_ToCString(ctx, cv);
+                if (s) {
+                    nm->cflags[nm->cflag_count++] = strdup(s);
+                    JS_FreeCString(ctx, s);
+                }
+                JS_FreeValue(ctx, cv);
+            }
+        }
+        JS_FreeValue(ctx, cfs);
+
+        found = 1;
+        JS_FreeValue(ctx, target);
+    }
+
+    JS_FreeValue(ctx, targets);
+    JS_FreeValue(ctx, gyp);
+    return found;
+}
+
+#if defined(CONFIG_CC) && !defined(_WIN32)
+/* Forward declaration (defined later) */
+int exec_cmd(char **argv);
+
+/* Compile native module C sources to .o files.
+   Returns 0 on success, non-zero on error. */
+static int compile_native_modules(const char *exename, BOOL verbose) {
+    char exe_dir[1024], inc_dir[1024], buf[1024], *p;
+
+    /* get the directory of the executable (for QuickJS headers) */
+    pstrcpy(exe_dir, sizeof(exe_dir), exename);
+    p = strrchr(exe_dir, '/');
+    if (p) *p = '\0';
+    else pstrcpy(exe_dir, sizeof(exe_dir), ".");
+
+    snprintf(buf, sizeof(buf), "%s/quickjs.h", exe_dir);
+    if (access(buf, R_OK) == 0)
+        pstrcpy(inc_dir, sizeof(inc_dir), exe_dir);
+    else
+        snprintf(inc_dir, sizeof(inc_dir), "%s/include/quickjs", CONFIG_PREFIX);
+
+    for (int mi = 0; mi < native_module_count; mi++) {
+        NativeModule *nm = &native_modules[mi];
+        nm->obj_files = calloc(nm->source_count, sizeof(char *));
+        nm->obj_count = 0;
+
+        for (int si = 0; si < nm->source_count; si++) {
+            /* Generate unique .o filename in /tmp */
+            char obj_path[PATH_MAX];
+            snprintf(obj_path, sizeof(obj_path), "/tmp/qnc_%d_%s_%d.o",
+                     getpid(), nm->target_name, si);
+
+            /* Build gcc command */
+            const char *argv[128];
+            const char **arg = argv;
+            *arg++ = CONFIG_CC;
+            *arg++ = "-O2";
+            *arg++ = "-D_GNU_SOURCE";
+            *arg++ = "-I";
+            *arg++ = inc_dir;
+
+            /* Rename js_init_module to unique name */
+            char rename_def[512];
+            snprintf(rename_def, sizeof(rename_def),
+                     "js_init_module=%s", nm->init_name);
+            *arg++ = "-D";
+            *arg++ = rename_def;
+
+            /* Add package-specific include dirs */
+            for (int ii = 0; ii < nm->include_dir_count; ii++) {
+                *arg++ = "-I";
+                *arg++ = nm->include_dirs[ii];
+            }
+
+            /* Add package-specific defines (reuse define strings with -D prefix) */
+            char def_bufs[32][256];
+            for (int di = 0; di < nm->define_count && di < 32; di++) {
+                snprintf(def_bufs[di], sizeof(def_bufs[di]), "-D%s", nm->defines[di]);
+                *arg++ = def_bufs[di];
+            }
+
+            /* Add package-specific cflags */
+            for (int ci = 0; ci < nm->cflag_count; ci++) {
+                *arg++ = nm->cflags[ci];
+            }
+
+            *arg++ = "-c";
+            *arg++ = "-o";
+            *arg++ = obj_path;
+            *arg++ = nm->sources[si];
+            *arg = NULL;
+
+            if (verbose) {
+                for (const char **a = argv; *a; a++)
+                    printf("%s ", *a);
+                printf("\n");
+            }
+
+            int ret = exec_cmd((char **)argv);
+            if (ret != 0) {
+                fprintf(stderr, "qnc: failed to compile native module source '%s'\n",
+                        nm->sources[si]);
+                return ret;
+            }
+
+            nm->obj_files[nm->obj_count++] = strdup(obj_path);
+        }
+    }
+    return 0;
+}
+#endif /* CONFIG_CC */
+
 static void record_import(const char *base, const char *specifier, const char *resolved) {
     if (import_map_count >= import_map_cap) {
         int new_cap = import_map_cap ? import_map_cap * 2 : 64;
@@ -412,12 +701,44 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
         /* create a dummy module */
         m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);
     } else if (has_suffix(disk_name, ".so")) {
-        fprintf(stderr, "Warning: binary module '%s' will be dynamically loaded\n", disk_name);
-        /* create a dummy module */
-        m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);
-        /* the resulting executable will export its symbols for the
-           dynamic library */
-        dynamic_export = TRUE;
+        /* Native module: try to find binding.gyp for static embedding */
+        char so_dir[PATH_MAX];
+        pstrcpy(so_dir, sizeof(so_dir), disk_name);
+        char *slash = strrchr(so_dir, '/');
+        if (slash) *slash = '\0';
+        else pstrcpy(so_dir, sizeof(so_dir), ".");
+
+        /* Extract target name from .so filename (e.g. "sqlite_native" from "sqlite_native.so") */
+        const char *so_basename = slash ? slash + 1 : disk_name;
+        char so_target[256];
+        pstrcpy(so_target, sizeof(so_target), so_basename);
+        char *dot = strrchr(so_target, '.');
+        if (dot) *dot = '\0';
+
+        NativeModule *nm = native_module_add();
+        int gyp_ret = parse_binding_gyp(ctx, so_dir, so_target, nm);
+        if (gyp_ret > 0) {
+            /* Found binding.gyp with matching target */
+            nm->reg_name = strdup(reg_name);
+
+            /* Register like -M: add to init_module_list for codegen.
+               short_name is the target_name since the codegen template
+               already prepends "js_init_module_" */
+            namelist_add(&init_module_list, reg_name, nm->target_name, 0);
+
+            /* Track as embedded module */
+            if (!namelist_find(&embedded_module_names, disk_name)) {
+                namelist_add(&embedded_module_names, disk_name, NULL, 0);
+            }
+
+            m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);
+        } else {
+            /* No binding.gyp — fall back to dynamic loading warning */
+            native_module_count--;  /* undo the add */
+            fprintf(stderr, "Warning: binary module '%s' will be dynamically loaded\n", disk_name);
+            m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);
+            dynamic_export = TRUE;
+        }
     } else {
         size_t buf_len;
         uint8_t *buf;
@@ -634,7 +955,8 @@ void help(void)
            "-p prefix   set the prefix of the generated C names\n"
            "-S n        set the maximum stack size to 'n' bytes (default=%d)\n"
            "-s            strip all the debug info\n"
-           "--keep-source keep the source code\n",
+           "--keep-source keep the source code\n"
+           "--link file   pass file (.o/.a) to the linker\n",
            JS_DEFAULT_STACK_SIZE);
 #ifdef CONFIG_LTO
     {
@@ -676,12 +998,23 @@ int exec_cmd(char **argv)
 static int output_executable(const char *out_filename, const char *cfilename,
                              BOOL use_lto, BOOL verbose, const char *exename)
 {
-    const char *argv[64];
+    /* Max argv slots: base args + native module .o files + extra link files */
+    int max_argv = 64 + native_module_count * 32 + extra_link_files.count;
+    const char **argv = malloc(sizeof(const char *) * max_argv);
     const char **arg, *bn_suffix, *lto_suffix;
     char libjsname[1024];
     char libuvname[1024];
     char exe_dir[1024], inc_dir[1024], lib_dir[1024], buf[1024], *p;
     int ret;
+
+    /* Compile native module C sources to .o files */
+    if (native_module_count > 0) {
+        ret = compile_native_modules(exename, verbose);
+        if (ret != 0) {
+            free(argv);
+            return ret;
+        }
+    }
 
     /* get the directory of the executable */
     pstrcpy(exe_dir, sizeof(exe_dir), exename);
@@ -726,6 +1059,20 @@ static int output_executable(const char *out_filename, const char *cfilename,
     if (dynamic_export)
         *arg++ = "-rdynamic";
     *arg++ = cfilename;
+
+    /* Add native module .o files */
+    for (int mi = 0; mi < native_module_count; mi++) {
+        NativeModule *nm = &native_modules[mi];
+        for (int oi = 0; oi < nm->obj_count; oi++) {
+            *arg++ = nm->obj_files[oi];
+        }
+    }
+
+    /* Add extra link files (--link flag) */
+    for (int li = 0; li < extra_link_files.count; li++) {
+        *arg++ = extra_link_files.array[li].name;
+    }
+
     snprintf(libjsname, sizeof(libjsname), "%s/libquickjs%s%s.a",
              lib_dir, bn_suffix, lto_suffix);
     *arg++ = libjsname;
@@ -747,6 +1094,16 @@ static int output_executable(const char *out_filename, const char *cfilename,
 
     ret = exec_cmd((char **)argv);
     unlink(cfilename);
+
+    /* Clean up native module .o files */
+    for (int mi = 0; mi < native_module_count; mi++) {
+        NativeModule *nm = &native_modules[mi];
+        for (int oi = 0; oi < nm->obj_count; oi++) {
+            unlink(nm->obj_files[oi]);
+        }
+    }
+
+    free(argv);
     return ret;
 }
 #else
@@ -831,6 +1188,7 @@ int main(int argc, char **argv)
     use_lto = FALSE;
     stack_size = 0;
     memset(&dynamic_module_list, 0, sizeof(dynamic_module_list));
+    memset(&extra_link_files, 0, sizeof(extra_link_files));
 
     /* add system modules */
     namelist_add(&cmodule_list, "std", "std", 0);
@@ -949,6 +1307,11 @@ int main(int argc, char **argv)
             if (!strcmp(longopt, "keep-source")) {
                 strip_flags = 0;
                 continue;
+            }
+            if (!strcmp(longopt, "link")) {
+                const char *link_file = get_short_optarg(&optind, 0, "", argc, argv);
+                namelist_add(&extra_link_files, link_file, NULL, 0);
+                break;
             }
             if (opt) {
                 fprintf(stderr, "qjsc: unknown option '-%c'\n", opt);

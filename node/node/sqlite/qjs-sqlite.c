@@ -470,7 +470,7 @@ static int js_sqlite_init(JSContext *ctx, JSModuleDef *m) {
     return 0;
 }
 
-JSModuleDef *js_init_module_sqlite(JSContext *ctx, const char *module_name) {
+JSModuleDef *js_init_module(JSContext *ctx, const char *module_name) {
     JSModuleDef *m;
     m = JS_NewCModule(ctx, module_name, js_sqlite_init);
     if (!m)
