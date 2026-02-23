@@ -347,6 +347,12 @@ static void sync_timer_cb(uv_timer_t *t) {
 	ss->timed_out = 1;
 	uv_process_kill(&ss->process, ss->kill_signal);
 	uv_close((uv_handle_t *)t, sync_close_cb);
+	/* Close pipes so the event loop exits even if grandchild processes
+	   (e.g. sleep spawned by sh -c) inherited the fds and are still alive. */
+	if (ss->has_stdout && !uv_is_closing((uv_handle_t *)&ss->stdout_pipe))
+		uv_close((uv_handle_t *)&ss->stdout_pipe, sync_close_cb);
+	if (ss->has_stderr && !uv_is_closing((uv_handle_t *)&ss->stderr_pipe))
+		uv_close((uv_handle_t *)&ss->stderr_pipe, sync_close_cb);
 }
 
 static void sync_write_cb(uv_write_t *req, int status) {
