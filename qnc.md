@@ -131,9 +131,24 @@ A `binding.gyp` can coexist in the same directory for Node.js compatibility via 
 }
 ```
 
-Supported fields: `target_name`, `sources`, `source_dirs`, `include_dirs`, `defines`, `cflags`. Paths are relative to the `package.json` file. `target_name` must match the `.so` filename without extension. qnc automatically adds QuickJS include dirs so native modules can `#include "quickjs.h"`.
+Supported fields:
 
-The `source_dirs` field recursively collects all `.c` files from the listed directories. This is useful for large vendored libraries like BearSSL (~294 source files across subdirectories):
+| Field | Description |
+|---|---|
+| `target_name` | Must match the `.so` filename without extension |
+| `sources` | C source files to compile |
+| `source_dirs` | Directories to recursively scan for `.c` files |
+| `objects` | Pre-built `.o` or `.a` files to link directly (for modules built with other toolchains) |
+| `include_dirs` | Include search paths for the compiler |
+| `defines` | Preprocessor definitions |
+| `cflags` | Additional compiler flags |
+| `ldflags` | Additional linker flags (e.g. `["-lz"]`) |
+
+Paths are relative to the `package.json` file. qnc automatically adds QuickJS include dirs so native modules can `#include "quickjs.h"`.
+
+The `objects` field is useful for modules built with non-C toolchains (Zig, Rust, etc.). The user builds a `.o` or `.a` externally, and qnc links it. For static linking, the object must export `js_init_module_<target_name>` (the renamed symbol). For `qnc package`, it should export `js_init_module` (the original name).
+
+`source_dirs` recursively collects all `.c` files from the listed directories. This is useful for large vendored libraries like BearSSL (~294 source files across subdirectories):
 
 ```json
 {
@@ -163,6 +178,22 @@ This is used in the qn Makefile for libuv binding modules that are core infrastr
 ### The `-M` flag (legacy)
 
 `-M name,cname` registers an external C module by declaring its init function. This is the manual equivalent of what automatic `package.json` `"qnc"` detection does. With `-M qn_tls,qn_tls`, qnc emits a call to `js_init_module_qn_tls()` at startup. The corresponding `.o` file must be provided via `--link`.
+
+## Building Native Modules for Development
+
+`qnc package` builds a `.so` from a native module's `package.json` `"qnc"` field, for use with the `qn` interpreter during development:
+
+```bash
+qnc package node/node/sqlite/           # outputs node/node/sqlite/sqlite_native.so
+qnc package -o /tmp/test.so mymodule/   # custom output path
+qnc package -v .                        # verbose, current directory
+```
+
+This reads the same `"qnc"` config that static linking uses, but compiles with `-fPIC` and links with `-shared` instead. The `js_init_module` symbol is exported as-is (no renaming) so QuickJS can load it via `dlopen`.
+
+Options: `-o output` (set output path), `-v` (verbose), `-h` (help). Default output is `<dir>/<target_name>.so`.
+
+This gives a smooth development workflow: use `qnc package` to build `.so` files for iterating with `qn`, then `qnc -o` for the final standalone binary — both driven by the same `package.json` config.
 
 ## How qn is built
 

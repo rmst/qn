@@ -198,12 +198,16 @@ typedef struct {
     char *reg_name;       /* module registration name (embedded:// prefixed) */
     char **sources;       /* absolute paths to C source files */
     int source_count;
+    char **objects;       /* absolute paths to pre-built .o/.a files */
+    int object_count;
     char **include_dirs;  /* absolute paths to include directories */
     int include_dir_count;
     char **defines;       /* preprocessor definitions */
     int define_count;
     char **cflags;        /* additional compiler flags */
     int cflag_count;
+    char **ldflags;       /* additional linker flags (e.g. "-lz") */
+    int ldflag_count;
     char **obj_files;     /* paths to compiled .o files (filled during compile step) */
     int obj_count;
 } NativeModule;
@@ -386,6 +390,14 @@ static int parse_native_package(JSContext *ctx, const char *pkg_dir,
     parse_json_string_array(ctx, cfs, NULL, 0, &nm->cflags, &nm->cflag_count);
     JS_FreeValue(ctx, cfs);
 
+    JSValue objs = JS_GetPropertyStr(ctx, qnc_val, "objects");
+    parse_json_string_array(ctx, objs, pkg_dir, 1, &nm->objects, &nm->object_count);
+    JS_FreeValue(ctx, objs);
+
+    JSValue ldf = JS_GetPropertyStr(ctx, qnc_val, "ldflags");
+    parse_json_string_array(ctx, ldf, NULL, 0, &nm->ldflags, &nm->ldflag_count);
+    JS_FreeValue(ctx, ldf);
+
     JS_FreeValue(ctx, qnc_val);
     JS_FreeValue(ctx, pkg);
     return 1;
@@ -394,6 +406,15 @@ static int parse_native_package(JSContext *ctx, const char *pkg_dir,
 #if defined(CONFIG_CC) && !defined(_WIN32)
 /* Forward declaration (defined later) */
 int exec_cmd(char **argv);
+
+/*
+ * Build a native module .so from a package directory.
+ * Reads package.json "qnc" field, compiles sources with -fPIC,
+ * and links into a shared library.
+ * Returns 0 on success, non-zero on error.
+ */
+static int build_native_package(const char *pkg_dir, const char *out_filename,
+                                BOOL verbose, const char *exename);
 
 /*
  * Resolve the support directory containing headers and libraries.
@@ -453,8 +474,13 @@ static int compile_native_modules(const char *inc_dir, BOOL verbose) {
 
     for (int mi = 0; mi < native_module_count; mi++) {
         NativeModule *nm = &native_modules[mi];
-        nm->obj_files = calloc(nm->source_count, sizeof(char *));
+        nm->obj_files = calloc(nm->source_count + nm->object_count, sizeof(char *));
         nm->obj_count = 0;
+
+        /* Add pre-built object/archive files directly */
+        for (int oi = 0; oi < nm->object_count; oi++) {
+            nm->obj_files[nm->obj_count++] = strdup(nm->objects[oi]);
+        }
 
         for (int si = 0; si < nm->source_count; si++) {
             /* Generate unique .o filename in /tmp */
@@ -463,7 +489,8 @@ static int compile_native_modules(const char *inc_dir, BOOL verbose) {
                      getpid(), nm->target_name, si);
 
             /* Build gcc command */
-            const char *argv[128];
+            int max_args = 16 + nm->include_dir_count * 2 + nm->define_count + nm->cflag_count;
+            const char **argv = malloc(sizeof(const char *) * max_args);
             const char **arg = argv;
             *arg++ = CONFIG_CC;
             *arg++ = "-O2";
@@ -484,10 +511,11 @@ static int compile_native_modules(const char *inc_dir, BOOL verbose) {
                 *arg++ = nm->include_dirs[ii];
             }
 
-            /* Add package-specific defines (reuse define strings with -D prefix) */
-            char def_bufs[32][256];
-            for (int di = 0; di < nm->define_count && di < 32; di++) {
-                snprintf(def_bufs[di], sizeof(def_bufs[di]), "-D%s", nm->defines[di]);
+            /* Add package-specific defines */
+            char **def_bufs = calloc(nm->define_count, sizeof(char *));
+            for (int di = 0; di < nm->define_count; di++) {
+                def_bufs[di] = malloc(strlen(nm->defines[di]) + 3);
+                sprintf(def_bufs[di], "-D%s", nm->defines[di]);
                 *arg++ = def_bufs[di];
             }
 
@@ -509,6 +537,9 @@ static int compile_native_modules(const char *inc_dir, BOOL verbose) {
             }
 
             int ret = exec_cmd((char **)argv);
+            for (int di = 0; di < nm->define_count; di++) free(def_bufs[di]);
+            free(def_bufs);
+            free(argv);
             if (ret != 0) {
                 fprintf(stderr, "qnc: failed to compile native module source '%s'\n",
                         nm->sources[si]);
@@ -519,6 +550,211 @@ static int compile_native_modules(const char *inc_dir, BOOL verbose) {
         }
     }
     return 0;
+}
+
+static void native_module_free(NativeModule *nm) {
+    free(nm->target_name);
+    free(nm->init_name);
+    free(nm->reg_name);
+    for (int i = 0; i < nm->source_count; i++) free(nm->sources[i]);
+    free(nm->sources);
+    for (int i = 0; i < nm->object_count; i++) free(nm->objects[i]);
+    free(nm->objects);
+    for (int i = 0; i < nm->include_dir_count; i++) free(nm->include_dirs[i]);
+    free(nm->include_dirs);
+    for (int i = 0; i < nm->define_count; i++) free(nm->defines[i]);
+    free(nm->defines);
+    for (int i = 0; i < nm->cflag_count; i++) free(nm->cflags[i]);
+    free(nm->cflags);
+    for (int i = 0; i < nm->ldflag_count; i++) free(nm->ldflags[i]);
+    free(nm->ldflags);
+    for (int i = 0; i < nm->obj_count; i++) free(nm->obj_files[i]);
+    free(nm->obj_files);
+}
+
+/*
+ * Build a native module .so from a package directory.
+ * Reads package.json "qnc" field, compiles all sources with -fPIC
+ * (no js_init_module renaming), and links into a shared library.
+ */
+static int build_native_package(const char *pkg_dir, const char *out_filename,
+                                BOOL verbose, const char *exename) {
+    /* We need a QuickJS context to parse package.json */
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx = JS_NewContext(rt);
+
+    NativeModule nm;
+    memset(&nm, 0, sizeof(nm));
+
+    char abs_dir[PATH_MAX];
+    if (!realpath(pkg_dir, abs_dir)) {
+        fprintf(stderr, "qnc package: cannot resolve path '%s': %s\n",
+                pkg_dir, strerror(errno));
+        JS_FreeContext(ctx);
+        JS_FreeRuntime(rt);
+        return 1;
+    }
+
+    int ret = parse_native_package(ctx, abs_dir, NULL, &nm);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+
+    if (ret <= 0) {
+        if (ret == 0)
+            fprintf(stderr, "qnc package: no \"qnc\" field in %s/package.json\n", abs_dir);
+        return 1;
+    }
+
+    if (nm.source_count == 0 && nm.object_count == 0) {
+        fprintf(stderr, "qnc package: no sources or objects found for target '%s'\n", nm.target_name);
+        native_module_free(&nm);
+        return 1;
+    }
+
+    /* Resolve support directory for QuickJS headers */
+    char inc_dir[1024], lib_dir[1024];
+    char *embed_tmpdir = resolve_support_dir(exename, inc_dir, sizeof(inc_dir),
+                                             lib_dir, sizeof(lib_dir));
+
+    /* Determine output filename */
+    char so_path[PATH_MAX];
+    if (out_filename) {
+        pstrcpy(so_path, sizeof(so_path), out_filename);
+    } else {
+        snprintf(so_path, sizeof(so_path), "%s/%s.so", abs_dir, nm.target_name);
+    }
+
+    /* Collect pre-built object/archive files */
+    char **obj_files = calloc(nm.source_count + nm.object_count, sizeof(char *));
+    int obj_count = 0;
+    BOOL *obj_is_prebuilt = calloc(nm.source_count + nm.object_count, sizeof(BOOL));
+
+    for (int oi = 0; oi < nm.object_count; oi++) {
+        obj_files[obj_count] = strdup(nm.objects[oi]);
+        obj_is_prebuilt[obj_count] = TRUE;
+        obj_count++;
+    }
+
+    /* Compile each C source to .o with -fPIC, NO symbol renaming */
+    for (int si = 0; si < nm.source_count; si++) {
+        char obj_path[PATH_MAX];
+        snprintf(obj_path, sizeof(obj_path), "/tmp/qnc_pkg_%d_%s_%d.o",
+                 getpid(), nm.target_name, si);
+
+        int max_args = 16 + nm.include_dir_count * 2 + nm.define_count + nm.cflag_count;
+        const char **argv = malloc(sizeof(const char *) * max_args);
+        const char **arg = argv;
+        *arg++ = CONFIG_CC;
+        *arg++ = "-O2";
+        *arg++ = "-fPIC";
+        *arg++ = "-D_GNU_SOURCE";
+        *arg++ = "-I";
+        *arg++ = inc_dir;
+
+        /* Package-specific include dirs */
+        for (int ii = 0; ii < nm.include_dir_count; ii++) {
+            *arg++ = "-I";
+            *arg++ = nm.include_dirs[ii];
+        }
+
+        /* Package-specific defines */
+        char **def_bufs = calloc(nm.define_count, sizeof(char *));
+        for (int di = 0; di < nm.define_count; di++) {
+            def_bufs[di] = malloc(strlen(nm.defines[di]) + 3);
+            sprintf(def_bufs[di], "-D%s", nm.defines[di]);
+            *arg++ = def_bufs[di];
+        }
+
+        /* Package-specific cflags */
+        for (int ci = 0; ci < nm.cflag_count; ci++) {
+            *arg++ = nm.cflags[ci];
+        }
+
+        *arg++ = "-c";
+        *arg++ = "-o";
+        *arg++ = obj_path;
+        *arg++ = nm.sources[si];
+        *arg = NULL;
+
+        if (verbose) {
+            for (const char **a = argv; *a; a++)
+                printf("%s ", *a);
+            printf("\n");
+        }
+
+        ret = exec_cmd((char **)argv);
+        for (int di = 0; di < nm.define_count; di++) free(def_bufs[di]);
+        free(def_bufs);
+        free(argv);
+        if (ret != 0) {
+            fprintf(stderr, "qnc package: failed to compile '%s'\n", nm.sources[si]);
+            for (int j = 0; j < obj_count; j++) {
+                if (!obj_is_prebuilt[j]) unlink(obj_files[j]);
+                free(obj_files[j]);
+            }
+            free(obj_files);
+            free(obj_is_prebuilt);
+            qnc_embed_cleanup(embed_tmpdir);
+            free(embed_tmpdir);
+            native_module_free(&nm);
+            return ret;
+        }
+
+        obj_files[obj_count] = strdup(obj_path);
+        obj_is_prebuilt[obj_count] = FALSE;
+        obj_count++;
+    }
+
+    /* Link all .o/.a files into a shared library */
+    {
+        int max_argv = 16 + obj_count + nm.ldflag_count;
+        const char **argv = malloc(sizeof(const char *) * max_argv);
+        const char **arg = argv;
+        *arg++ = CONFIG_CC;
+        *arg++ = "-shared";
+        *arg++ = "-o";
+        *arg++ = so_path;
+
+        for (int oi = 0; oi < obj_count; oi++) {
+            *arg++ = obj_files[oi];
+        }
+
+        for (int li = 0; li < nm.ldflag_count; li++) {
+            *arg++ = nm.ldflags[li];
+        }
+
+        *arg++ = "-lm";
+        *arg = NULL;
+
+        if (verbose) {
+            for (const char **a = argv; *a; a++)
+                printf("%s ", *a);
+            printf("\n");
+        }
+
+        ret = exec_cmd((char **)argv);
+        free(argv);
+    }
+
+    /* Clean up compiled .o files (not pre-built ones) */
+    for (int oi = 0; oi < obj_count; oi++) {
+        if (!obj_is_prebuilt[oi]) unlink(obj_files[oi]);
+        free(obj_files[oi]);
+    }
+    free(obj_files);
+    free(obj_is_prebuilt);
+
+    qnc_embed_cleanup(embed_tmpdir);
+    free(embed_tmpdir);
+    native_module_free(&nm);
+
+    if (ret == 0) {
+        printf("%s\n", so_path);
+    } else {
+        fprintf(stderr, "qnc package: linking failed\n");
+    }
+
+    return ret;
 }
 #endif /* CONFIG_CC */
 
@@ -988,6 +1224,7 @@ void help(void)
 {
     printf("QuickJS Compiler version " CONFIG_VERSION "\n"
            "usage: " PROG_NAME " [options] [files]\n"
+           "       " PROG_NAME " package [-o output.so] [-v] [directory]\n"
            "\n"
            "options are:\n"
            "-c          only output bytecode to a C file\n"
@@ -1049,11 +1286,14 @@ static int output_executable(const char *out_filename, const char *cfilename,
     char *embed_tmpdir = resolve_support_dir(exename, inc_dir, sizeof(inc_dir),
                                              lib_dir, sizeof(lib_dir));
 
-    /* Max argv slots: base args + native module .o files + extra link files */
-    int total_sources = 0;
-    for (int mi = 0; mi < native_module_count; mi++)
-        total_sources += native_modules[mi].source_count;
-    int max_argv = 64 + total_sources + extra_link_files.count;
+    /* Max argv slots: base args + native module .o/.a files + ldflags + extra link files */
+    int total_obj_slots = 0;
+    int total_ldflags = 0;
+    for (int mi = 0; mi < native_module_count; mi++) {
+        total_obj_slots += native_modules[mi].source_count + native_modules[mi].object_count;
+        total_ldflags += native_modules[mi].ldflag_count;
+    }
+    int max_argv = 64 + total_obj_slots + total_ldflags + extra_link_files.count;
     const char **argv = malloc(sizeof(const char *) * max_argv);
     const char **arg, *bn_suffix, *lto_suffix;
     char libjsname[1024];
@@ -1105,6 +1345,14 @@ static int output_executable(const char *out_filename, const char *cfilename,
     /* Add extra link files (--link flag) */
     for (int li = 0; li < extra_link_files.count; li++) {
         *arg++ = extra_link_files.array[li].name;
+    }
+
+    /* Add native module ldflags */
+    for (int mi = 0; mi < native_module_count; mi++) {
+        NativeModule *nm = &native_modules[mi];
+        for (int li = 0; li < nm->ldflag_count; li++) {
+            *arg++ = nm->ldflags[li];
+        }
     }
 
     snprintf(libjsname, sizeof(libjsname), "%s/libquickjs%s%s.a",
@@ -1227,6 +1475,44 @@ int main(int argc, char **argv)
     stack_size = 0;
     memset(&dynamic_module_list, 0, sizeof(dynamic_module_list));
     memset(&extra_link_files, 0, sizeof(extra_link_files));
+
+    /* Handle "qnc package" subcommand */
+    if (argc >= 2 && !strcmp(argv[1], "package")) {
+#if defined(CONFIG_CC) && !defined(_WIN32)
+        const char *pkg_out = NULL;
+        int pkg_verbose = 0;
+        const char *pkg_dir = ".";
+        int ai = 2;
+        while (ai < argc && argv[ai][0] == '-') {
+            if (!strcmp(argv[ai], "-o") && ai + 1 < argc) {
+                pkg_out = argv[++ai];
+            } else if (!strcmp(argv[ai], "-v")) {
+                pkg_verbose = 1;
+            } else if (!strcmp(argv[ai], "-h") || !strcmp(argv[ai], "--help")) {
+                printf("usage: qnc package [-o output.so] [-v] [directory]\n"
+                       "\n"
+                       "Build a native module .so from a directory containing\n"
+                       "a package.json with a \"qnc\" field.\n"
+                       "\n"
+                       "options:\n"
+                       "  -o output   set the output filename (default: <dir>/<target_name>.so)\n"
+                       "  -v          verbose (show compiler commands)\n"
+                       "  directory   package directory (default: current directory)\n");
+                return 0;
+            } else {
+                fprintf(stderr, "qnc package: unknown option '%s'\n", argv[ai]);
+                return 1;
+            }
+            ai++;
+        }
+        if (ai < argc)
+            pkg_dir = argv[ai];
+        return build_native_package(pkg_dir, pkg_out, pkg_verbose, argv[0]);
+#else
+        fprintf(stderr, "qnc package: not supported on this platform\n");
+        return 1;
+#endif
+    }
 
     /* add system modules */
     namelist_add(&cmodule_list, "std", "std", 0);

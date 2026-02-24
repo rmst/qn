@@ -1,0 +1,7 @@
+{
+	"name": "math-native-example",
+	"qnc": {
+		"target_name": "math_native",
+		"sources": ["math_native.c"]
+	}
+}
