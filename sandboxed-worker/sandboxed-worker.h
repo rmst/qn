@@ -1,5 +1,5 @@
 /*
- * QJSX Sandbox - Sandboxed Worker Implementation
+ * Qn Sandbox - Sandboxed Worker Implementation
  *
  * Provides os.SandboxedWorker class for running JavaScript code in a
  * restricted environment without access to std/os modules.

@@ -61,12 +61,12 @@ const process = {
   // Command line arguments
   argv: [...scriptArgs],  // TODO: maybe we have to unwrap these
 
-  // Exit code - synced with globalThis.__qjsx_exitCode for C-level exit handler
+  // Exit code - synced with globalThis.__qn_exitCode for C-level exit handler
   get exitCode() {
-    return globalThis.__qjsx_exitCode || 0;
+    return globalThis.__qn_exitCode || 0;
   },
   set exitCode(code) {
-    globalThis.__qjsx_exitCode = code;
+    globalThis.__qn_exitCode = code;
   },
 
   // Environment variables - using Proxy to allow dynamic read/write
@@ -170,7 +170,7 @@ const process = {
 
     // Register exit handler with C runtime
     if (event === 'exit') {
-      globalThis.__qjsx_exitHandler = (code) => {
+      globalThis.__qn_exitHandler = (code) => {
         const handlers = eventHandlers.get('exit');
         if (handlers) handlers.forEach(h => {
           try { h(code); } catch (e) { console.error(e); }

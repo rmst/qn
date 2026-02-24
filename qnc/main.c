@@ -61,14 +61,14 @@ static void ts_init(void)
     js_std_init_handlers(ts_rt);
     ts_ctx = JS_NewContext(ts_rt);
 
-    static QJSXModuleResolverContext resolver_ctx = {
+    static QNModuleResolverContext resolver_ctx = {
         .embedded_modules = NULL,
         .import_map = NULL,
         .import_map_count = 0,
         .compile_mode = 0,
         .record_import = NULL,
     };
-    JS_SetModuleLoaderFunc2(ts_rt, qjsx_module_normalizer, js_module_loader,
+    JS_SetModuleLoaderFunc2(ts_rt, qn_module_normalizer, js_module_loader,
                             NULL, &resolver_ctx);
 
     static const char script[] =
@@ -540,7 +540,7 @@ static void record_import(const char *base, const char *specifier, const char *r
     import_map_count++;
 }
 
-static QJSXModuleResolverContext compile_resolver_ctx = {
+static QNModuleResolverContext compile_resolver_ctx = {
     .embedded_modules = NULL,
     .import_map = NULL,
     .import_map_count = 0,
@@ -733,7 +733,7 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
     JSModuleDef *m;
     namelist_entry_t *e;
 
-    /* module_name is already normalized by qjsx_module_normalizer (called by QuickJS).
+    /* module_name is already normalized by qn_module_normalizer (called by QuickJS).
        In compile mode, it will have an embedded:// prefix for file modules. */
     const char *reg_name = module_name;
     /* Strip embedded:// for disk file loading; keep prefix for module registration */
@@ -792,17 +792,17 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
         int res;
         /* Use disk_name (no embedded:// prefix) for file loading */
         const char *resolved_name = disk_name;
-        char *qjsxpath_resolved = NULL;
+        char *nodepath_resolved = NULL;
         char *index_resolved = NULL;
 
         if (disk_name[0] != '.' && disk_name[0] != '/') {
-            qjsxpath_resolved = resolve_node_path(ctx, disk_name);
-            if (qjsxpath_resolved) {
-                resolved_name = qjsxpath_resolved;
+            nodepath_resolved = resolve_node_path(ctx, disk_name);
+            if (nodepath_resolved) {
+                resolved_name = nodepath_resolved;
             }
         }
 
-        if (!qjsxpath_resolved) {
+        if (!nodepath_resolved) {
             index_resolved = resolve_with_index(ctx, disk_name);
             if (index_resolved) {
                 resolved_name = index_resolved;
@@ -811,7 +811,7 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
 
         buf = js_load_file(ctx, &buf_len, resolved_name);
         if (!buf) {
-            if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
+            if (nodepath_resolved) js_free(ctx, nodepath_resolved);
             if (index_resolved) js_free(ctx, index_resolved);
             JS_ThrowReferenceError(ctx, "could not load module filename '%s'",
                                    module_name);
@@ -821,7 +821,7 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
         /* Apply source transform (e.g. TypeScript stripping) */
         buf = ts_transform(ctx, buf, buf_len, resolved_name, &buf_len);
         if (!buf) {
-            if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
+            if (nodepath_resolved) js_free(ctx, nodepath_resolved);
             if (index_resolved) js_free(ctx, index_resolved);
             return NULL;
         }
@@ -839,14 +839,14 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
             val = JS_ParseJSON2(ctx, (char *)buf, buf_len, reg_name, flags);
             js_free(ctx, buf);
             if (JS_IsException(val)) {
-                if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
+                if (nodepath_resolved) js_free(ctx, nodepath_resolved);
                 if (index_resolved) js_free(ctx, index_resolved);
                 return NULL;
             }
             m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);
             if (!m) {
                 JS_FreeValue(ctx, val);
-                if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
+                if (nodepath_resolved) js_free(ctx, nodepath_resolved);
                 if (index_resolved) js_free(ctx, index_resolved);
                 return NULL;
             }
@@ -877,7 +877,7 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
                                JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
             js_free(ctx, buf);
             if (JS_IsException(func_val)) {
-                if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
+                if (nodepath_resolved) js_free(ctx, nodepath_resolved);
                 if (index_resolved) js_free(ctx, index_resolved);
                 return NULL;
             }
@@ -894,7 +894,7 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
             m = JS_VALUE_GET_PTR(func_val);
             JS_FreeValue(ctx, func_val);
         }
-        if (qjsxpath_resolved) js_free(ctx, qjsxpath_resolved);
+        if (nodepath_resolved) js_free(ctx, nodepath_resolved);
         if (index_resolved) js_free(ctx, index_resolved);
     }
     return m;
@@ -1398,7 +1398,7 @@ int main(int argc, char **argv)
     ts_init();
 
     /* loader for ES6 modules (compile_mode context for embedded:// prefixing) */
-    JS_SetModuleLoaderFunc2(rt, qjsx_module_normalizer, jsc_module_loader, NULL, &compile_resolver_ctx);
+    JS_SetModuleLoaderFunc2(rt, qn_module_normalizer, jsc_module_loader, NULL, &compile_resolver_ctx);
 
     fprintf(fo, "/* File generated automatically by the QuickJS compiler. */\n"
             "\n"
@@ -1414,10 +1414,11 @@ int main(int argc, char **argv)
 
         fprintf(fo, "#include \"module_resolution/module-resolution.h\"\n");
         fprintf(fo, "#include \"exit-handler.h\"\n");
-        fprintf(fo, "#include \"libuv/qn-vm.h\"\n\n");
+        fprintf(fo, "#include \"libuv/qn-vm.h\"\n");
+        fprintf(fo, "#include \"libuv/qn-worker.h\"\n\n");
 
         fprintf(fo,
-                "static JSModuleDef *qjsx_loader(JSContext *ctx, const char *name, void *opaque, JSValueConst attributes) {\n"
+                "static JSModuleDef *qn_loader(JSContext *ctx, const char *name, void *opaque, JSValueConst attributes) {\n"
                 "    // embedded:// modules are preloaded by js_std_eval_binary.\n"
                 "    // If the loader is called, the module wasn't found in cache.\n"
                 "    if (has_embedded_prefix(name)) {\n"
@@ -1428,7 +1429,7 @@ int main(int argc, char **argv)
                 "    if (name[0] != '.' && name[0] != '/') {\n"
                 "        char *path = resolve_node_path(ctx, name);\n"
                 "        if (path) {\n"
-                "            JSModuleDef *mod = js_module_loader(ctx, path, opaque, attributes);\n"
+                "            JSModuleDef *mod = qn_module_loader(ctx, path, opaque, attributes);\n"
                 "            js_free(ctx, path);\n"
                 "            return mod;\n"
                 "        }\n"
@@ -1437,13 +1438,13 @@ int main(int argc, char **argv)
                 "    if (!is_node_resolution()) {\n"
                 "        char *resolved_path = resolve_with_index(ctx, name);\n"
                 "        if (resolved_path) {\n"
-                "            JSModuleDef *mod = js_module_loader(ctx, resolved_path, opaque, attributes);\n"
+                "            JSModuleDef *mod = qn_module_loader(ctx, resolved_path, opaque, attributes);\n"
                 "            js_free(ctx, resolved_path);\n"
                 "            return mod;\n"
                 "        }\n"
                 "    }\n"
                 "    // Fallback: try exact name\n"
-                "    return js_module_loader(ctx, name, opaque, attributes);\n"
+                "    return qn_module_loader(ctx, name, opaque, attributes);\n"
                 "}\n"
                 "\n");
     } else {
@@ -1461,7 +1462,7 @@ int main(int argc, char **argv)
     for(i = 0; i < dynamic_module_list.count; i++) {
         const char *dyn_name = dynamic_module_list.array[i].name;
         /* Normalize the -D module name with compile context (adds embedded:// prefix) */
-        char *normalized = qjsx_module_normalizer(ctx, EMBEDDED_PREFIX "<input>", dyn_name, &compile_resolver_ctx);
+        char *normalized = qn_module_normalizer(ctx, EMBEDDED_PREFIX "<input>", dyn_name, &compile_resolver_ctx);
         if (!normalized) {
             fprintf(stderr, "Could not normalize dynamic module '%s'\n", dyn_name);
             exit(1);
@@ -1477,7 +1478,7 @@ int main(int argc, char **argv)
     if (output_type != OUTPUT_C) {
         /* Output the embedded module names array for runtime probing */
         fprintf(fo, "/* Embedded module names for runtime resolution */\n");
-        fprintf(fo, "static const char *qjsx_embedded_modules[] = {\n");
+        fprintf(fo, "static const char *qn_embedded_modules[] = {\n");
         for(i = 0; i < embedded_module_names.count; i++) {
             namelist_entry_t *e = &embedded_module_names.array[i];
             fprintf(fo, "    \"%s\",\n", e->name);
@@ -1486,7 +1487,7 @@ int main(int argc, char **argv)
 
         /* Output the import map for runtime bare import resolution */
         fprintf(fo, "/* Import map: (base, specifier) -> resolved name */\n");
-        fprintf(fo, "static const QJSXImportMapEntry qjsx_import_map[] = {\n");
+        fprintf(fo, "static const QNImportMapEntry qn_import_map[] = {\n");
         for(i = 0; i < import_map_count; i++) {
             fprintf(fo, "    { \"%s\", \"%s\", \"%s\" },\n",
                     import_map_records[i].base,
@@ -1495,9 +1496,9 @@ int main(int argc, char **argv)
         }
         fprintf(fo, "};\n\n");
 
-        fprintf(fo, "static QJSXModuleResolverContext qjsx_resolver_ctx = {\n");
-        fprintf(fo, "    .embedded_modules = qjsx_embedded_modules,\n");
-        fprintf(fo, "    .import_map = qjsx_import_map,\n");
+        fprintf(fo, "static QNModuleResolverContext qn_resolver_ctx = {\n");
+        fprintf(fo, "    .embedded_modules = qn_embedded_modules,\n");
+        fprintf(fo, "    .import_map = qn_import_map,\n");
         fprintf(fo, "    .import_map_count = %d,\n", import_map_count);
         fprintf(fo, "    .compile_mode = 0,\n");
         fprintf(fo, "    .record_import = NULL,\n");
@@ -1545,6 +1546,48 @@ int main(int argc, char **argv)
                 "  return ctx;\n"
                 "}\n\n");
 
+        /* Worker runtime init: configures a fresh runtime with the same
+           module loader so workers can resolve embedded + disk modules. */
+        fprintf(fo,
+                "static void qn_setup_worker_runtime(JSRuntime *rt) {\n"
+                "  js_std_init_handlers(rt);\n");
+        if (feature_bitmap & (1 << FE_MODULE_LOADER)) {
+            fprintf(fo,
+                    "  JS_SetModuleLoaderFunc2(rt, qn_module_normalizer, qn_loader, js_module_check_attributes, &qn_resolver_ctx);\n");
+        }
+        fprintf(fo,
+                "}\n\n");
+
+        /* Worker context setup: eval node-globals + source transform so workers
+           have the same globals (setTimeout, Buffer, URL, etc.) and TS support
+           as the main thread. */
+        fprintf(fo,
+                "static void qn_setup_worker_context(JSContext *ctx) {\n"
+                "  js_std_add_helpers(ctx, 0, NULL);\n"
+                "  { JSValue g = JS_GetGlobalObject(ctx);\n"
+                "    JS_SetPropertyStr(ctx, g, \"__qn_setSourceTransform\",\n"
+                "      JS_NewCFunction(ctx, js_qn_set_source_transform, \"__qn_setSourceTransform\", 1));\n"
+                "    JS_FreeValue(ctx, g); }\n"
+                "  static const char worker_init_src[] =\n"
+                "    \"import \\\"node-globals\\\"\\n\"\n"
+                "    \"import { stripTypeScriptTypes } from \\\"node:module\\\"\\n\"\n"
+                "    \"__qn_setSourceTransform((source, filename) => {\\n\"\n"
+                "    \"  if (!filename.endsWith(\\\".ts\\\")) return source\\n\"\n"
+                "    \"  try { return stripTypeScriptTypes(source) }\\n\"\n"
+                "    \"  catch { return stripTypeScriptTypes(source, { mode: \\\"transform\\\" }) }\\n\"\n"
+                "    \"})\\n\";\n"
+                "  JSValue val = JS_Eval(ctx, worker_init_src, sizeof(worker_init_src) - 1,\n"
+                "                        \"<worker-init>\", JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);\n"
+                "  if (JS_IsException(val)) {\n"
+                "    js_std_dump_error(ctx);\n"
+                "  } else {\n"
+                "    JSValue ret = JS_EvalFunction(ctx, val);\n"
+                "    if (JS_IsException(ret))\n"
+                "      js_std_dump_error(ctx);\n"
+                "    JS_FreeValue(ctx, ret);\n"
+                "  }\n"
+                "}\n\n");
+
         fputs(main_c_template1, fo);
 
         if (stack_size != 0) {
@@ -1554,13 +1597,18 @@ int main(int argc, char **argv)
 
         /* add the module loader if necessary */
         if (feature_bitmap & (1 << FE_MODULE_LOADER)) {
-            fprintf(fo, "  JS_SetModuleLoaderFunc2(rt, qjsx_module_normalizer, qjsx_loader, js_module_check_attributes, &qjsx_resolver_ctx);\n");
+            fprintf(fo, "  JS_SetModuleLoaderFunc2(rt, qn_module_normalizer, qn_loader, js_module_check_attributes, &qn_resolver_ctx);\n");
         }
 
         fprintf(fo,
                 "  ctx = JS_NewCustomContext(rt);\n"
                 "  qn_vm_init(ctx);\n"
-                "  js_std_add_helpers(ctx, argc, argv);\n");
+                "  qn_worker_set_init(qn_setup_worker_runtime, JS_NewCustomContext, qn_setup_worker_context);\n"
+                "  js_std_add_helpers(ctx, argc, argv);\n"
+                "  { JSValue g = JS_GetGlobalObject(ctx);\n"
+                "    JS_SetPropertyStr(ctx, g, \"__qn_setSourceTransform\",\n"
+                "      JS_NewCFunction(ctx, js_qn_set_source_transform, \"__qn_setSourceTransform\", 1));\n"
+                "    JS_FreeValue(ctx, g); }\n");
 
         for(i = 0; i < cname_list.count; i++) {
             namelist_entry_t *e = &cname_list.array[i];
@@ -1571,8 +1619,9 @@ int main(int argc, char **argv)
         }
         fprintf(fo,
                 "  qn_vm_loop(ctx);\n"
-                "  int exit_code = qjsx_call_exit_handler(ctx);\n"
+                "  int exit_code = qn_call_exit_handler(ctx);\n"
                 "  qn_vm_free(rt);\n"
+                "  qn_free_source_transform(rt);\n"
                 "  js_std_free_handlers(rt);\n"
                 "  JS_FreeContext(ctx);\n"
                 "  JS_FreeRuntime(rt);\n"

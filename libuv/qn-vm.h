@@ -74,4 +74,17 @@ void qn_vm_register_cleanup(qn_cleanup_fn fn);
  */
 JSModuleDef *js_init_module_qn_vm(JSContext *ctx, const char *module_name);
 
+/*
+ * Source transform hook (per-thread).
+ * Used for TypeScript stripping in the module loader and worker entry scripts.
+ */
+void qn_set_source_transform(JSContext *ctx, JSValue fn);
+void qn_free_source_transform(JSRuntime *rt);
+uint8_t *qn_apply_source_transform(JSContext *ctx, uint8_t *buf,
+                                    size_t buf_len, const char *filename,
+                                    size_t *out_len);
+/* JS-callable: globalThis.__qn_setSourceTransform(fn) */
+JSValue js_qn_set_source_transform(JSContext *ctx, JSValueConst this_val,
+                                    int argc, JSValueConst *argv);
+
 #endif /* QN_VM_H */

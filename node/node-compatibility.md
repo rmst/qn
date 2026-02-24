@@ -1,10 +1,8 @@
 # qn Compatibility
 
-`qn` provides a subset of the Node.js API on top of QuickJS. This document lists what's available and what's not.
+`qn` provides a subset of the Node.js and Web platform APIs on top of QuickJS. This document lists what's available and what's not.
 
 CommonJS is not supported. Use ES modules with `import.meta.dirname` and `import.meta.filename` instead of `__dirname` and `__filename`.
-
-Reference: [Node.js Globals](https://nodejs.org/api/globals.html)
 
 ---
 
@@ -12,36 +10,30 @@ Reference: [Node.js Globals](https://nodejs.org/api/globals.html)
 
 ### Console
 
-| Global | Status |
-|--------|--------|
-| `console.log` | ✅ |
-| `console.error` | ✅ |
-| `console.warn` | ✅ |
-| `console.info` | ✅ |
-| `console.debug` | ✅ |
-| `console.trace` | ❌ |
-| `console.dir` | ❌ |
-| `console.time` / `timeEnd` | ❌ |
-| `console.table` | ❌ |
-| `console.assert` | ❌ |
+| Global | Status | Notes |
+|--------|--------|-------|
+| `console.log` | ✅ | |
+| `console.error` / `warn` / `info` / `debug` | ✅ | |
+| `console.time` / `timeEnd` / `timeLog` | ✅ | |
+| `console.trace` | ❌ | |
+| `console.dir` | ❌ | |
+| `console.table` | ❌ | |
+| `console.assert` | ❌ | |
 
 ### Timers
 
 | Global | Status | Notes |
 |--------|--------|-------|
-| `setTimeout` | ⚠️ | No extra args (throws `NodeCompatibilityError`) |
-| `clearTimeout` | ✅ | |
-| `setInterval` | ❌ | Throws `NodeCompatibilityError` |
-| `clearInterval` | ❌ | Throws `NodeCompatibilityError` |
-| `setImmediate` | ❌ | |
-| `clearImmediate` | ❌ | |
-| `queueMicrotask` | ❌ | |
+| `setTimeout` / `clearTimeout` | ✅ | No extra args to callback (throws) |
+| `setInterval` / `clearInterval` | ✅ | No extra args to callback (throws) |
+| `setImmediate` / `clearImmediate` | ✅ | |
+| `queueMicrotask` | ✅ | |
 
 ### URL
 
 | Global | Status | Notes |
 |--------|--------|-------|
-| `URL` | ✅ | IDN not supported (throws on non-ASCII hostnames) |
+| `URL` | ✅ | Full WHATWG URL Standard; IDN not supported (throws on non-ASCII hostnames — use Punycode) |
 | `URLSearchParams` | ✅ | |
 
 ### Encoding
@@ -49,451 +41,374 @@ Reference: [Node.js Globals](https://nodejs.org/api/globals.html)
 | Global | Status | Notes |
 |--------|--------|-------|
 | `TextEncoder` | ✅ | UTF-8 only |
-| `TextDecoder` | ⚠️ | UTF-8 only; `fatal` and `stream` options throw `NodeCompatibilityError` |
-| `atob` | ✅ | |
-| `btoa` | ✅ | |
+| `TextDecoder` | ⚠️ | UTF-8 only; `fatal` and `stream` options not supported |
+| `atob` / `btoa` | ✅ | |
 
-### Web APIs
+### Fetch API
 
 | Global | Status | Notes |
 |--------|--------|-------|
-| `fetch` | ✅ | Native sockets + BearSSL TLS; HTTP and HTTPS; no external dependencies |
-| `Response` | ✅ | `.text()`, `.json()`, `.arrayBuffer()`, `.clone()`, `Response.json()` |
-| `Headers` | ✅ | Full WHATWG Headers interface |
-| `Request` | ✅ | `.url`, `.method`, `.headers`, `.body`, `.text()`, `.json()`, `.arrayBuffer()`, `.clone()` |
-| `AbortController` / `AbortSignal` | ✅ | Full implementation with `abort()`, `signal.aborted`, events |
-| `DOMException` | ✅ | Used by fetch and AbortController |
-| `Blob` / `File` | ❌ | |
-| `WebSocket` | ❌ | |
+| `fetch` | ✅ | HTTP + HTTPS via BearSSL TLS; redirect following; `AbortSignal` support |
+| `Headers` | ✅ | Full WHATWG Headers |
+| `Request` | ✅ | `.text()`, `.json()`, `.arrayBuffer()`, `.clone()` |
+| `Response` | ✅ | `.text()`, `.json()`, `.arrayBuffer()`, `.clone()`, `Response.json()`, `Response.redirect()`, `Response.error()` |
+| `.blob()` / `.formData()` | ❌ | Throws |
+| Body decompression (gzip/deflate/brotli) | ❌ | |
+
+**fetch() options:** `method`, `headers`, `body` (string/Uint8Array/ArrayBuffer/async iterable), `redirect` (follow/manual/error), `signal` (AbortSignal)
+
+**TLS:** System CA certs loaded automatically. `NODE_EXTRA_CA_CERTS` adds additional certs. `SSL_CERT_FILE` overrides.
+
+### AbortController / AbortSignal
+
+| Global | Status | Notes |
+|--------|--------|-------|
+| `AbortController` | ✅ | Full implementation |
+| `AbortSignal` | ✅ | `aborted`, `reason`, `throwIfAborted`, `onabort` |
+| `AbortSignal.timeout()` | ✅ | |
+| `AbortSignal.any()` | ✅ | |
+| `addEventListener` / `removeEventListener` | ✅ | |
+
+### ReadableStream
+
+| Global | Status | Notes |
+|--------|--------|-------|
+| `ReadableStream` constructor | ✅ | |
+| `getReader` | ✅ | |
+| Async iteration (`for await...of`) | ✅ | |
+| `WritableStream` / `TransformStream` | ❌ | |
+| `pipeTo` / `pipeThrough` / `tee` | ❌ | |
+
+### Worker (Web Workers)
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `new Worker(url)` | ✅ | URL resolved relative to caller's module |
+| `worker.postMessage(data)` | ✅ | Structured clone via QuickJS serialization |
+| `worker.onmessage` | ✅ | Receives `{ data }` event objects |
+| `worker.onerror` | ✅ | |
+| `worker.terminate()` | ✅ | Closes pipe; worker exits on EOF |
+| `self.postMessage` (inside worker) | ✅ | |
+| `self.onmessage` (inside worker) | ✅ | |
+| `self.close()` (inside worker) | ✅ | |
+| Own event loop + JSRuntime per worker | ✅ | Full isolation via `_Thread_local` state |
+| Node globals in workers | ✅ | `setTimeout`, `Buffer`, `URL`, `fetch`, `process`, `TextEncoder`, etc. |
+| `node:*` module imports in workers | ✅ | `node:fs`, `node:path`, `node:events`, etc. |
+| `import.meta.filename/dirname` in workers | ✅ | |
+| TypeScript workers (`.ts`) | ✅ | Source transform per-thread via `_Thread_local` hook in `qn-vm.c` |
+| `addEventListener` / `removeEventListener` | ❌ | Use `onmessage`/`onerror` callbacks |
+| `MessagePort` / `MessageChannel` | ❌ | |
+| Transferable objects (zero-copy `ArrayBuffer`) | ❌ | Data is copied via structured clone |
+| `SharedArrayBuffer` | ❌ | |
+| `importScripts()` | ❌ | Workers are always ES modules |
+| `type: 'module'` option | N/A | All workers are modules by default |
+| Nested workers | ⚠️ | Should work (each thread gets own state) but untested |
+
+**Structured clone support:** objects, arrays, numbers, strings, booleans, null, `undefined`, nested structures. Uses `JS_WriteObject2`/`JS_ReadObject` with `JS_WRITE_OBJ_SAB | JS_WRITE_OBJ_REFERENCE` flags.
+
+**Implementation:** `uv_socketpair()` + `uv_pipe_t` for IPC, `uv_thread_create` per worker. Messages use a 4-byte LE length prefix + serialized payload. Workers receive the full qn environment via `qn_setup_worker_context` (generated by qnc) which imports `node-globals` and sets up the TypeScript source transform.
+
+### Other Globals
+
+| Global | Status | Notes |
+|--------|--------|-------|
+| `process` | ✅ | See node:process below |
+| `Buffer` | ✅ | See node:buffer below |
+| `globalThis` / `global` | ✅ | |
+| `performance.now()` | ✅ | |
+| `DOMException` | ✅ | |
+| `Error.captureStackTrace` | ⚠️ | Shim (no-op) |
+| `structuredClone` | ❌ | |
 | `crypto` (Web Crypto) | ❌ | |
-
-### Other
-
-| Global | Status |
-|--------|--------|
-| `process` | ✅ |
-| `global` / `globalThis` | ✅ |
-| `structuredClone` | ❌ |
-| `performance.now()` | ✅ |
-| `navigator` | ❌ |
+| `Blob` / `File` / `FormData` | ❌ | |
+| `EventTarget` / `Event` | ❌ | Only minimal version in AbortSignal |
+| `navigator` | ❌ | |
 
 ---
 
-## Available `node:*` Imports
+## `node:*` Modules
 
-### `node:fs`
+### node:fs / node:fs/promises
 
-```js
-import { readFileSync, writeFileSync, existsSync, ... } from 'node:fs';
-```
+**Sync API:**
 
 | Function | Status | Notes |
 |----------|--------|-------|
 | `readFileSync` | ✅ | Returns `Uint8Array` if no encoding, string if `utf8` |
-| `writeFileSync` | ✅ | Accepts string, `ArrayBuffer`, or `TypedArray` |
+| `writeFileSync` | ✅ | String, `ArrayBuffer`, or `TypedArray` |
+| `appendFileSync` | ✅ | |
 | `existsSync` | ✅ | |
-| `statSync` | ✅ | |
-| `lstatSync` | ✅ | |
-| `readdirSync` | ⚠️ | No `withFileTypes` or `recursive` |
-| `mkdirSync` | ✅ | Supports `recursive` |
+| `statSync` / `lstatSync` | ✅ | |
+| `accessSync` | ✅ | |
+| `readdirSync` | ✅ | With `withFileTypes` |
+| `mkdirSync` | ✅ | With `recursive` |
 | `unlinkSync` | ✅ | |
-| `symlinkSync` | ✅ | |
-| `readlinkSync` | ✅ | |
+| `linkSync` / `symlinkSync` | ✅ | |
 | `renameSync` | ✅ | |
-| `realpathSync` | ✅ | |
-| `rmSync` | ✅ | Supports `recursive` and `force` |
-| `openSync` | ✅ | Returns file descriptor; supports `'r'` and `'w'` flags |
-| `closeSync` | ✅ | Closes file descriptor |
-| `mkdtempSync` | ✅ | Creates temp directory with random suffix |
-| `chmodSync` | ✅ | Changes file mode |
-| `cpSync` | ✅ | Supports `recursive` and `force`; preserves modes |
-| `copyFileSync` | ✅ | Simple file copy |
-| `linkSync` | ❌ | Throws |
+| `chmodSync` / `chownSync` / `lchownSync` | ✅ | |
+| `utimesSync` | ✅ | |
+| `copyFileSync` / `cpSync` | ✅ | `cpSync` supports `recursive`, `force` |
+| `realpathSync` / `readlinkSync` | ✅ | |
+| `rmSync` | ✅ | With `recursive`, `force` |
+| `mkdtempSync` | ✅ | |
+| `openSync` / `closeSync` | ✅ | Returns `QNFile` object with GC-driven close |
+| `globSync` / `glob` | ✅ | Async generator |
+| `createReadStream` | ✅ | `start`/`end` options |
+| `createWriteStream` | ✅ | `flags` ('a' for append), `mode` |
+| `Dirent` / `constants` | ✅ | |
+| `watch` / `watchFile` | ❌ | |
+| `readSync` / `writeSync` (public) | ❌ | Internal only |
+| `opendir` | ❌ | |
 
-### `node:process`
+**Promises API:** `readFile`, `writeFile`, `stat`, `lstat`, `readdir`, `mkdir`, `unlink`, `rename`, `symlink`, `readlink`, `realpath`, `access`, `chmod`, `utimes`, `chown`, `lchown`, `rmdir`, `rm`, `cp`. Some wrap sync.
 
-```js
-import process from 'node:process';
-```
+Notes: Only `utf8` encoding for `readFileSync`. Promises `FileHandle` API not available.
 
-| Property/Method | Status | Notes |
-|-----------------|--------|-------|
-| `argv` | ✅ | |
-| `env` | ✅ | Full Proxy |
-| `exit` | ✅ | |
-| `cwd` | ✅ | |
-| `pid` | ✅ | |
-| `platform` | ⚠️ | Returns `os.platform` or `'quickjs'` |
-| `version` | ⚠️ | Returns `'v1.0.0-quickjs'` |
-| `stdin` | ⚠️ | Has `isTTY` only |
-| `stdout` / `stderr` | ⚠️ | Has `write` and `isTTY` |
-| `exitCode` | ✅ | |
-| `on('exit')` | ✅ | No `beforeExit`; microtasks in handler don't run |
-| `on(<signal>)` | ✅ | SIGINT, SIGTERM, etc. |
+### node:path
 
-### `node:child_process`
+| Function | Status |
+|----------|--------|
+| `join`, `resolve`, `dirname`, `basename`, `extname` | ✅ |
+| `normalize`, `isAbsolute`, `relative` | ✅ |
+| `parse`, `format` | ✅ |
+| `sep`, `delimiter`, `posix` | ✅ |
+| `win32` | Aliased to posix |
+| `toNamespacedPath`, `matchesGlob` | ❌ |
 
-```js
-import { spawn, exec, execFile, execSync, execFileSync } from 'node:child_process';
-```
+### node:events
+
+| API | Status |
+|-----|--------|
+| `on` / `addListener` / `once` / `off` / `removeListener` | ✅ |
+| `removeAllListeners` / `emit` | ✅ |
+| `listeners` / `listenerCount` / `eventNames` | ✅ |
+| `prependListener` / `prependOnceListener` | ❌ |
+| `setMaxListeners` / `getMaxListeners` | ❌ |
+| Static `EventEmitter.on` / `EventEmitter.once` | ❌ |
+
+### node:net
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `createServer` | ✅ | TCP server |
+| `createConnection` / `connect` | ✅ | TCP client with DNS resolution |
+| `Socket` | ✅ | `connect`, `write`, `end`, `destroy`, `setNoDelay`, `setKeepAlive`, `pause`/`resume` |
+| Socket properties | ✅ | `remoteAddress`/`remotePort`/`localAddress`/`localPort`/`readyState`/`readable`/`writable` |
+| Socket events | ✅ | `connect`, `data`, `end`, `close`, `error`, `drain`, `finish` |
+| `Server` | ✅ | `listen`, `close`, `address`; events: `listening`, `connection`, `close`, `error` |
+| `allowHalfOpen` | ✅ | |
+| `Socket.setTimeout` / `setEncoding` | ❌ | |
+| `isIP` / `isIPv4` / `isIPv6` | ❌ | |
+| Unix domain sockets | ❌ | |
+
+### node:dgram
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `createSocket` | ✅ | `udp4` and `udp6` |
+| `bind` / `send` / `close` / `address` | ✅ | |
+| `setBroadcast` / `setTTL` / `setMulticastTTL` / `setMulticastLoopback` | ✅ | |
+| Events: `message`, `listening`, `close`, `error` | ✅ | |
+| `reuseAddr` / `reusePort` options | ✅ | |
+| Multicast membership | ❌ | |
+| `connect` / `disconnect` | ❌ | |
+
+### node:http
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `createServer` | ✅ | HTTP/1.1 with keep-alive, chunked transfer-encoding |
+| `IncomingMessage` | ✅ | `headers`, `method`, `url`, streaming body |
+| `ServerResponse` | ✅ | `writeHead`, `setHeader`, `getHeader`, `removeHeader`, `write`, `end` |
+| `STATUS_CODES` | ✅ | |
+| Header/keep-alive timeouts | ✅ | |
+| Upgrade support (WebSocket) | ✅ | |
+| CRLF injection validation | ✅ | |
+| `http.request` / `http.get` (client) | ❌ | Use `fetch` |
+| `http.Agent` | ❌ | |
+
+### node:tls
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `connect` / `accept` / `handshake` / `read` / `writeAll` | ✅ | Low-level BearSSL transport API |
+| System CA certificate loading | ✅ | |
+| `TLSSocket` class | ❌ | No Node.js-style socket API |
+| `tls.createServer` / `tls.connect` | ❌ | |
+| SNI / ALPN / client certs | ❌ | |
+
+Notes: Low-level transport API, not the Node.js socket API. Used internally by `fetch` for HTTPS.
+
+### node:child_process
 
 | Function | Status | Notes |
 |----------|--------|-------|
-| `spawn` | ✅ | Supports `cwd`, `env`, `stdio`, `shell` |
-| `exec` | ✅ | Async with callback, runs via shell |
-| `execFile` | ✅ | Async with callback and events; supports `timeout`, `killSignal` |
-| `execSync` | ✅ | Supports `cwd`, `env`, `input` (string/Buffer), `shell` |
-| `execFileSync` | ✅ | Supports `cwd`, `env`, `input` (string/Buffer), `timeout`, `killSignal`, `stdio` (including numeric fds) |
-| `ChildProcess` | ✅ | EventEmitter with streaming stdio |
-| `spawnSync` | ✅ | Supports `cwd`, `env`, `input`, `stdio`, `timeout`, `shell` |
+| `spawn` | ✅ | `cwd`, `env`, `stdio`, `shell`, `signal`, `detached` |
+| `spawnSync` | ✅ | `cwd`, `env`, `input`, `stdio`, `timeout`, `shell` |
+| `exec` / `execFile` | ✅ | Async with callback; `timeout`, `killSignal`, `maxBuffer` |
+| `execSync` / `execFileSync` | ✅ | `cwd`, `env`, `input`, `shell`, `timeout` |
+| `ChildProcess` class | ✅ | `pid`, `stdin`/`stdout`/`stderr`, `kill()`, events |
 | `fork` | ❌ | |
+| `uid` / `gid` | ❌ | Throws |
+| Non-utf8 encodings | ❌ | Throws |
 
-**Unsupported options** (throw `NodeCompatibilityError`): `uid`, `gid`, `detached`
-
-**Ignored options**: `windowsHide`
-
-### `node:path`
-
-```js
-import path from 'node:path';
-```
-
-### `node:crypto`
-
-```js
-import { createHash } from 'node:crypto';
-```
+### node:crypto
 
 | Function | Status | Notes |
 |----------|--------|-------|
-| `createHash` | ⚠️ | SHA-256 only |
+| `createHash` | ✅ | SHA-256, SHA-1 (via BearSSL) |
+| `Hash.update` / `Hash.digest` | ✅ | hex, base64, buffer output |
+| `randomBytes` / `randomFillSync` | ✅ | Via `uv_random()` |
+| `randomUUID` | ✅ | |
+| `timingSafeEqual` | ✅ | |
+| HMAC, ciphers, sign/verify | ❌ | |
+| `pbkdf2` / `scrypt` | ❌ | |
+| Key generation, `KeyObject`, `webcrypto` | ❌ | |
 
-### `node:events`
-
-```js
-import { EventEmitter } from 'node:events';
-```
-
-| Method | Status |
-|--------|--------|
-| `on` / `addListener` | ✅ |
-| `once` | ✅ |
-| `emit` | ✅ |
-| `off` / `removeListener` | ✅ |
-| `removeAllListeners` | ✅ |
-| `listeners` | ✅ |
-| `listenerCount` | ✅ |
-| `eventNames` | ✅ |
-
-### `node:stream`
-
-```js
-import { Readable, Writable } from 'node:stream';
-```
-
-| Class | Status | Notes |
-|-------|--------|-------|
-| `Readable` | ✅ | `data`, `end`, `close`, `error` events; `pause`, `resume`, `destroy` |
-| `Writable` | ✅ | `write`, `end`, `cork`, `uncork`, `destroy` |
-
-### `node:buffer`
-
-```js
-import { Buffer } from 'node:buffer';
-```
-
-| Method | Status | Notes |
-|--------|--------|-------|
-| `Buffer.from` | ✅ | string, Array, ArrayBuffer, Uint8Array |
-| `Buffer.alloc` | ✅ | |
-| `Buffer.allocUnsafe` | ✅ | Same as `alloc` (no uninitialized memory) |
-| `Buffer.isBuffer` | ✅ | |
-| `Buffer.isEncoding` | ✅ | |
-| `Buffer.concat` | ✅ | |
-| `Buffer.byteLength` | ✅ | |
-| `buffer.toString` | ✅ | utf8, base64, hex, latin1, ascii |
-| `buffer.write` | ✅ | |
-| `buffer.copy` | ✅ | |
-| `buffer.equals` | ✅ | |
-| `buffer.compare` | ✅ | |
-| `buffer.slice` | ✅ | Returns Buffer (not Uint8Array) |
-| `buffer.toJSON` | ✅ | |
-| `buffer.fill` | ❌ | |
-| `buffer.indexOf` | ❌ | |
-| `buffer.includes` | ❌ | |
-| `buffer.swap*` | ❌ | |
-| `buffer.read*` / `write*` | ❌ | Integer read/write methods |
-
-### `node:url`
-
-```js
-import { URL, URLSearchParams } from 'node:url';
-```
-
-WHATWG URL Standard implementation. Also available as globals.
+### node:stream / node:stream/promises
 
 | API | Status | Notes |
 |-----|--------|-------|
-| `URL` | ✅ | Full WHATWG URL parsing |
-| `URL.canParse` | ✅ | |
-| `URL.parse` | ✅ | |
-| `URLSearchParams` | ✅ | Full query string handling |
+| `Readable` | ✅ | fd-based; `data`/`end`/`error`/`close` events; `pause`/`resume`/`destroy`/`setEncoding` |
+| `Writable` | ✅ | fd-based; `write`/`end`/`cork`/`uncork`/`destroy`; `drain`/`finish` events |
+| `Readable.fromWeb` / `Readable.toWeb` | ✅ | |
+| `pipeline` (promises) | ✅ | |
+| `Duplex` / `Transform` / `PassThrough` | ❌ | |
+| `Readable.from` / `finished` | ❌ | |
+| Pull-mode `read()` | ❌ | |
 
-**Limitation:** Internationalized Domain Names (IDN) are not supported. URLs with non-ASCII hostnames (e.g., `https://münchen.de/`) will throw a `TypeError`. Use Punycode form instead: `https://xn--mnchen-3ya.de/`
+Notes: Minimal fd-backed streams, not the full Node.js stream infrastructure.
 
-### `node:fetch`
-
-```js
-import { fetch, Headers, Request, Response } from 'node:fetch';
-```
-
-Fetch API implementation using native sockets and BearSSL for TLS. Also available as globals (`fetch`, `Headers`, `Request`, `Response`).
+### node:buffer
 
 | API | Status | Notes |
 |-----|--------|-------|
-| `fetch` | ✅ | Async HTTP/HTTPS client; no external dependencies |
-| `Headers` | ✅ | Case-insensitive header management |
-| `Request` | ✅ | WHATWG Request object |
-| `Response` | ✅ | Response object with body consumption methods |
+| `Buffer.from` | ✅ | String, Array, ArrayBuffer, TypedArray |
+| `Buffer.alloc` / `Buffer.allocUnsafe` | ✅ | `allocUnsafe` same as `alloc` |
+| `Buffer.isBuffer` / `isEncoding` / `concat` / `byteLength` | ✅ | |
+| `toString` / `write` | ✅ | utf8, base64, hex, latin1, ascii |
+| `copy` / `equals` / `compare` / `slice` / `toJSON` | ✅ | |
+| `indexOf` / `includes` | ✅ | |
+| `readUInt8/16/32 BE/LE`, `readInt8/16/32 BE` | ✅ | |
+| `writeUInt8/16/32 BE/LE`, `writeUIntBE` | ✅ | |
+| Float/Double read/write | ❌ | |
+| BigInt read/write | ❌ | |
+| `base64url`, `ucs2`/`utf16le` encodings | ❌ | |
+| `Blob` / `File` | ❌ | |
 
-**fetch() options:**
-| Option | Status | Notes |
-|--------|--------|-------|
-| `method` | ✅ | GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS |
-| `headers` | ✅ | Object, array of tuples, or Headers instance |
-| `body` | ✅ | String, Uint8Array, or ArrayBuffer |
-| `redirect` | ✅ | `'follow'` (default), `'manual'`, `'error'` |
-| `signal` | ✅ | AbortSignal for cancellation |
-
-**Response methods:**
-| Method | Status | Notes |
-|--------|--------|-------|
-| `.text()` | ✅ | |
-| `.json()` | ✅ | |
-| `.arrayBuffer()` | ✅ | |
-| `.clone()` | ✅ | |
-| `.body` | ❌ | No streaming; response is fully buffered |
-| `.blob()` | ❌ | |
-| `.formData()` | ❌ | |
-| `Response.json()` | ✅ | |
-| `Response.redirect()` | ✅ | |
-| `Response.error()` | ✅ | |
-
-**TLS:** Uses BearSSL. System CA certificates are loaded automatically from standard paths. `NODE_EXTRA_CA_CERTS` adds additional certs on top of system certs (matching Node.js behavior). `SSL_CERT_FILE` overrides system cert paths entirely.
-
-### `node:net`
-
-```js
-import { createServer, createConnection, Socket, Server } from 'node:net';
-```
-
-TCP networking module built on POSIX sockets.
+### node:url
 
 | API | Status | Notes |
 |-----|--------|-------|
-| `createServer` | ✅ | TCP server with `connection` event |
-| `createConnection` / `connect` | ✅ | TCP client |
-| `Socket` | ✅ | TCP socket with EventEmitter interface |
-| `Server` | ✅ | TCP server with `listen`, `close`, `address` |
+| `URL` (WHATWG) | ✅ | Full standard including `URL.canParse`, `URL.parse` |
+| `URLSearchParams` | ✅ | |
+| Legacy `url.parse`/`format`/`resolve` | ❌ | |
+| `fileURLToPath` / `pathToFileURL` | ❌ | |
+| IDN (non-ASCII hostnames) | ❌ | Must use Punycode |
 
-**Socket:**
-| Method/Event | Status | Notes |
-|--------------|--------|-------|
-| `write` | ✅ | String or Buffer/Uint8Array |
-| `end` | ✅ | Half-close |
-| `destroy` | ✅ | |
-| `setNoDelay` | ✅ | |
-| `connect` event | ✅ | |
-| `data` event | ✅ | Emits Uint8Array chunks |
-| `end` event | ✅ | |
-| `close` event | ✅ | |
-| `error` event | ✅ | |
-| `drain` event | ✅ | |
-| `remoteAddress` / `remotePort` | ✅ | |
-| `localAddress` / `localPort` | ✅ | |
-| `setTimeout` | ❌ | |
-| `setKeepAlive` | ❌ | |
-| `pipe` | ❌ | |
-
-**Server:**
-| Method/Event | Status | Notes |
-|--------------|--------|-------|
-| `listen` | ✅ | Port, host, backlog, callback |
-| `close` | ✅ | |
-| `address` | ✅ | Returns `{ address, family, port }` |
-| `connection` event | ✅ | |
-| `listening` event | ✅ | |
-| `close` event | ✅ | |
-| `error` event | ✅ | |
-
-### `node:http`
-
-```js
-import { createServer, IncomingMessage, ServerResponse } from 'node:http';
-```
-
-HTTP server built on `node:net`.
-
-| API | Status | Notes |
-|-----|--------|-------|
-| `createServer` | ✅ | HTTP/1.1 server |
-| `IncomingMessage` | ✅ | Request object with headers, method, url |
-| `ServerResponse` | ✅ | Response object with write, end, setHeader |
-| `STATUS_CODES` | ✅ | HTTP status code map |
-| `http.request` | ❌ | Use `fetch` instead |
-| `http.get` | ❌ | Use `fetch` instead |
-
-**ServerResponse:**
-| Method | Status | Notes |
-|--------|--------|-------|
-| `writeHead` | ✅ | Status code + headers |
-| `setHeader` | ✅ | With CRLF injection validation |
-| `getHeader` | ✅ | |
-| `removeHeader` | ✅ | |
-| `write` | ✅ | String or Buffer/Uint8Array |
-| `end` | ✅ | |
-| `statusCode` | ✅ | |
-
-**Server options:**
-| Option | Status | Notes |
-|--------|--------|-------|
-| `maxHeaderSize` | ✅ | Default 64 KB |
-| `maxBodySize` | ✅ | Default 1 MB; 413 on exceed |
-
-### `node:sqlite`
-
-```js
-import { DatabaseSync } from 'node:sqlite';
-```
-
-SQLite database support using the embedded SQLite 3.51.2 amalgamation.
-
-| Class | Status | Notes |
-|-------|--------|-------|
-| `DatabaseSync` | ✅ | Synchronous database connection |
-| `StatementSync` | ✅ | Prepared statement |
-
-**DatabaseSync:**
-| Method/Property | Status | Notes |
-|-----------------|--------|-------|
-| `constructor(path, options?)` | ⚠️ | Only `open` option supported |
-| `exec(sql)` | ✅ | |
-| `prepare(sql)` | ✅ | |
-| `close()` | ✅ | |
-| `open()` | ✅ | |
-| `isOpen` | ✅ | |
-| `isTransaction` | ❌ | |
-| `function()` | ❌ | User-defined functions |
-| `aggregate()` | ❌ | User-defined aggregates |
-| `createSession()` | ❌ | Change tracking |
-| `applyChangeset()` | ❌ | |
-| `loadExtension()` | ❌ | |
-| `setAuthorizer()` | ❌ | |
-
-**StatementSync:**
-| Method/Property | Status | Notes |
-|-----------------|--------|-------|
-| `all(...params)` | ✅ | Anonymous parameters only |
-| `get(...params)` | ✅ | Anonymous parameters only |
-| `run(...params)` | ✅ | Returns `{ changes, lastInsertRowid }` |
-| `iterate()` | ❌ | |
-| `columns()` | ❌ | |
-| `sourceSQL` | ❌ | |
-| Named parameters | ❌ | Use `?` placeholders |
-
-**Transactions:** Use `exec('BEGIN')`, `exec('COMMIT')`, `exec('ROLLBACK')`.
-
-### `node:assert`
-
-```js
-import assert, { strictEqual, deepStrictEqual, ok, fail, AssertionError } from 'node:assert';
-```
-
-Testing assertion library with colored diff output.
+### node:assert
 
 | Function | Status | Notes |
 |----------|--------|-------|
-| `assert` / `ok` | ✅ | Truthy assertion |
-| `strictEqual` | ✅ | Strict equality with `Object.is` |
-| `deepStrictEqual` | ✅ | Deep equality with colored diff output |
-| `fail` | ✅ | Always throws |
-| `AssertionError` | ✅ | Error class with `actual`, `expected`, `operator` |
-| `notStrictEqual` | ❌ | |
-| `notDeepStrictEqual` | ❌ | |
-| `throws` | ❌ | |
-| `rejects` | ❌ | |
-| `match` | ❌ | |
+| `assert` / `ok` | ✅ | |
+| `strictEqual` / `notStrictEqual` | ✅ | |
+| `deepStrictEqual` / `notDeepStrictEqual` | ✅ | Colored diff output |
+| `fail` | ✅ | |
+| `throws` / `doesNotThrow` | ✅ | |
+| `match` / `doesNotMatch` | ✅ | |
+| `equal` / `notEqual` / `deepEqual` | ⚠️ | Aliased to strict variants (not loose) |
+| `rejects` / `doesNotReject` | ❌ | |
+| `CallTracker` | ❌ | |
 
-### `node:test`
+### node:test
 
-```js
-import { describe, test, it } from 'node:test';
-```
+| API | Status | Notes |
+|-----|--------|-------|
+| `test` / `describe` / `it` | ✅ | |
+| `skip` / `todo` / `only` modifiers | ✅ | |
+| Subtests (`t.test()`) | ✅ | |
+| `concurrency` option | ✅ | |
+| `mock` API | ❌ | |
+| `before`/`after`/`beforeEach`/`afterEach` | ❌ | |
+| `t.plan` / `t.diagnostic` | ❌ | |
+| TAP/custom reporters | ❌ | |
 
-Test runner with spec-style output.
+### node:process
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `argv` / `env` / `pid` / `platform` / `version` | ✅ | `env` is a full Proxy |
+| `exit` / `exitCode` | ✅ | |
+| `cwd` / `chdir` / `kill` | ✅ | |
+| `stdin` / `stdout` / `stderr` | ✅ | `write`, `isTTY`, `columns`/`rows` |
+| `on` (`exit`, signals) | ✅ | Via `uv_signal_t` |
+| `nextTick` | ✅ | Via `queueMicrotask` |
+| `getuid` / `getgid` | ✅ | |
+| `hrtime` / `memoryUsage` / `cpuUsage` | ❌ | |
+| `execPath` / `execArgv` / `arch` | ❌ | |
+
+### node:os
 
 | Function | Status | Notes |
 |----------|--------|-------|
-| `describe` | ✅ | Test suite grouping |
-| `test` / `it` | ✅ | Test case |
-| `test.skip` | ✅ | Skip a test |
-| `test.todo` | ✅ | Mark test as todo |
-| `test.only` | ✅ | Run only this test |
-| `t.test()` | ✅ | Subtests via TestContext |
-| `before` / `after` | ❌ | |
-| `beforeEach` / `afterEach` | ❌ | |
-| `mock` | ❌ | |
+| `tmpdir` / `platform` / `EOL` | ✅ | |
+| `homedir` / `userInfo` | ✅ | |
+| `arch` | ⚠️ | Hardcoded `'x64'` |
+| `hostname` | ⚠️ | Hardcoded `'localhost'` |
+| `cpus` / `totalmem` / `freemem` / `uptime` | ⚠️ | Stubbed (return 0 or dummy values) |
+| `type` / `release` / `networkInterfaces` / `loadavg` | ❌ | |
 
-### `node:os`
+### node:sqlite
 
-```js
-import { tmpdir, platform, homedir, hostname, userInfo, EOL } from 'node:os';
-```
+| API | Status | Notes |
+|-----|--------|-------|
+| `DatabaseSync` | ✅ | `open`, `close`, `exec`, `prepare`, `isOpen` |
+| `StatementSync` | ✅ | `run`, `get`, `all`, `sourceSQL` |
+| `setReadBigInts` | ✅ | |
+| `iterate` / user-defined functions / virtual tables | ❌ | |
 
-Operating system utilities.
+BLOBs returned as `Uint8Array`. Transactions via `exec('BEGIN')`/`exec('COMMIT')`.
 
-| Function | Status | Notes |
-|----------|--------|-------|
-| `tmpdir` | ✅ | Uses TMPDIR/TMP/TEMP or `/tmp` |
-| `platform` | ✅ | linux, darwin, win32, etc. |
-| `homedir` | ✅ | Uses HOME or `/root` |
-| `hostname` | ✅ | Via `/proc/sys/kernel/hostname` or shell |
-| `userInfo` | ✅ | uid, gid, username, homedir, shell |
-| `EOL` | ✅ | Line ending for platform |
-| `type` | ❌ | |
-| `release` | ❌ | |
-| `arch` | ❌ | |
-| `cpus` | ❌ | |
-| `freemem` / `totalmem` | ❌ | |
-| `networkInterfaces` | ❌ | |
+### node:util
+
+| API | Status |
+|-----|--------|
+| `promisify` (with `custom` symbol) | ✅ |
+| `inspect` / `format` / `deprecate` / `callbackify` / `types` | ❌ |
+
+### node:module
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `stripTypeScriptTypes` | ✅ | `strip` (whitespace replace) and `transform` (Sucrase) modes |
+| `createRequire` / `builtinModules` / `isBuiltin` | ❌ | |
 
 ---
 
-## Unavailable `node:*` Imports
+## Unavailable `node:*` Modules
 
-The following Node.js built-in modules are **not available**:
+`node:async_hooks`, `node:cluster`, `node:diagnostics_channel`, `node:dns`, `node:domain`, `node:http2`, `node:https`, `node:inspector`, `node:perf_hooks`, `node:punycode`, `node:querystring`, `node:readline`, `node:repl`, `node:string_decoder`, `node:timers`, `node:tty`, `node:v8`, `node:vm`, `node:wasi`, `node:worker_threads`, `node:zlib`
 
-- `node:async_hooks`
-- `node:cluster`
-- `node:dgram`
-- `node:diagnostics_channel`
-- `node:dns`
-- `node:domain`
-- `node:http2`
-- `node:https`
-- `node:inspector`
-- `node:perf_hooks`
-- `node:punycode`
-- `node:querystring`
-- `node:readline`
-- `node:repl`
-- `node:string_decoder`
-- `node:timers`
-- `node:tls`
-- `node:tty`
-- `node:util`
-- `node:v8`
-- `node:vm`
-- `node:wasi`
-- `node:worker_threads`
-- `node:zlib`
+---
+
+## Other APIs
+
+### WebSocket
+
+Available as `import WebSocket from "ws"` (vendored ws v8.19.0), not as a global.
+
+| Feature | Status |
+|---------|--------|
+| Client (`ws://`) | ✅ |
+| Server | ✅ |
+| `wss://` (TLS) | ❌ (needs `TLSSocket`) |
+| `permessage-deflate` | ❌ |
+
+### qn-specific Modules
+
+| Module | Description |
+|--------|-------------|
+| `qn:http` | High-level HTTP server (`serve()` API) |
+| `qn:worker` | Worker class (re-exported as global `Worker`) |
+| `qn:introspect` | Closure introspection and function serialization |
+| `qn:sucrase` | TypeScript transform engine |

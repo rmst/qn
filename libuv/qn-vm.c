@@ -16,6 +16,71 @@
 #include "qn-uv-utils.h"
 #include "quickjs/quickjs-libc.h"
 
+/* --------------------------------------------------------------------------
+ * Source transform hook (per-thread)
+ *
+ * Stores a JS function fn(source, filename) -> source for TypeScript
+ * stripping etc. Each thread registers its own via qn_set_source_transform().
+ * -------------------------------------------------------------------------- */
+
+static _Thread_local int g_source_transform_set = 0;
+static _Thread_local JSValue g_source_transform_fn;
+static _Thread_local JSContext *g_source_transform_ctx = NULL;
+
+void qn_set_source_transform(JSContext *ctx, JSValue fn) {
+	if (g_source_transform_set && g_source_transform_ctx) {
+		JS_FreeValue(g_source_transform_ctx, g_source_transform_fn);
+	}
+	g_source_transform_fn = JS_DupValue(ctx, fn);
+	g_source_transform_ctx = ctx;
+	g_source_transform_set = 1;
+}
+
+void qn_free_source_transform(JSRuntime *rt) {
+	if (g_source_transform_set) {
+		JS_FreeValueRT(rt, g_source_transform_fn);
+		g_source_transform_set = 0;
+		g_source_transform_ctx = NULL;
+	}
+}
+
+uint8_t *qn_apply_source_transform(JSContext *ctx, uint8_t *buf,
+                                    size_t buf_len, const char *filename,
+                                    size_t *out_len) {
+	*out_len = buf_len;
+	if (!g_source_transform_set)
+		return buf;
+	JSValue args[2];
+	args[0] = JS_NewStringLen(ctx, (char *)buf, buf_len);
+	args[1] = JS_NewString(ctx, filename);
+	js_free(ctx, buf);
+	JSValue result = JS_Call(ctx, g_source_transform_fn, JS_UNDEFINED, 2, args);
+	JS_FreeValue(ctx, args[0]);
+	JS_FreeValue(ctx, args[1]);
+	if (JS_IsException(result))
+		return NULL;
+	size_t new_len;
+	const char *str = JS_ToCStringLen(ctx, &new_len, result);
+	JS_FreeValue(ctx, result);
+	if (!str)
+		return NULL;
+	uint8_t *new_buf = js_malloc(ctx, new_len + 1);
+	if (!new_buf) {
+		JS_FreeCString(ctx, str);
+		return NULL;
+	}
+	memcpy(new_buf, str, new_len + 1);
+	*out_len = new_len;
+	JS_FreeCString(ctx, str);
+	return new_buf;
+}
+
+JSValue js_qn_set_source_transform(JSContext *ctx, JSValueConst this_val,
+                                    int argc, JSValueConst *argv) {
+	qn_set_source_transform(ctx, argv[0]);
+	return JS_UNDEFINED;
+}
+
 #include <string.h>
 #if !defined(_WIN32)
 #include <termios.h>
@@ -26,11 +91,14 @@
 
 /* --------------------------------------------------------------------------
  * Cleanup callback registry
+ *
+ * All static state is _Thread_local so each thread (main + workers) gets
+ * its own event loop, timers, polls, and rejection tracking.
  * -------------------------------------------------------------------------- */
 
 #define MAX_CLEANUP_FNS 8
-static qn_cleanup_fn g_cleanup_fns[MAX_CLEANUP_FNS];
-static int g_cleanup_count = 0;
+static _Thread_local qn_cleanup_fn g_cleanup_fns[MAX_CLEANUP_FNS];
+static _Thread_local int g_cleanup_count = 0;
 
 void qn_vm_register_cleanup(qn_cleanup_fn fn) {
 	if (g_cleanup_count < MAX_CLEANUP_FNS)
@@ -41,13 +109,13 @@ void qn_vm_register_cleanup(qn_cleanup_fn fn) {
  * Loop ownership
  * -------------------------------------------------------------------------- */
 
-static uv_loop_t *g_loop = NULL;
-static JSContext *g_ctx = NULL;
+static _Thread_local uv_loop_t *g_loop = NULL;
+static _Thread_local JSContext *g_ctx = NULL;
 
 /* Three-handle pattern for microtask draining during uv_run */
-static uv_prepare_t g_prepare;
-static uv_idle_t g_idle;
-static uv_check_t g_check;
+static _Thread_local uv_prepare_t g_prepare;
+static _Thread_local uv_idle_t g_idle;
+static _Thread_local uv_check_t g_check;
 
 uv_loop_t *js_uv_loop(JSContext *ctx) {
 	(void)ctx;
@@ -67,7 +135,7 @@ typedef struct QNRejection {
 	JSValue reason;
 } QNRejection;
 
-static QNRejection *rejection_head = NULL;
+static _Thread_local QNRejection *rejection_head = NULL;
 
 static void rejection_tracker(JSContext *ctx, JSValueConst promise,
                                JSValueConst reason, JS_BOOL is_handled,
@@ -151,8 +219,8 @@ typedef struct QNTimer {
 	bool closed;
 } QNTimer;
 
-static QNTimer *timer_head = NULL;
-static int next_timer_id = 1;  /* wraps to 1 on overflow, skipping 0 */
+static _Thread_local QNTimer *timer_head = NULL;
+static _Thread_local int next_timer_id = 1;  /* wraps to 1 on overflow, skipping 0 */
 
 static void timer_unlink(QNTimer *t) {
 	QNTimer **pp = &timer_head;
@@ -257,7 +325,7 @@ typedef struct QNPoll {
 	bool handle_inited;
 } QNPoll;
 
-static QNPoll *poll_head = NULL;
+static _Thread_local QNPoll *poll_head = NULL;
 
 static QNPoll *poll_find(int fd) {
 	for (QNPoll *p = poll_head; p; p = p->next) {

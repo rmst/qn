@@ -12,8 +12,9 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 
 **qx** (`qx/`) — ~1K LOC JS. Shell scripting with `$` function (similar to zx).
 
-**libuv C modules** (`libuv/`) — ~4.2K LOC C. Event loop, async I/O, networking:
-- `qn-vm.c` (761) — event loop ownership, timers, fd polling, microtask draining, promise rejection tracking
+**libuv C modules** (`libuv/`) — ~4.9K LOC C. Event loop, async I/O, networking, workers:
+- `qn-vm.c` (761) — event loop ownership, timers, fd polling, microtask draining, promise rejection tracking (all state is `_Thread_local` for worker thread safety)
+- `qn-worker.c` (674) — Web Worker implementation via `uv_socketpair` + `uv_pipe_t` + `uv_thread_create`. Each worker gets its own JSRuntime, JSContext, and libuv event loop. Messages use 4-byte length-prefixed `JS_WriteObject2`/`JS_ReadObject` serialization.
 - `qn-uv-fs.c` (903) — async/sync filesystem operations via `uv_fs_*`
 - `qn-uv-stream.c` (634) — unified TCP/Pipe/TTY stream abstraction
 - `qn-uv-dgram.c` (310) — UDP datagram sockets via `uv_udp_t`
@@ -34,7 +35,7 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 
 **Module resolution** ([`module_resolution/`](module_resolution/Readme.md)) — ~1.2K LOC C. NODE_PATH, node_modules walking, package.json resolution, `.ts`/`.js` extension probing. For standalone binaries: `embedded://` namespace separation, compile-time import map, `file://` protocol for forced disk loading.
 
-**TypeScript support** — `.ts` files are transparently transformed on load via a source transform hook in the C module loader. The hook tries position-preserving strip mode first (accurate error locations), falling back to Sucrase's full transform for constructs like enums. Uses the same `stripTypeScriptTypes` / Sucrase infrastructure as the `node:module` shim.
+**TypeScript support** — `.ts` files are transparently transformed on load via a per-thread source transform hook in `qn-vm.c`, called by `qn_module_loader` in `module-resolution.h`. The hook tries position-preserving strip mode first (accurate error locations), falling back to Sucrase's full transform for constructs like enums. Uses the same `stripTypeScriptTypes` / Sucrase infrastructure as the `node:module` shim.
 
 ## Vendored Dependencies
 
