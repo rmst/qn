@@ -223,6 +223,8 @@ enum {
 	PTY_GET_PID,
 	PTY_SET_ON_DATA,
 	PTY_SET_ON_EXIT,
+	PTY_PAUSE,
+	PTY_RESUME,
 };
 
 /* ---- Write request ---- */
@@ -436,6 +438,21 @@ static JSValue js_pty_op(JSContext *ctx, JSValueConst this_val,
 		return JS_UNDEFINED;
 	}
 
+	case PTY_PAUSE: {
+		QNPty *p = JS_GetOpaque2(ctx, args[0], qn_pty_class_id);
+		if (!p) return JS_EXCEPTION;
+		uv_read_stop((uv_stream_t *)&p->pipe);
+		return JS_UNDEFINED;
+	}
+
+	case PTY_RESUME: {
+		QNPty *p = JS_GetOpaque2(ctx, args[0], qn_pty_class_id);
+		if (!p) return JS_EXCEPTION;
+		int r = uv_read_start((uv_stream_t *)&p->pipe, pty_alloc_cb, pty_read_cb);
+		if (r < 0) return qn_throw_errno(ctx, r);
+		return JS_UNDEFINED;
+	}
+
 	default:
 		return JS_ThrowRangeError(ctx, "pty: unknown op %d", op);
 	}
@@ -453,6 +470,8 @@ static const JSCFunctionListEntry js_pty_funcs[] = {
 	QN_CONST2("GET_PID", PTY_GET_PID),
 	QN_CONST2("SET_ON_DATA", PTY_SET_ON_DATA),
 	QN_CONST2("SET_ON_EXIT", PTY_SET_ON_EXIT),
+	QN_CONST2("PAUSE", PTY_PAUSE),
+	QN_CONST2("RESUME", PTY_RESUME),
 };
 
 static int js_pty_init(JSContext *ctx, JSModuleDef *m) {
