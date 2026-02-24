@@ -12,22 +12,16 @@
 #   2. std._encodeUtf8() and std._decodeUtf8()
 #      Internal UTF-8 encoding helpers used by node:buffer shim.
 #
-#   3. Source transform hook for TypeScript support
-#      std._setSourceTransform(fn) — JS API for registering transforms
-#      js_std_apply_source_transform() — C API for applying the hook
-#      js_std_set_source_transform_fn() — C API for setting the hook
-#      Used by bootstrap.js (runtime) and qnc.c (compile time).
-#
-#   4. Sandbox integration hooks (when USE_SANDBOX is defined)
+#   3. Sandbox integration hooks (when USE_SANDBOX is defined)
 #      - js_std_get_port_list() accessor for worker message ports
 #      - js_sandbox_init() and js_sandbox_add_export() hooks
 #
---- quickjs/quickjs-libc.c	2026-01-16 11:05:44.122933388 +0000
-+++ bin/linux/obj/quickjs-libc.c	2026-02-20 22:39:23.545284013 +0000
+--- quickjs/quickjs-libc.c
++++ bin/linux/obj/quickjs-libc.c
 @@ -80,6 +80,10 @@
  #define PATH_MAX 4096
  #endif
- 
+
 +#ifdef USE_SANDBOX
 +#include "sandboxed-worker/sandboxed-worker.h"
 +#endif
@@ -35,67 +29,7 @@
  /* TODO:
     - add socket calls
  */
-@@ -157,6 +161,59 @@
- static uint64_t os_pending_signals;
- static int (*os_poll_func)(JSContext *ctx);
- 
-+/* Source transform hook for module loading.
-+   Set from JS via std._setSourceTransform(fn).
-+   fn(source, filename) is called for every module load;
-+   it should return the (possibly transformed) source. */
-+static int source_transform_set = 0;
-+static JSValue source_transform_fn;
-+static JSContext *source_transform_ctx = NULL;
-+
-+/* Apply source transform hook to loaded source code.
-+   Takes ownership of buf; returns (possibly new) buffer.
-+   On error, frees buf and returns NULL. */
-+uint8_t *js_std_apply_source_transform(JSContext *ctx, uint8_t *buf,
-+                                        size_t buf_len, const char *filename,
-+                                        size_t *out_len) {
-+    *out_len = buf_len;
-+    if (!source_transform_set)
-+        return buf;
-+    JSValue args[2];
-+    args[0] = JS_NewStringLen(ctx, (char *)buf, buf_len);
-+    args[1] = JS_NewString(ctx, filename);
-+    js_free(ctx, buf);
-+    JSValue result = JS_Call(ctx, source_transform_fn, JS_UNDEFINED, 2, args);
-+    JS_FreeValue(ctx, args[0]);
-+    JS_FreeValue(ctx, args[1]);
-+    if (JS_IsException(result))
-+        return NULL;
-+    size_t new_len;
-+    const char *str = JS_ToCStringLen(ctx, &new_len, result);
-+    JS_FreeValue(ctx, result);
-+    if (!str)
-+        return NULL;
-+    uint8_t *new_buf = js_malloc(ctx, new_len + 1);
-+    if (!new_buf) {
-+        JS_FreeCString(ctx, str);
-+        return NULL;
-+    }
-+    memcpy(new_buf, str, new_len + 1);
-+    *out_len = new_len;
-+    JS_FreeCString(ctx, str);
-+    return new_buf;
-+}
-+
-+/* Set the source transform hook from C.
-+   fn must be a JS function; ownership is shared (DupValue). */
-+void js_std_set_source_transform_fn(JSContext *ctx, JSValue fn) {
-+    if (source_transform_set && source_transform_ctx) {
-+        JS_FreeValue(source_transform_ctx, source_transform_fn);
-+    }
-+    source_transform_fn = JS_DupValue(ctx, fn);
-+    source_transform_ctx = ctx;
-+    source_transform_set = 1;
-+}
-+
- static void js_std_dbuf_init(JSContext *ctx, DynBuf *s)
- {
-     dbuf_init2(s, JS_GetRuntime(ctx), (DynBufReallocFunc *)js_realloc_rt);
-@@ -587,6 +644,50 @@
+@@ -587,6 +591,50 @@
      JS_DefinePropertyValueStr(ctx, meta_obj, "main",
                                JS_NewBool(ctx, is_main),
                                JS_PROP_C_W_E);
@@ -146,23 +80,10 @@
      JS_FreeValue(ctx, meta_obj);
      return 0;
  }
-@@ -693,6 +794,12 @@
-                                    module_name);
-             return NULL;
-         }
-+
-+        /* Apply source transform hook (e.g. TypeScript stripping) */
-+        buf = js_std_apply_source_transform(ctx, buf, buf_len, module_name, &buf_len);
-+        if (!buf)
-+            return NULL;
-+
-         res = js_module_test_json(ctx, attributes);
-         if (has_suffix(module_name, ".json") || res > 0) {
-             /* compile as JSON or JSON5 depending on "type" */
-@@ -1637,6 +1744,38 @@
+@@ -1637,6 +1685,27 @@
  #undef DEF
  };
- 
+
 +/* UTF-8 encoding/decoding using QuickJS's internal conversion */
 +static JSValue js_std_encode_utf8(JSContext *ctx, JSValueConst this_val,
 +                                  int argc, JSValueConst *argv) {
@@ -184,34 +105,22 @@
 +    return JS_NewStringLen(ctx, (const char *)buf, len);
 +}
 +
-+static JSValue js_std_set_source_transform(JSContext *ctx, JSValueConst this_val,
-+                                           int argc, JSValueConst *argv) {
-+    if (source_transform_set && source_transform_ctx) {
-+        JS_FreeValue(source_transform_ctx, source_transform_fn);
-+    }
-+    source_transform_fn = JS_DupValue(ctx, argv[0]);
-+    source_transform_ctx = ctx;
-+    source_transform_set = 1;
-+    return JS_UNDEFINED;
-+}
-+
  static const JSCFunctionListEntry js_std_funcs[] = {
      JS_CFUNC_DEF("exit", 1, js_std_exit ),
      JS_CFUNC_DEF("gc", 0, js_std_gc ),
-@@ -1650,6 +1789,9 @@
+@@ -1650,6 +1719,8 @@
      JS_CFUNC_DEF("loadFile", 1, js_std_loadFile ),
      JS_CFUNC_DEF("strerror", 1, js_std_strerror ),
      JS_CFUNC_DEF("parseExtJSON", 1, js_std_parseExtJSON ),
 +    JS_CFUNC_DEF("_encodeUtf8", 1, js_std_encode_utf8 ),
 +    JS_CFUNC_DEF("_decodeUtf8", 1, js_std_decode_utf8 ),
-+    JS_CFUNC_DEF("_setSourceTransform", 1, js_std_set_source_transform ),
- 
+
      /* FILE I/O */
      JS_CFUNC_DEF("open", 2, js_std_open ),
-@@ -3958,6 +4100,14 @@
+@@ -3972,6 +4043,14 @@
  #endif
  };
- 
+
 +#ifdef USE_SANDBOX
 +/* Accessor for sandbox integration - avoids exposing JSThreadState layout */
 +struct list_head *js_std_get_port_list(JSRuntime *rt) {
@@ -223,10 +132,10 @@
  static int js_os_init(JSContext *ctx, JSModuleDef *m)
  {
      os_poll_func = js_os_poll;
-@@ -3990,6 +4140,10 @@
+@@ -4004,6 +4083,10 @@
      }
  #endif /* USE_WORKER */
- 
+
 +#ifdef USE_SANDBOX
 +    js_sandbox_init(ctx, m);
 +#endif
@@ -234,7 +143,7 @@
      return JS_SetModuleExportList(ctx, m, js_os_funcs,
                                    countof(js_os_funcs));
  }
-@@ -4004,6 +4158,9 @@
+@@ -4018,6 +4101,9 @@
  #ifdef USE_WORKER
      JS_AddModuleExport(ctx, m, "Worker");
  #endif
@@ -243,18 +152,4 @@
 +#endif
      return m;
  }
- 
-@@ -4146,6 +4303,13 @@
- 
-     free(ts);
-     JS_SetRuntimeOpaque(rt, NULL); /* fail safe */
-+
-+    /* Free source transform hook */
-+    if (source_transform_set) {
-+        JS_FreeValueRT(rt, source_transform_fn);
-+        source_transform_set = 0;
-+        source_transform_ctx = NULL;
-+    }
- }
- 
- static void js_std_dump_error1(JSContext *ctx, JSValueConst exception_val)
+

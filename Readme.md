@@ -83,7 +83,7 @@ This is how `qn` itself is built — it compiles a minimal bootstrap with all no
 
 ### Architecture
 
-See [architecture.md](architecture.md) for codebase structure, and [comparison.md](comparison.md) for comparisons with Node.js and txiki.js.
+See [architecture.md](architecture.md) for codebase structure, [node/node-compatibility.md](node/node-compatibility.md) for API coverage, and [comparison.md](comparison.md) for comparisons with Node.js and txiki.js.
 
 Key source files:
 
@@ -93,4 +93,4 @@ Key source files:
 - `qnc/` — standalone compiler (main.c, embed.c for self-extracting support files, pack.c for build-time packing)
 - `module_resolution/module-resolution.h` — shared module resolution logic
 - `quickjs.patch` — applied to `quickjs/quickjs.c` (import error locations)
-- `quickjs-libc.patch` — applied to `quickjs/quickjs-libc.c` (`import.meta.dirname/filename`, UTF-8 helpers, source transform hook for TypeScript)
+- `quickjs-libc.patch` — applied to `quickjs/quickjs-libc.c` (`import.meta.dirname/filename`, UTF-8 helpers)

@@ -1,6 +1,6 @@
 #!/usr/bin/env qn
 /**
- * QJSX-Node Bootstrap
+ * Qn Bootstrap
  *
  * This is a minimal bootstrap file that acts as an interpreter for user scripts.
  * When compiled with qnc using the -D flag for all node modules, it creates
@@ -19,7 +19,7 @@ import { stripTypeScriptTypes } from "node:module"
 // Register source transform for .ts module loading.
 // Tries strip mode first (preserves source positions for accurate error locations),
 // falls back to full transform for constructs strip mode can't handle (enums, namespaces).
-std._setSourceTransform((source, filename) => {
+__qn_setSourceTransform((source, filename) => {
 	if (!filename.endsWith(".ts")) return source
 	try {
 		return stripTypeScriptTypes(source)

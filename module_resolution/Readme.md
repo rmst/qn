@@ -38,7 +38,7 @@ Relative imports resolve against the **real location** (after symlink resolution
 
 **Bundler mode** (default): extension probing enabled, more lenient.
 
-**Node mode** (`QJSX_MODULE_RESOLUTION=node`): explicit extensions required, matches Node.js ESM exactly. NODE_PATH and colon-to-slash still work.
+**Node mode** (`QN_MODULE_RESOLUTION=node`): explicit extensions required, matches Node.js ESM exactly. NODE_PATH and colon-to-slash still work.
 
 
 ## Standalone Compiled Binaries
@@ -104,7 +104,7 @@ See [qnc.md](../qnc.md) for the full specification: package structure, `package.
 ## Debugging
 
 ```bash
-QJSX_MODULE_DEBUG=1 ./bin/qjsx script.js
+QN_MODULE_DEBUG=1 ./bin/qn script.js
 ```
 
 Shows normalizer inputs, realpath results, import map hits, and final resolved names.

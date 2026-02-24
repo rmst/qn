@@ -1,8 +1,8 @@
 /*
- * QJSX Module Resolution System
+ * Qn Module Resolution System
  *
  * Shared module resolution functions for Node.js-style module resolution.
- * Used by both qjsx (interpreter) and qnc (compiler).
+ * Used by both qn (interpreter) and qnc (compiler).
  *
  * Features:
  * - NODE_PATH environment variable support (colon-separated search directories)
@@ -14,12 +14,12 @@
  *
  * Environment variables:
  * - NODE_PATH: Colon-separated list of directories to search for bare imports
- * - QJSX_MODULE_RESOLUTION: Set to "node" for strict Node.js ESM mode
- * - QJSX_MODULE_DEBUG: Set to "1" to enable debug output
+ * - QN_MODULE_RESOLUTION: Set to "node" for strict Node.js ESM mode
+ * - QN_MODULE_DEBUG: Set to "1" to enable debug output
  */
 
-#ifndef QJSX_MODULE_RESOLUTION_H
-#define QJSX_MODULE_RESOLUTION_H
+#ifndef QN_MODULE_RESOLUTION_H
+#define QN_MODULE_RESOLUTION_H
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -37,7 +37,7 @@
 static int module_debug_enabled(void) {
     static int cached = -1;
     if (cached == -1) {
-        const char *v = getenv("QJSX_MODULE_DEBUG");
+        const char *v = getenv("QN_MODULE_DEBUG");
         cached = (v && v[0] == '1');
     }
     return cached;
@@ -222,7 +222,7 @@ static char *translate_colons_to_slashes(JSContext *ctx, const char *name) {
 /**
  * Check if Node.js strict resolution mode is enabled.
  *
- * Node mode (QJSX_MODULE_RESOLUTION=node):
+ * Node mode (QN_MODULE_RESOLUTION=node):
  *   - Matches Node.js ESM behavior exactly
  *   - Explicit extensions required (no .js fallback)
  *   - No automatic index.js resolution
@@ -233,7 +233,7 @@ static char *translate_colons_to_slashes(JSContext *ctx, const char *name) {
  *   - "./dir" resolves to "./dir/index.js" if it exists
  */
 static int is_node_resolution(void) {
-    const char *mode = getenv("QJSX_MODULE_RESOLUTION");
+    const char *mode = getenv("QN_MODULE_RESOLUTION");
     return mode && strcmp(mode, "node") == 0;
 }
 
@@ -270,12 +270,12 @@ typedef struct {
     const char *base_name;   /* importing module (embedded:// prefixed) */
     const char *specifier;   /* original import specifier */
     const char *resolved;    /* resolved name (embedded:// prefixed) */
-} QJSXImportMapEntry;
+} QNImportMapEntry;
 
 /**
  * Callback for recording import map entries at compile time.
  */
-typedef void (*QJSXImportRecordFn)(const char *base, const char *specifier, const char *resolved);
+typedef void (*QNImportRecordFn)(const char *base, const char *specifier, const char *resolved);
 
 /**
  * Context for module resolution, passed via opaque parameter.
@@ -286,11 +286,11 @@ typedef void (*QJSXImportRecordFn)(const char *base, const char *specifier, cons
  */
 typedef struct {
     const char **embedded_modules;
-    const QJSXImportMapEntry *import_map;
+    const QNImportMapEntry *import_map;
     int import_map_count;
     int compile_mode;           /* 1 = compiler, prefix all with embedded:// */
-    QJSXImportRecordFn record_import;  /* compile-time: record (base, spec, resolved) */
-} QJSXModuleResolverContext;
+    QNImportRecordFn record_import;  /* compile-time: record (base, spec, resolved) */
+} QNModuleResolverContext;
 
 /**
  * Check if a module name exists in the embedded modules list.
@@ -307,7 +307,7 @@ static int embedded_module_exists(const char **modules, const char *name) {
  * Look up a (base_name, specifier) pair in the import map.
  * Returns the resolved name (embedded:// prefixed) or NULL.
  */
-static const char *import_map_lookup(const QJSXImportMapEntry *map, int count,
+static const char *import_map_lookup(const QNImportMapEntry *map, int count,
                                      const char *base_name, const char *specifier) {
     if (!map) return NULL;
     for (int i = 0; i < count; i++) {
@@ -836,7 +836,7 @@ static char *resolve_bare_to_disk(JSContext *ctx, const char *resolved,
  */
 static char *compile_mode_normalize(JSContext *ctx, const char *base_name,
                                     const char *name,
-                                    QJSXModuleResolverContext *resolver_ctx) {
+                                    QNModuleResolverContext *resolver_ctx) {
     const char *raw_base = has_embedded_prefix(base_name)
         ? base_name + EMBEDDED_PREFIX_LEN : base_name;
 
@@ -955,9 +955,9 @@ static char *compile_mode_normalize(JSContext *ctx, const char *base_name,
  *
  * The "file://" protocol forces disk loading from embedded code.
  */
-static char *qjsx_module_normalizer(JSContext *ctx, const char *base_name,
+static char *qn_module_normalizer(JSContext *ctx, const char *base_name,
                                     const char *name, void *opaque) {
-    QJSXModuleResolverContext *resolver_ctx = (QJSXModuleResolverContext *)opaque;
+    QNModuleResolverContext *resolver_ctx = (QNModuleResolverContext *)opaque;
     const char **embedded_modules = resolver_ctx ? resolver_ctx->embedded_modules : NULL;
     int base_is_embedded = has_embedded_prefix(base_name);
 
@@ -1170,4 +1170,57 @@ static char *qjsx_module_normalizer(JSContext *ctx, const char *base_name,
     return resolved;
 }
 
-#endif /* QJSX_MODULE_RESOLUTION_H */
+/* ========================================================================
+ * SOURCE-TRANSFORM-AWARE MODULE LOADER
+ * ========================================================================
+ *
+ * qn_module_loader replaces js_module_loader for runtime use.
+ * It loads source from disk, applies the per-thread source transform
+ * (qn_apply_source_transform from qn-vm.h), then compiles.
+ * JSON and .so modules are delegated to js_module_loader.
+ */
+
+/* From qn-vm.h — apply per-thread source transform before compilation */
+extern uint8_t *qn_apply_source_transform(JSContext *ctx, uint8_t *buf,
+                                           size_t buf_len, const char *filename,
+                                           size_t *out_len);
+
+/* Load a module from disk with source transform applied.
+   This replaces js_module_loader for our use — we load the file, apply
+   any source transform, then compile. JSON and .so modules are delegated
+   to js_module_loader since they don't need source transform. */
+static JSModuleDef *qn_module_loader(JSContext *ctx, const char *module_name,
+                                      void *opaque, JSValueConst attributes) {
+    /* .so and JSON modules: delegate to quickjs-libc's default loader */
+    if (has_suffix(module_name, ".so") ||
+        has_suffix(module_name, ".json") ||
+        js_module_test_json(ctx, attributes) > 0) {
+        return js_module_loader(ctx, module_name, opaque, attributes);
+    }
+
+    size_t buf_len;
+    uint8_t *buf = js_load_file(ctx, &buf_len, module_name);
+    if (!buf) {
+        JS_ThrowReferenceError(ctx, "could not load module filename '%s'",
+                               module_name);
+        return NULL;
+    }
+
+    /* Apply source transform (e.g. TypeScript stripping) */
+    buf = qn_apply_source_transform(ctx, buf, buf_len, module_name, &buf_len);
+    if (!buf)
+        return NULL;
+
+    /* Compile as module */
+    JSValue func_val = JS_Eval(ctx, (char *)buf, buf_len, module_name,
+                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    js_free(ctx, buf);
+    if (JS_IsException(func_val))
+        return NULL;
+    js_module_set_import_meta(ctx, func_val, TRUE, FALSE);
+    JSModuleDef *m = JS_VALUE_GET_PTR(func_val);
+    JS_FreeValue(ctx, func_val);
+    return m;
+}
+
+#endif /* QN_MODULE_RESOLUTION_H */

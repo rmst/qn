@@ -22,7 +22,7 @@ const test = (name, fn) => {
 	const runtimes = process.env.NO_NODEJS_TESTS ? ['qn'] : ['node', 'qn']
 	for (const runtime of runtimes) {
 		const bin = runtime === 'node' ? 'node' : QN()
-		const env = runtime === 'qn' ? 'QJSX_MODULE_RESOLUTION=node' : ''
+		const env = runtime === 'qn' ? 'QN_MODULE_RESOLUTION=node' : ''
 		nodetest(`${name} [${runtime}]`, () => {
 			const dir = mktempdir()
 			try {
