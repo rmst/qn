@@ -8,7 +8,7 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 
 **Bootstrap and REPL** (`node/bootstrap.js`, `node/node-globals.js`, `node/repl.js`) — ~1.9K LOC JS. Startup, global setup, interactive shell.
 
-**qn modules** (`node/qn/`) — ~0.5K LOC JS. Higher-level APIs: HTTP server (`qn:http`), TypeScript transform (`qn:sucrase`), libuv JS wrappers.
+**qn modules** (`node/qn/`) — ~0.5K LOC JS. Higher-level APIs: HTTP server (`qn:http`), pseudo-terminal (`qn:pty`), TypeScript transform (`qn:sucrase`), libuv JS wrappers.
 
 **qx** (`qx/`) — ~1K LOC JS. Shell scripting with `$` function (similar to zx).
 
@@ -18,7 +18,8 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 - `qn-uv-stream.c` (634) — unified TCP/Pipe/TTY stream abstraction
 - `qn-uv-dgram.c` (310) — UDP datagram sockets via `uv_udp_t`
 - `qn-uv-process.c` (698) — child process spawning via `uv_spawn`
-- `qn-uv-utils.c` (503) — shared promise plumbing, error handling
+- `qn-uv-pty.c` (480) — pseudo-terminal support via `forkpty` + libuv async I/O
+- `qn-uv-utils.c` (540) — shared promise plumbing, error handling, string array helpers
 - `qn-uv-signals.c` (181) — signal handling via `uv_signal_t`
 - `qn-uv-dns.c` (163) — async DNS resolution via `uv_getaddrinfo`
 

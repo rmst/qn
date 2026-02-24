@@ -489,6 +489,46 @@ int qn_getsignum(const char *sig_str) {
  * call_handler wrapper
  * ========================================================================== */
 
+/* ==========================================================================
+ * JS array ↔ C string array helpers
+ * ========================================================================== */
+
+char **qn_js_strings(JSContext *ctx, JSValue arr, int *out_count) {
+	int64_t len;
+	JSValue val = JS_GetPropertyStr(ctx, arr, "length");
+	JS_ToInt64(ctx, &len, val);
+	JS_FreeValue(ctx, val);
+
+	char **result = js_malloc(ctx, sizeof(char *) * (len + 1));
+	if (!result) return NULL;
+
+	for (int64_t i = 0; i < len; i++) {
+		JSValue elem = JS_GetPropertyUint32(ctx, arr, i);
+		const char *str = JS_ToCString(ctx, elem);
+		JS_FreeValue(ctx, elem);
+		if (!str) {
+			for (int64_t j = 0; j < i; j++)
+				JS_FreeCString(ctx, result[j]);
+			js_free(ctx, result);
+			return NULL;
+		}
+		result[i] = (char *)str;
+	}
+	result[len] = NULL;
+	if (out_count) *out_count = (int)len;
+	return result;
+}
+
+void qn_free_strings(JSContext *ctx, char **strs, int count) {
+	for (int i = 0; i < count; i++)
+		JS_FreeCString(ctx, strs[i]);
+	js_free(ctx, strs);
+}
+
+/* ==========================================================================
+ * call_handler wrapper
+ * ========================================================================== */
+
 void qn_call_handler(JSContext *ctx, JSValue func, int argc, JSValue *argv) {
 	JSValue ret, func1;
 	/* 'func' might be destroyed when calling itself (if it frees the

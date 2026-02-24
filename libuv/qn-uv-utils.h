@@ -192,4 +192,17 @@ void qn_call_handler(JSContext *ctx, JSValue func, int argc, JSValue *argv);
 void qn_dump_error(JSContext *ctx);
 void qn_dump_error1(JSContext *ctx, JSValue exception_val);
 
+/* --------------------------------------------------------------------------
+ * JS array ↔ C string array helpers
+ * -------------------------------------------------------------------------- */
+
+/* Convert a JS array of strings to a NULL-terminated C string array.
+ * Each element is obtained via JS_ToCString (must be freed with JS_FreeCString).
+ * The array itself is allocated with js_malloc. Returns NULL on error.
+ * If out_count is non-NULL, it receives the number of strings (excluding NULL). */
+char **qn_js_strings(JSContext *ctx, JSValue arr, int *out_count);
+
+/* Free a string array returned by qn_js_strings. */
+void qn_free_strings(JSContext *ctx, char **strs, int count);
+
 #endif /* QN_UV_UTILS_H */

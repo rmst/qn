@@ -119,41 +119,6 @@ enum {
 	PROC_KILL_PID,
 };
 
-/* ---- Helper: convert JS string array to C string array ---- */
-
-static char **js_array_to_cstrings(JSContext *ctx, JSValue arr, int *out_count) {
-	int64_t len;
-	JSValue val = JS_GetPropertyStr(ctx, arr, "length");
-	JS_ToInt64(ctx, &len, val);
-	JS_FreeValue(ctx, val);
-
-	char **result = js_malloc(ctx, sizeof(char *) * (len + 1));
-	if (!result) return NULL;
-
-	for (int64_t i = 0; i < len; i++) {
-		JSValue elem = JS_GetPropertyUint32(ctx, arr, i);
-		const char *str = JS_ToCString(ctx, elem);
-		JS_FreeValue(ctx, elem);
-		if (!str) {
-			/* Cleanup on error */
-			for (int64_t j = 0; j < i; j++)
-				JS_FreeCString(ctx, result[j]);
-			js_free(ctx, result);
-			return NULL;
-		}
-		result[i] = (char *)str;
-	}
-	result[len] = NULL;
-	if (out_count) *out_count = (int)len;
-	return result;
-}
-
-static void free_cstrings(JSContext *ctx, char **strs, int count) {
-	for (int i = 0; i < count; i++)
-		JS_FreeCString(ctx, strs[i]);
-	js_free(ctx, strs);
-}
-
 /* ---- Shared argument parsing for spawn/spawnSync ---- */
 
 typedef struct {
@@ -180,13 +145,13 @@ static int spawn_args_parse(JSContext *ctx, int nargs, JSValueConst *args,
 	if (!sa->file) return -1;
 
 	if (!JS_IsUndefined(args[1])) {
-		sa->c_args = js_array_to_cstrings(ctx, args[1], &sa->args_count);
+		sa->c_args = qn_js_strings(ctx, args[1], &sa->args_count);
 		if (!sa->c_args) { JS_FreeCString(ctx, sa->file); return -1; }
 	}
 
 	sa->spawn_args = js_malloc(ctx, sizeof(char *) * (sa->args_count + 2));
 	if (!sa->spawn_args) {
-		if (sa->c_args) free_cstrings(ctx, sa->c_args, sa->args_count);
+		if (sa->c_args) qn_free_strings(ctx, sa->c_args, sa->args_count);
 		JS_FreeCString(ctx, sa->file);
 		return -1;
 	}
@@ -206,7 +171,7 @@ static int spawn_args_parse(JSContext *ctx, int nargs, JSValueConst *args,
 
 		v = JS_GetPropertyStr(ctx, opts, "env");
 		if (!JS_IsUndefined(v) && !JS_IsNull(v))
-			sa->env = js_array_to_cstrings(ctx, v, &sa->env_count);
+			sa->env = qn_js_strings(ctx, v, &sa->env_count);
 		JS_FreeValue(ctx, v);
 
 		v = JS_GetPropertyStr(ctx, opts, "detached");
@@ -218,10 +183,10 @@ static int spawn_args_parse(JSContext *ctx, int nargs, JSValueConst *args,
 
 static void spawn_args_free(JSContext *ctx, SpawnArgs *sa) {
 	js_free(ctx, sa->spawn_args);
-	if (sa->c_args) free_cstrings(ctx, sa->c_args, sa->args_count);
+	if (sa->c_args) qn_free_strings(ctx, sa->c_args, sa->args_count);
 	JS_FreeCString(ctx, sa->file);
 	if (sa->cwd) JS_FreeCString(ctx, sa->cwd);
-	if (sa->env) free_cstrings(ctx, sa->env, sa->env_count);
+	if (sa->env) qn_free_strings(ctx, sa->env, sa->env_count);
 }
 
 /*

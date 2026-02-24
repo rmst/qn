@@ -43,7 +43,7 @@ LDFLAGS += -g
 endif
 LIBS = -lm -ldl -lpthread
 ifneq ($(PLATFORM),darwin)
-LIBS += -lrt
+LIBS += -lrt -lutil
 endif
 
 # Build directories (can be overridden: make BIN_DIR=/tmp/build)
@@ -215,12 +215,16 @@ $(BIN_DIR)/obj/qn-uv-dgram.o: libuv/qn-uv-dgram.c libuv/qn-uv-dgram.h libuv/qn-u
 $(BIN_DIR)/obj/qn-uv-process.o: libuv/qn-uv-process.c libuv/qn-uv-stream.h libuv/qn-uv-utils.h quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
 
+# Build qn-uv-pty (pseudo-terminal support via forkpty + libuv)
+$(BIN_DIR)/obj/qn-uv-pty.o: libuv/qn-uv-pty.c libuv/qn-uv-utils.h libuv/qn-vm.h quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)/obj
+	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
+
 # Build qn-vm (event loop ownership: timers, poll, uv_run)
 $(BIN_DIR)/obj/qn-vm.o: libuv/qn-vm.c libuv/qn-vm.h libuv/qn-uv-utils.h quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
 
 # Native C extensions for linking (sqlite is now auto-embedded via binding.gyp)
-NATIVE_OBJS = $(BIN_DIR)/obj/qn-uv-utils.o $(BIN_DIR)/obj/qn-uv-fs.o $(BIN_DIR)/obj/qn-uv-dns.o $(BIN_DIR)/obj/qn-uv-signals.o $(BIN_DIR)/obj/qn-uv-stream.o $(BIN_DIR)/obj/qn-uv-dgram.o $(BIN_DIR)/obj/qn-uv-process.o $(BIN_DIR)/obj/qn-vm.o
+NATIVE_OBJS = $(BIN_DIR)/obj/qn-uv-utils.o $(BIN_DIR)/obj/qn-uv-fs.o $(BIN_DIR)/obj/qn-uv-dns.o $(BIN_DIR)/obj/qn-uv-signals.o $(BIN_DIR)/obj/qn-uv-stream.o $(BIN_DIR)/obj/qn-uv-dgram.o $(BIN_DIR)/obj/qn-uv-process.o $(BIN_DIR)/obj/qn-uv-pty.o $(BIN_DIR)/obj/qn-vm.o
 # Generate version info module for qn/qx --version
 # Uses FORCE + cmp to always check but only update when content changes,
 # avoiding unnecessary rebuilds of qn/qx.
@@ -236,7 +240,8 @@ $(BIN_DIR)/obj/qn/version-info.js: FORCE | $(BIN_DIR)/obj
 # Common qnc flags for building qn/qx
 QNC_FLAGS = -M qn_uv_fs,qn_uv_fs -M qn_uv_dns,qn_uv_dns \
             -M qn_uv_signals,qn_uv_signals -M qn_uv_stream,qn_uv_stream \
-            -M qn_uv_dgram,qn_uv_dgram -M qn_uv_process,qn_uv_process -M qn_vm,qn_vm
+            -M qn_uv_dgram,qn_uv_dgram -M qn_uv_process,qn_uv_process \
+            -M qn_uv_pty,qn_uv_pty -M qn_vm,qn_vm
 QNC_MODULES = -D node-globals -D repl -D node:fs -D node:process \
               -D node:child_process -D node:crypto -D node:path -D node:events \
               -D node:stream -D node:stream/promises -D node:fs/promises \
@@ -244,7 +249,7 @@ QNC_MODULES = -D node-globals -D repl -D node:fs -D node:process \
               -D node:fetch/Headers -D node:fetch/Response -D node:dgram \
               -D node:net -D node:tls -D node:http -D node:http/parse \
               -D node:sqlite -D node:util -D node:assert -D node:test \
-              -D node:os -D qn:introspect -D qn:http -D qn:version-info \
+              -D node:os -D qn:introspect -D qn:http -D qn:pty -D qn:version-info \
               -D qn:sucrase -D node:module -D qx
 # Extra .o/.a files to pass through to the linker (non-packaged native modules)
 QNC_EXTRA_LINK = $(patsubst %,--link %,$(NATIVE_OBJS))
