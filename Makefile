@@ -122,8 +122,8 @@ $(LIBUV_LIB): $(addprefix $(LIBUV_DIR)/,$(LIBUV_SRCS)) | $(BIN_DIR)
 # After linking, copy support files next to it (for local builds) and embed them
 # into the binary (for standalone distribution).
 QNC_PACK = $(BIN_DIR)/qnc-pack
-$(QNC_PROG): $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/qnc-embed.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o $(BIN_DIR)/obj/introspect.o $(BIN_DIR)/obj/qn-vm.o $(BIN_DIR)/obj/qn-uv-utils.o quickjs-deps $(LIBUV_LIB) $(QNC_PACK) | $(BIN_DIR)
-	$(CC) $(LDFLAGS) -o $@ $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/qnc-embed.o $(QUICKJS_OBJS) $(LIBUV_LIB) $(LIBS)
+$(QNC_PROG): $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/qnc-embed.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o $(BIN_DIR)/obj/introspect.o $(BIN_DIR)/obj/qn-vm.o $(BIN_DIR)/obj/qn-uv-utils.o $(BIN_DIR)/obj/qn-worker.o quickjs-deps $(LIBUV_LIB) $(QNC_PACK) | $(BIN_DIR)
+	$(CC) $(LDFLAGS) -o $@ $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/qnc-embed.o $(BIN_DIR)/obj/qn-worker.o $(BIN_DIR)/obj/qn-vm.o $(BIN_DIR)/obj/qn-uv-utils.o $(QUICKJS_OBJS) $(LIBUV_LIB) $(LIBS)
 	chmod +x $@
 	cp $(BIN_DIR)/quickjs/*.h $(BIN_DIR)/
 	mkdir -p $(BIN_DIR)/module_resolution
@@ -131,11 +131,12 @@ $(QNC_PROG): $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/qnc-embed.o $(BIN_DIR)/obj/quic
 	cp exit-handler.h $(BIN_DIR)/
 	mkdir -p $(BIN_DIR)/libuv
 	cp libuv/qn-vm.h $(BIN_DIR)/libuv/
+	cp libuv/qn-worker.h $(BIN_DIR)/libuv/
 	cp $(BIN_DIR)/quickjs/libquickjs.a $(BIN_DIR)/
 	# Replace unpatched quickjs-libc.o with patched version in libquickjs.a
 	# Also add sandboxed-worker.o, introspect.o, qn-vm.o, qn-uv-utils.o which are required
 	ar d $(BIN_DIR)/libquickjs.a quickjs-libc.nolto.o 2>/dev/null || true
-	ar r $(BIN_DIR)/libquickjs.a $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o $(BIN_DIR)/obj/introspect.o $(BIN_DIR)/obj/qn-vm.o $(BIN_DIR)/obj/qn-uv-utils.o
+	ar r $(BIN_DIR)/libquickjs.a $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o $(BIN_DIR)/obj/introspect.o $(BIN_DIR)/obj/qn-vm.o $(BIN_DIR)/obj/qn-uv-utils.o $(BIN_DIR)/obj/qn-worker.o
 	# libuv.a is already in $(BIN_DIR) via $(LIBUV_LIB)
 	# Embed support files into the qnc binary for standalone use.
 	# Headers are embedded at both top level (for generated C includes)
@@ -152,6 +153,7 @@ $(QNC_PROG): $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/qnc-embed.o $(BIN_DIR)/obj/quic
 		module_resolution/module-resolution.h:module_resolution/module-resolution.h \
 		exit-handler.h:exit-handler.h \
 		libuv/qn-vm.h:libuv/qn-vm.h \
+		libuv/qn-worker.h:libuv/qn-worker.h \
 		libquickjs.a:$(BIN_DIR)/libquickjs.a \
 		libuv.a:$(LIBUV_LIB)
 
@@ -219,8 +221,12 @@ $(BIN_DIR)/obj/qn-uv-process.o: libuv/qn-uv-process.c libuv/qn-uv-stream.h libuv
 $(BIN_DIR)/obj/qn-vm.o: libuv/qn-vm.c libuv/qn-vm.h libuv/qn-uv-utils.h quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
 
+# Build qn-worker (Web Worker API via libuv threads + socketpair)
+$(BIN_DIR)/obj/qn-worker.o: libuv/qn-worker.c libuv/qn-worker.h libuv/qn-vm.h libuv/qn-uv-utils.h quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)/obj
+	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
+
 # Native C extensions for linking (sqlite is now auto-embedded via binding.gyp)
-NATIVE_OBJS = $(BIN_DIR)/obj/qn-uv-utils.o $(BIN_DIR)/obj/qn-uv-fs.o $(BIN_DIR)/obj/qn-uv-dns.o $(BIN_DIR)/obj/qn-uv-signals.o $(BIN_DIR)/obj/qn-uv-stream.o $(BIN_DIR)/obj/qn-uv-dgram.o $(BIN_DIR)/obj/qn-uv-process.o $(BIN_DIR)/obj/qn-vm.o
+NATIVE_OBJS = $(BIN_DIR)/obj/qn-uv-utils.o $(BIN_DIR)/obj/qn-uv-fs.o $(BIN_DIR)/obj/qn-uv-dns.o $(BIN_DIR)/obj/qn-uv-signals.o $(BIN_DIR)/obj/qn-uv-stream.o $(BIN_DIR)/obj/qn-uv-dgram.o $(BIN_DIR)/obj/qn-uv-process.o $(BIN_DIR)/obj/qn-vm.o $(BIN_DIR)/obj/qn-worker.o
 # Generate version info module for qn/qx --version
 # Uses FORCE + cmp to always check but only update when content changes,
 # avoiding unnecessary rebuilds of qn/qx.
@@ -236,7 +242,8 @@ $(BIN_DIR)/obj/qn/version-info.js: FORCE | $(BIN_DIR)/obj
 # Common qnc flags for building qn/qx
 QNC_FLAGS = -M qn_uv_fs,qn_uv_fs -M qn_uv_dns,qn_uv_dns \
             -M qn_uv_signals,qn_uv_signals -M qn_uv_stream,qn_uv_stream \
-            -M qn_uv_dgram,qn_uv_dgram -M qn_uv_process,qn_uv_process -M qn_vm,qn_vm
+            -M qn_uv_dgram,qn_uv_dgram -M qn_uv_process,qn_uv_process -M qn_vm,qn_vm \
+            -M qn_worker,qn_worker
 QNC_MODULES = -D node-globals -D repl -D node:fs -D node:process \
               -D node:child_process -D node:crypto -D node:path -D node:events \
               -D node:stream -D node:stream/promises -D node:fs/promises \
@@ -245,7 +252,7 @@ QNC_MODULES = -D node-globals -D repl -D node:fs -D node:process \
               -D node:net -D node:tls -D node:http -D node:http/parse \
               -D node:sqlite -D node:util -D node:assert -D node:test \
               -D node:os -D qn:introspect -D qn:http -D qn:version-info \
-              -D qn:sucrase -D node:module -D qx
+              -D qn:sucrase -D qn:worker -D node:module -D qx
 # Extra .o/.a files to pass through to the linker (non-packaged native modules)
 QNC_EXTRA_LINK = $(patsubst %,--link %,$(NATIVE_OBJS))
 

@@ -286,6 +286,10 @@ globalThis.process = process
 import { Buffer } from "node:buffer"
 globalThis.Buffer = Buffer
 
+// Worker (Web standard)
+import { Worker } from "qn:worker"
+globalThis.Worker = Worker
+
 // Add missing console methods for Node.js compatibility
 console.error = (...args) => { std.err.puts(args.join(' ') + '\n'); std.err.flush() }
 console.warn = console.error
