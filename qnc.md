@@ -164,6 +164,22 @@ This is used in the qn Makefile for libuv binding modules that are core infrastr
 
 `-M name,cname` registers an external C module by declaring its init function. This is the manual equivalent of what automatic `package.json` `"qnc"` detection does. With `-M qn_tls,qn_tls`, qnc emits a call to `js_init_module_qn_tls()` at startup. The corresponding `.o` file must be provided via `--link`.
 
+## Building Native Modules for Development
+
+`qnc package` builds a `.so` from a native module's `package.json` `"qnc"` field, for use with the `qn` interpreter during development:
+
+```bash
+qnc package node/node/sqlite/           # outputs node/node/sqlite/sqlite_native.so
+qnc package -o /tmp/test.so mymodule/   # custom output path
+qnc package -v .                        # verbose, current directory
+```
+
+This reads the same `"qnc"` config that static linking uses, but compiles with `-fPIC` and links with `-shared` instead. The `js_init_module` symbol is exported as-is (no renaming) so QuickJS can load it via `dlopen`.
+
+Options: `-o output` (set output path), `-v` (verbose), `-h` (help). Default output is `<dir>/<target_name>.so`.
+
+This gives a smooth development workflow: use `qnc package` to build `.so` files for iterating with `qn`, then `qnc -o` for the final standalone binary — both driven by the same `package.json` config.
+
 ## How qn is built
 
 The qn runtime itself is built using qnc:
