@@ -131,9 +131,24 @@ A `binding.gyp` can coexist in the same directory for Node.js compatibility via 
 }
 ```
 
-Supported fields: `target_name`, `sources`, `source_dirs`, `include_dirs`, `defines`, `cflags`. Paths are relative to the `package.json` file. `target_name` must match the `.so` filename without extension. qnc automatically adds QuickJS include dirs so native modules can `#include "quickjs.h"`.
+Supported fields:
 
-The `source_dirs` field recursively collects all `.c` files from the listed directories. This is useful for large vendored libraries like BearSSL (~294 source files across subdirectories):
+| Field | Description |
+|---|---|
+| `target_name` | Must match the `.so` filename without extension |
+| `sources` | C source files to compile |
+| `source_dirs` | Directories to recursively scan for `.c` files |
+| `objects` | Pre-built `.o` or `.a` files to link directly (for modules built with other toolchains) |
+| `include_dirs` | Include search paths for the compiler |
+| `defines` | Preprocessor definitions |
+| `cflags` | Additional compiler flags |
+| `ldflags` | Additional linker flags (e.g. `["-lz"]`) |
+
+Paths are relative to the `package.json` file. qnc automatically adds QuickJS include dirs so native modules can `#include "quickjs.h"`.
+
+The `objects` field is useful for modules built with non-C toolchains (Zig, Rust, etc.). The user builds a `.o` or `.a` externally, and qnc links it. For static linking, the object must export `js_init_module_<target_name>` (the renamed symbol). For `qnc package`, it should export `js_init_module` (the original name).
+
+`source_dirs` recursively collects all `.c` files from the listed directories. This is useful for large vendored libraries like BearSSL (~294 source files across subdirectories):
 
 ```json
 {
