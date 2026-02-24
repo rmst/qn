@@ -100,11 +100,12 @@ static void pty_close_handles(QNPty *p) {
 		uv_close((uv_handle_t *)&p->sigchld, pty_sigchld_close_cb);
 }
 
-/* ---- SIGCHLD handler ---- */
+/* ---- Exit detection ---- */
 
-static void pty_sigchld_cb(uv_signal_t *handle, int signum) {
-	QNPty *p = handle->data;
-	(void)signum;
+/* Try to reap the child and fire onExit. Called from both SIGCHLD and
+ * pipe EOF (the latter is needed on macOS where libuv's internal SIGCHLD
+ * handler may reap the child before our uv_signal_t fires). */
+static void pty_try_reap(QNPty *p) {
 	if (p->exited) return;
 
 	int status;
@@ -135,6 +136,11 @@ static void pty_sigchld_cb(uv_signal_t *handle, int signum) {
 	pty_close_handles(p);
 }
 
+static void pty_sigchld_cb(uv_signal_t *handle, int signum) {
+	(void)signum;
+	pty_try_reap(handle->data);
+}
+
 /* ---- Read callback ---- */
 
 static void pty_alloc_cb(uv_handle_t *handle, size_t suggested, uv_buf_t *buf) {
@@ -159,8 +165,9 @@ static void pty_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
 	free(buf->base);
 
 	if (nread < 0) {
-		/* EIO is normal when the slave side closes */
+		/* EIO/EOF is normal when the slave side closes */
 		uv_read_stop(stream);
+		pty_try_reap(p);
 	}
 }
 
