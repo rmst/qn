@@ -559,7 +559,10 @@ static JSValue js_uv_fsop(JSContext *ctx, JSValueConst this_val,
 		if (!s1) goto fail;
 		s2 = JS_ToCString(ctx, args[1]);
 		if (!s2) { JS_FreeCString(ctx, s1); goto fail; }
-		r = uv_fs_copyfile(loop, &fr->req, s1, s2, 0, qn_fs_req_cb);
+		i1 = 0;
+		if (nargs > 2 && !JS_IsUndefined(args[2]))
+			if (JS_ToInt32(ctx, &i1, args[2])) { JS_FreeCString(ctx, s1); JS_FreeCString(ctx, s2); goto fail; }
+		r = uv_fs_copyfile(loop, &fr->req, s1, s2, i1, qn_fs_req_cb);
 		JS_FreeCString(ctx, s1);
 		JS_FreeCString(ctx, s2);
 		break;
@@ -732,7 +735,10 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 		if (!s1) return JS_EXCEPTION;
 		s2 = JS_ToCString(ctx, args[1]);
 		if (!s2) { JS_FreeCString(ctx, s1); return JS_EXCEPTION; }
-		r = uv_fs_copyfile(NULL, &req, s1, s2, 0, NULL);
+		i1 = 0;
+		if (argc > 3 && !JS_IsUndefined(args[2]))
+			if (JS_ToInt32(ctx, &i1, args[2])) { JS_FreeCString(ctx, s1); JS_FreeCString(ctx, s2); return JS_EXCEPTION; }
+		r = uv_fs_copyfile(NULL, &req, s1, s2, i1, NULL);
 		JS_FreeCString(ctx, s1);
 		JS_FreeCString(ctx, s2);
 		break;

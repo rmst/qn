@@ -276,10 +276,7 @@ export function rmdir(path) {
 }
 
 export function copyFile(src, dest, mode) {
-	if (mode !== undefined && mode !== 0) {
-		throw new Error("copyFile: mode flags are not supported")
-	}
-	return uv_fs.copyfile(String(src), String(dest))
+	return uv_fs.copyfile(String(src), String(dest), mode ?? 0)
 }
 
 export function mkdtemp(prefix) {

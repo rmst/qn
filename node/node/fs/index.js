@@ -323,10 +323,7 @@ export function chmodSync(path, mode) {
 }
 
 export function copyFileSync(src, dest, mode) {
-	if (mode !== undefined) {
-		throw new Error('copyFileSync mode argument is not supported')
-	}
-	native_copyfile(src, dest)
+	native_copyfile(src, dest, mode ?? 0)
 }
 
 export function cpSync(src, dest, options = {}) {
