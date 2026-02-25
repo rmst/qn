@@ -8,6 +8,7 @@
 import * as std from "std"
 import {
 	setTimeout as _setTimeout, clearTimeout as _clearTimeout,
+	timerRef as _timerRef, timerUnref as _timerUnref,
 	setReadHandler, setWriteHandler,
 	hrtime as _hrtime,
 } from 'qn_vm'
@@ -39,20 +40,29 @@ export class NodeCompatibilityError extends Error {
 	}
 }
 
+// Timer handle wrapper — matches Node.js Timeout interface (ref/unref/Symbol.toPrimitive)
+class TimerHandle {
+	#id
+	constructor(id) { this.#id = id }
+	ref() { _timerRef(this.#id); return this }
+	unref() { _timerUnref(this.#id); return this }
+	[Symbol.toPrimitive]() { return this.#id }
+}
+
 // Timer globals (backed by libuv uv_timer_t via qn_vm)
 globalThis.setTimeout = (fn, delay, ...args) => {
 	if (args.length > 0) {
 		throw new NodeCompatibilityError('setTimeout does not support passing arguments to callback. Use an arrow function instead.')
 	}
-	return _setTimeout(fn, delay)
+	return new TimerHandle(_setTimeout(fn, delay))
 }
 
-globalThis.clearTimeout = _clearTimeout
+globalThis.clearTimeout = (handle) => _clearTimeout(+handle)
 
 globalThis.setImmediate = (fn, ...args) => {
-	return _setTimeout(() => fn(...args), 0)
+	return new TimerHandle(_setTimeout(() => fn(...args), 0))
 }
-globalThis.clearImmediate = _clearTimeout
+globalThis.clearImmediate = (handle) => _clearTimeout(+handle)
 
 const _intervals = new Map()
 let _intervalId = 1
@@ -61,14 +71,23 @@ globalThis.setInterval = (fn, delay, ...args) => {
 	if (args.length > 0)
 		throw new NodeCompatibilityError('setInterval does not support passing arguments to callback. Use an arrow function instead.')
 	const id = _intervalId++
+	let unrefd = false
 	const tick = () => {
 		if (!_intervals.has(id)) return
 		try { fn() } catch (e) { console.error(e) }
-		if (_intervals.has(id))
-			_intervals.set(id, _setTimeout(tick, delay))
+		if (_intervals.has(id)) {
+			const timerId = _setTimeout(tick, delay)
+			if (unrefd) _timerUnref(timerId)
+			_intervals.set(id, timerId)
+		}
 	}
-	_intervals.set(id, _setTimeout(tick, delay))
-	return { ref() {}, unref() {}, [Symbol.toPrimitive]() { return id } }
+	const timerId = _setTimeout(tick, delay)
+	_intervals.set(id, timerId)
+	return {
+		ref() { unrefd = false; _timerRef(_intervals.get(id)); return this },
+		unref() { unrefd = true; _timerUnref(_intervals.get(id)); return this },
+		[Symbol.toPrimitive]() { return id },
+	}
 }
 
 globalThis.clearInterval = (handle) => {

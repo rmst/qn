@@ -1,0 +1,7 @@
+{
+	"name": "test-native",
+	"qnc": {
+		"target_name": "test_native",
+		"sources": ["test_native.c"]
+	}
+}

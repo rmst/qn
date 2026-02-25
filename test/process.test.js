@@ -236,4 +236,69 @@ describe('node:process shim', () => {
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { exists: true, threw: true, code: 'ESRCH' })
 	})
+
+	test('process.once fires handler only once', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import process from 'node:process'
+			let count = 0
+			process.once('exit', () => { count++ })
+			// exit handlers fire once on exit — count should be 1
+			process.on('exit', () => {
+				console.log(JSON.stringify({ count }))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { count: 1 })
+	})
+
+	test('process.off removes event handler', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import process from 'node:process'
+			let called = false
+			const handler = () => { called = true }
+			process.on('exit', handler)
+			process.off('exit', handler)
+			process.on('exit', () => {
+				console.log(JSON.stringify({ called }))
+			})
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { called: false })
+	})
+
+	test('os.arch returns valid architecture string', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { arch } from 'node:os'
+			const a = arch()
+			const valid = ['x64', 'arm64', 'arm', 'ia32', 's390x', 'ppc64', 'riscv64'].includes(a)
+			console.log(JSON.stringify({ arch: a, valid }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.valid, true, `os.arch() returned unexpected value: ${result.arch}`)
+	})
+
+	test('os.arch matches process output', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { arch } from 'node:os'
+			import { execSync } from 'node:child_process'
+			const osArch = arch()
+			const uname = execSync('uname -m', { encoding: 'utf8' }).trim()
+			// Map uname to Node.js arch names
+			const expected = {
+				'x86_64': 'x64', 'amd64': 'x64',
+				'aarch64': 'arm64', 'arm64': 'arm64',
+				'armv7l': 'arm',
+				'i686': 'ia32', 'i386': 'ia32',
+			}[uname] || uname
+			console.log(JSON.stringify({ osArch, expected, match: osArch === expected }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.match, true, `os.arch()=${result.osArch} doesn't match uname=${result.expected}`)
+	})
 })

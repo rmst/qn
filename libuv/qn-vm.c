@@ -294,6 +294,30 @@ static JSValue js_vm_setTimeout(JSContext *ctx, JSValueConst this_val,
 	return JS_NewInt32(ctx, t->id);
 }
 
+/* JS: timerUnref(timer_id) — stop timer from keeping event loop alive */
+static JSValue js_vm_timerUnref(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv) {
+	int id;
+	if (JS_ToInt32(ctx, &id, argv[0]))
+		return JS_EXCEPTION;
+	QNTimer *t = timer_find(id);
+	if (t)
+		uv_unref((uv_handle_t *)&t->handle);
+	return JS_UNDEFINED;
+}
+
+/* JS: timerRef(timer_id) — re-ref timer so it keeps event loop alive */
+static JSValue js_vm_timerRef(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv) {
+	int id;
+	if (JS_ToInt32(ctx, &id, argv[0]))
+		return JS_EXCEPTION;
+	QNTimer *t = timer_find(id);
+	if (t)
+		uv_ref((uv_handle_t *)&t->handle);
+	return JS_UNDEFINED;
+}
+
 /* JS: clearTimeout(timer_id) */
 static JSValue js_vm_clearTimeout(JSContext *ctx, JSValueConst this_val,
                                   int argc, JSValueConst *argv) {
@@ -635,6 +659,28 @@ static JSValue js_vm_getPlatform(JSContext *ctx, JSValueConst this_val,
 	return JS_NewString(ctx, info.sysname);
 }
 
+/* JS: getArch() → string ("x64", "arm64", etc.) */
+static JSValue js_vm_getArch(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv) {
+	uv_utsname_t info;
+	int r = uv_os_uname(&info);
+	if (r != 0)
+		return qn_throw_errno(ctx, r);
+	const char *machine = info.machine;
+	const char *arch;
+	if (strcmp(machine, "x86_64") == 0 || strcmp(machine, "amd64") == 0)
+		arch = "x64";
+	else if (strcmp(machine, "aarch64") == 0 || strcmp(machine, "arm64") == 0)
+		arch = "arm64";
+	else if (strcmp(machine, "armv7l") == 0)
+		arch = "arm";
+	else if (strcmp(machine, "i686") == 0 || strcmp(machine, "i386") == 0)
+		arch = "ia32";
+	else
+		arch = machine;
+	return JS_NewString(ctx, arch);
+}
+
 /* --------------------------------------------------------------------------
  * JS module: qn_vm
  * -------------------------------------------------------------------------- */
@@ -642,6 +688,8 @@ static JSValue js_vm_getPlatform(JSContext *ctx, JSValueConst this_val,
 static const JSCFunctionListEntry vm_funcs[] = {
 	QN_CFUNC_DEF("setTimeout", 2, js_vm_setTimeout),
 	QN_CFUNC_DEF("clearTimeout", 1, js_vm_clearTimeout),
+	QN_CFUNC_DEF("timerRef", 1, js_vm_timerRef),
+	QN_CFUNC_DEF("timerUnref", 1, js_vm_timerUnref),
 	QN_CFUNC_MAGIC_DEF("setReadHandler", 2, js_vm_setRWHandler, 0),
 	QN_CFUNC_MAGIC_DEF("setWriteHandler", 2, js_vm_setRWHandler, 1),
 	QN_CFUNC_DEF("randomFill", 1, js_vm_randomFill),
@@ -656,6 +704,7 @@ static const JSCFunctionListEntry vm_funcs[] = {
 	QN_CFUNC_DEF("getPid", 0, js_vm_getPid),
 	QN_CFUNC_DEF("hrtime", 0, js_vm_hrtime),
 	QN_CFUNC_DEF("getPlatform", 0, js_vm_getPlatform),
+	QN_CFUNC_DEF("getArch", 0, js_vm_getArch),
 };
 
 static int js_vm_module_init(JSContext *ctx, JSModuleDef *m) {

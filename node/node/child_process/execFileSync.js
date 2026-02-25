@@ -57,8 +57,8 @@ export function execFileSync(file, args = [], options = {}) {
 	})
 
 	// Helper to get string version of output for error messages
-	const outputStr = useUtf8 ? result.stdout : bytesToString(result.stdout)
-	const errorOutputStr = useUtf8 ? result.stderr : bytesToString(result.stderr)
+	const outputStr = useUtf8 ? result.stdout : _bytesToString(result.stdout)
+	const errorOutputStr = useUtf8 ? result.stderr : _bytesToString(result.stderr)
 
 	// Handle timeout
 	if (result.error) {
@@ -99,12 +99,8 @@ export function execFileSync(file, args = [], options = {}) {
 		throw error
 	}
 
-	// Return trimmed output
-	if (useUtf8) {
-		return result.stdout.trim()
-	} else {
-		return trimBytes(result.stdout)
-	}
+	// Return raw output (Node.js does NOT trim)
+	return result.stdout
 }
 
 /**
@@ -112,37 +108,7 @@ export function execFileSync(file, args = [], options = {}) {
  * @param {Uint8Array|Buffer} bytes
  * @returns {string}
  */
-function bytesToString(bytes) {
+function _bytesToString(bytes) {
 	if (typeof bytes === 'string') return bytes
 	return std._decodeUtf8(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
-}
-
-/**
- * Trim trailing whitespace from Uint8Array.
- * @param {Uint8Array|Buffer} bytes
- * @returns {Buffer}
- */
-function trimBytes(bytes) {
-	if (typeof bytes === 'string') return bytes
-	let end = bytes.length
-	// Trim trailing whitespace (space, tab, newline, carriage return)
-	while (end > 0) {
-		const b = bytes[end - 1]
-		if (b === 0x20 || b === 0x09 || b === 0x0A || b === 0x0D) {
-			end--
-		} else {
-			break
-		}
-	}
-	// Trim leading whitespace
-	let start = 0
-	while (start < end) {
-		const b = bytes[start]
-		if (b === 0x20 || b === 0x09 || b === 0x0A || b === 0x0D) {
-			start++
-		} else {
-			break
-		}
-	}
-	return Buffer.from(bytes.subarray(start, end))
 }

@@ -970,6 +970,34 @@ describe('node:child_process shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { error: null, lineCount: 1000 })
 	})
 
+	test('execFileSync does not trim output', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execFileSync } from 'node:child_process'
+			const output = execFileSync('echo', ['hello'], { encoding: 'utf8' })
+			// Node.js returns 'hello\\n' (with trailing newline), not 'hello'
+			console.log(JSON.stringify({ endsWithNewline: output.endsWith('\\n'), raw: output }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.endsWithNewline, true, 'execFileSync should NOT trim trailing newline')
+		assert.strictEqual(result.raw, 'hello\n')
+	})
+
+	test('execSync does not trim output', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { execSync } from 'node:child_process'
+			const output = execSync('echo hello', { encoding: 'utf8' })
+			// Node.js returns 'hello\\n' (with trailing newline)
+			console.log(JSON.stringify({ endsWithNewline: output.endsWith('\\n'), raw: output }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.endsWithNewline, true, 'execSync should NOT trim trailing newline')
+		assert.strictEqual(result.raw, 'hello\n')
+	})
+
 	testQnOnly('spawn with detached creates new session and kills process group', ({ bin, dir }) => {
 		const marker = `${dir}/marker.txt`
 		writeFileSync(`${dir}/test.js`, `

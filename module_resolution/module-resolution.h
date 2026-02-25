@@ -1189,7 +1189,7 @@ extern uint8_t *qn_apply_source_transform(JSContext *ctx, uint8_t *buf,
    This replaces js_module_loader for our use — we load the file, apply
    any source transform, then compile. JSON and .so modules are delegated
    to js_module_loader since they don't need source transform. */
-static JSModuleDef *qn_module_loader(JSContext *ctx, const char *module_name,
+static __attribute__((unused)) JSModuleDef *qn_module_loader(JSContext *ctx, const char *module_name,
                                       void *opaque, JSValueConst attributes) {
     /* .so and JSON modules: delegate to quickjs-libc's default loader */
     if (has_suffix(module_name, ".so") ||

@@ -129,4 +129,52 @@ describe('node:events shim', () => {
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { args: [1, 'two', { three: 3 }] })
 	})
+
+	test('EventEmitter error event with no listeners throws', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { EventEmitter } from 'node:events'
+			const emitter = new EventEmitter()
+			let threw = false
+			let errorMsg = ''
+			try {
+				emitter.emit('error', new Error('test error'))
+			} catch (e) {
+				threw = true
+				errorMsg = e.message
+			}
+			console.log(JSON.stringify({ threw, errorMsg }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { threw: true, errorMsg: 'test error' })
+	})
+
+	test('EventEmitter error event with listener does not throw', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { EventEmitter } from 'node:events'
+			const emitter = new EventEmitter()
+			let caught = null
+			emitter.on('error', (err) => { caught = err.message })
+			emitter.emit('error', new Error('handled error'))
+			console.log(JSON.stringify({ caught }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { caught: 'handled error' })
+	})
+
+	test('EventEmitter prependListener fires first', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { EventEmitter } from 'node:events'
+			const emitter = new EventEmitter()
+			const order = []
+			emitter.on('test', () => order.push('first'))
+			emitter.prependListener('test', () => order.push('prepended'))
+			emitter.emit('test')
+			console.log(JSON.stringify({ order }))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { order: ['prepended', 'first'] })
+	})
 })

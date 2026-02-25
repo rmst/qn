@@ -6,6 +6,7 @@
 
 import * as qjsOs from 'os'
 import * as std from 'std'
+import { getArch as _getArch } from 'qn_vm'
 
 /**
  * Returns the operating system's default directory for temporary files.
@@ -41,9 +42,7 @@ export function platform() {
  * @returns {string} 'x64', 'arm64', etc.
  */
 export function arch() {
-	// QuickJS doesn't expose arch directly, try to detect
-	// This is a simplified implementation
-	return 'x64'
+	return _getArch()
 }
 
 /**
