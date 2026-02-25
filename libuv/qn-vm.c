@@ -294,6 +294,30 @@ static JSValue js_vm_setTimeout(JSContext *ctx, JSValueConst this_val,
 	return JS_NewInt32(ctx, t->id);
 }
 
+/* JS: timerUnref(timer_id) — stop timer from keeping event loop alive */
+static JSValue js_vm_timerUnref(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv) {
+	int id;
+	if (JS_ToInt32(ctx, &id, argv[0]))
+		return JS_EXCEPTION;
+	QNTimer *t = timer_find(id);
+	if (t)
+		uv_unref((uv_handle_t *)&t->handle);
+	return JS_UNDEFINED;
+}
+
+/* JS: timerRef(timer_id) — re-ref timer so it keeps event loop alive */
+static JSValue js_vm_timerRef(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv) {
+	int id;
+	if (JS_ToInt32(ctx, &id, argv[0]))
+		return JS_EXCEPTION;
+	QNTimer *t = timer_find(id);
+	if (t)
+		uv_ref((uv_handle_t *)&t->handle);
+	return JS_UNDEFINED;
+}
+
 /* JS: clearTimeout(timer_id) */
 static JSValue js_vm_clearTimeout(JSContext *ctx, JSValueConst this_val,
                                   int argc, JSValueConst *argv) {
@@ -664,6 +688,8 @@ static JSValue js_vm_getArch(JSContext *ctx, JSValueConst this_val,
 static const JSCFunctionListEntry vm_funcs[] = {
 	QN_CFUNC_DEF("setTimeout", 2, js_vm_setTimeout),
 	QN_CFUNC_DEF("clearTimeout", 1, js_vm_clearTimeout),
+	QN_CFUNC_DEF("timerRef", 1, js_vm_timerRef),
+	QN_CFUNC_DEF("timerUnref", 1, js_vm_timerUnref),
 	QN_CFUNC_MAGIC_DEF("setReadHandler", 2, js_vm_setRWHandler, 0),
 	QN_CFUNC_MAGIC_DEF("setWriteHandler", 2, js_vm_setRWHandler, 1),
 	QN_CFUNC_DEF("randomFill", 1, js_vm_randomFill),
