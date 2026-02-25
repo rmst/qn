@@ -345,7 +345,8 @@ Notes: Minimal fd-backed streams, not the full Node.js stream infrastructure.
 | `nextTick` | ✅ | Via `queueMicrotask` |
 | `getuid` / `getgid` | ✅ | |
 | `hrtime` / `memoryUsage` / `cpuUsage` | ❌ | |
-| `execPath` / `execArgv` / `arch` | ❌ | |
+| `arch` | ✅ | |
+| `execPath` / `execArgv` | ❌ | |
 
 ### node:os
 
@@ -353,7 +354,7 @@ Notes: Minimal fd-backed streams, not the full Node.js stream infrastructure.
 |----------|--------|-------|
 | `tmpdir` / `platform` / `EOL` | ✅ | |
 | `homedir` / `userInfo` | ✅ | |
-| `arch` | ✅ | Detected via `uname -m` |
+| `arch` | ✅ | |
 | `hostname` | ⚠️ | Hardcoded `'localhost'` |
 | `cpus` / `totalmem` / `freemem` / `uptime` | ⚠️ | Stubbed (return 0 or dummy values) |
 | `type` / `release` / `networkInterfaces` / `loadavg` | ❌ | |

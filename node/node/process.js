@@ -4,6 +4,7 @@ import {
 	isatty as _isatty, ttyGetWinSize as _ttyGetWinSize,
 	getCwd as _getCwd, chdir as _chdir,
 	kill as _kill, getPid as _getPid, getPlatform as _getPlatform,
+	getArch as _getArch,
 } from 'qn_vm';
 
 // Create stream-like objects for stdin, stdout, stderr
@@ -149,8 +150,9 @@ const process = {
     return this._gid
   },
 
-  // Platform
+  // Platform and architecture
   platform: _getPlatform(),
+  arch: _getArch(),
 
   // Node version (return QuickJS version as placeholder)
   version: 'v1.0.0-quickjs',
@@ -259,5 +261,5 @@ const process = {
 export default process;
 
 // Also export individual properties for named imports
-export const { argv, exit, exitCode, cwd, chdir, kill, pid, getuid, getgid, platform, version, versions, stdin, stdout, stderr } = process;
+export const { argv, exit, exitCode, cwd, chdir, kill, pid, getuid, getgid, platform, arch, version, versions, stdin, stdout, stderr } = process;
 export const env = process.env;  // Export env separately to preserve the Proxy
