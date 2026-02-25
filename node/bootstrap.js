@@ -15,17 +15,29 @@ import * as std from "std"
 import "node-globals"
 import { resolve } from "node:path"
 import { stripTypeScriptTypes } from "node:module"
+import { isCjs } from "./qn/cjs.js"
 
-// Register source transform for .ts module loading.
-// Tries strip mode first (preserves source positions for accurate error locations),
-// falls back to full transform for constructs strip mode can't handle (enums, namespaces).
+// Register source transform for .ts and CJS module loading.
+// Handles TypeScript stripping and CJS-to-ESM wrapping.
 __qn_setSourceTransform((source, filename) => {
-	if (!filename.endsWith(".ts")) return source
-	try {
-		return stripTypeScriptTypes(source)
-	} catch {
-		return stripTypeScriptTypes(source, { mode: "transform" })
+	// TypeScript stripping
+	if (filename.endsWith(".ts")) {
+		try {
+			source = stripTypeScriptTypes(source)
+		} catch {
+			source = stripTypeScriptTypes(source, { mode: "transform" })
+		}
 	}
+
+	// CJS wrapping: detect CJS files and wrap them as ESM
+	if (isCjs(filename)) {
+		source = `import { __cjsLoad } from "qn:cjs"\n` +
+			`const { module: __cjs_module } = __cjsLoad(import.meta.filename, import.meta.dirname, function(exports, require, module, __filename, __dirname) {\n` +
+			source + `\n});\n` +
+			`export default __cjs_module.exports;\n`
+	}
+
+	return source
 })
 import { globSync } from "node:fs"
 import { commit, buildTime } from "qn:version-info"

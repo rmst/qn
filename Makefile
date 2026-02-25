@@ -257,7 +257,7 @@ QNC_MODULES = -D node-globals -D repl -D node:fs -D node:process \
               -D node:net -D node:tls -D node:http -D node:http/parse \
               -D node:sqlite -D node:util -D node:assert -D node:test \
               -D node:os -D qn:introspect -D qn:http -D qn:pty -D qn:version-info \
-              -D qn:sucrase -D qn:worker -D node:module -D qx
+              -D qn:sucrase -D qn:worker -D qn:cjs -D node:module -D qx
 # Extra .o/.a files to pass through to the linker (non-packaged native modules)
 QNC_EXTRA_LINK = $(patsubst %,--link %,$(NATIVE_OBJS))
 

@@ -6,6 +6,20 @@
 
 import { transform, parse } from "qn:sucrase"
 
+/**
+ * createRequire — delegates to qn:cjs which registers itself via a global.
+ * This avoids eagerly importing qn:cjs (which depends on node:path) when
+ * node:module is loaded.  qnc's lightweight TS context imports node:module
+ * only for stripTypeScriptTypes and must not pull in the full CJS runtime.
+ */
+export function createRequire(filenameOrUrl) {
+	const impl = globalThis.__qn_createRequire
+	if (!impl) {
+		throw new Error("createRequire is not available — qn:cjs was not loaded")
+	}
+	return impl(filenameOrUrl)
+}
+
 // Token type and contextual keyword constants from Sucrase's parser
 const TT_IMPORT = 90640
 const TT_EXPORT = 89104
