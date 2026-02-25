@@ -244,7 +244,8 @@ $(BIN_DIR)/obj/qn/version-info.js: FORCE | $(BIN_DIR)/obj
 	@cmp -s $@ $@.tmp && rm $@.tmp || mv $@.tmp $@
 
 # Common qnc flags for building qn/qx
-QNC_FLAGS = -M qn_uv_fs,qn_uv_fs -M qn_uv_dns,qn_uv_dns \
+QNC_FLAGS = --cache-dir $(BIN_DIR)/obj/qnc \
+            -M qn_uv_fs,qn_uv_fs -M qn_uv_dns,qn_uv_dns \
             -M qn_uv_signals,qn_uv_signals -M qn_uv_stream,qn_uv_stream \
             -M qn_uv_dgram,qn_uv_dgram -M qn_uv_process,qn_uv_process \
             -M qn_uv_pty,qn_uv_pty -M qn_vm,qn_vm \

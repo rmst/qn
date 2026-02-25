@@ -208,6 +208,7 @@ typedef struct {
     int cflag_count;
     char **ldflags;       /* additional linker flags (e.g. "-lz") */
     int ldflag_count;
+    char *pkg_json_path;  /* absolute path to package.json (for cache invalidation) */
     char **obj_files;     /* paths to compiled .o files (filled during compile step) */
     int obj_count;
 } NativeModule;
@@ -218,6 +219,9 @@ static int native_module_cap = 0;
 
 /* Extra files to pass to the linker (--link flag) */
 static namelist_t extra_link_files;
+
+/* Optional cache directory for compiled .o files (--cache-dir flag) */
+static const char *cache_dir = NULL;
 
 static NativeModule *native_module_add(void) {
     if (native_module_count >= native_module_cap) {
@@ -339,6 +343,7 @@ static int parse_native_package(JSContext *ctx, const char *pkg_dir,
     }
 
     nm->target_name = strdup(tn);
+    nm->pkg_json_path = strdup(pkg_path);
     JS_FreeCString(ctx, tn);
     JS_FreeValue(ctx, tn_val);
 
@@ -468,6 +473,30 @@ static char *resolve_support_dir(const char *exename,
     return NULL;
 }
 
+/* Create directory and parent if needed (two levels max) */
+static void ensure_dir(const char *path) {
+    struct stat st;
+    if (stat(path, &st) == 0) return;
+    /* try creating parent first */
+    char parent[PATH_MAX];
+    pstrcpy(parent, sizeof(parent), path);
+    char *slash = strrchr(parent, '/');
+    if (slash && slash != parent) {
+        *slash = '\0';
+        if (stat(parent, &st) != 0)
+            mkdir(parent, 0777);
+    }
+    mkdir(path, 0777);
+}
+
+/* Return 1 if 'obj' exists and is newer than 'src', 0 otherwise */
+static int obj_is_up_to_date(const char *obj, const char *src) {
+    struct stat obj_st, src_st;
+    if (stat(obj, &obj_st) != 0) return 0;
+    if (stat(src, &src_st) != 0) return 0;
+    return obj_st.st_mtime >= src_st.st_mtime;
+}
+
 /* Compile native module C sources to .o files.
    Returns 0 on success, non-zero on error. */
 static int compile_native_modules(const char *inc_dir, BOOL verbose) {
@@ -483,10 +512,35 @@ static int compile_native_modules(const char *inc_dir, BOOL verbose) {
         }
 
         for (int si = 0; si < nm->source_count; si++) {
-            /* Generate unique .o filename in /tmp */
+            /* Generate .o filename: cached dir or /tmp */
             char obj_path[PATH_MAX];
-            snprintf(obj_path, sizeof(obj_path), "/tmp/qnc_%d_%s_%d.o",
-                     getpid(), nm->target_name, si);
+            if (cache_dir) {
+                char target_dir[PATH_MAX];
+                snprintf(target_dir, sizeof(target_dir), "%s/%s",
+                         cache_dir, nm->target_name);
+                ensure_dir(target_dir);
+                /* Use source basename for deterministic naming */
+                const char *src_base = strrchr(nm->sources[si], '/');
+                src_base = src_base ? src_base + 1 : nm->sources[si];
+                snprintf(obj_path, sizeof(obj_path), "%s/%s/%s",
+                         cache_dir, nm->target_name, src_base);
+                /* Replace .c extension with .o */
+                char *dot = strrchr(obj_path, '.');
+                if (dot) strcpy(dot, ".o");
+                else strcat(obj_path, ".o");
+
+                /* Skip recompilation if .o is newer than source and package.json */
+                if (obj_is_up_to_date(obj_path, nm->sources[si]) &&
+                    (!nm->pkg_json_path || obj_is_up_to_date(obj_path, nm->pkg_json_path))) {
+                    if (verbose)
+                        printf("qnc: cached %s\n", obj_path);
+                    nm->obj_files[nm->obj_count++] = strdup(obj_path);
+                    continue;
+                }
+            } else {
+                snprintf(obj_path, sizeof(obj_path), "/tmp/qnc_%d_%s_%d.o",
+                         getpid(), nm->target_name, si);
+            }
 
             /* Build gcc command */
             int max_args = 16 + nm->include_dir_count * 2 + nm->define_count + nm->cflag_count;
@@ -556,6 +610,7 @@ static void native_module_free(NativeModule *nm) {
     free(nm->target_name);
     free(nm->init_name);
     free(nm->reg_name);
+    free(nm->pkg_json_path);
     for (int i = 0; i < nm->source_count; i++) free(nm->sources[i]);
     free(nm->sources);
     for (int i = 0; i < nm->object_count; i++) free(nm->objects[i]);
@@ -1243,7 +1298,8 @@ void help(void)
            "-S n        set the maximum stack size to 'n' bytes (default=%d)\n"
            "-s            strip all the debug info\n"
            "--keep-source keep the source code\n"
-           "--link file   pass file (.o/.a) to the linker\n",
+           "--link file   pass file (.o/.a) to the linker\n"
+           "--cache-dir d cache compiled native module .o files in directory d\n",
            JS_DEFAULT_STACK_SIZE);
 #ifdef CONFIG_LTO
     {
@@ -1381,11 +1437,13 @@ static int output_executable(const char *out_filename, const char *cfilename,
     ret = exec_cmd((char **)argv);
     unlink(cfilename);
 
-    /* Clean up native module .o files */
-    for (int mi = 0; mi < native_module_count; mi++) {
-        NativeModule *nm = &native_modules[mi];
-        for (int oi = 0; oi < nm->obj_count; oi++) {
-            unlink(nm->obj_files[oi]);
+    /* Clean up native module .o files (skip if cached) */
+    if (!cache_dir) {
+        for (int mi = 0; mi < native_module_count; mi++) {
+            NativeModule *nm = &native_modules[mi];
+            for (int oi = 0; oi < nm->obj_count; oi++) {
+                unlink(nm->obj_files[oi]);
+            }
         }
     }
 
@@ -1639,6 +1697,10 @@ int main(int argc, char **argv)
             if (!strcmp(longopt, "link")) {
                 const char *link_file = get_short_optarg(&optind, 0, "", argc, argv);
                 namelist_add(&extra_link_files, link_file, NULL, 0);
+                break;
+            }
+            if (!strcmp(longopt, "cache-dir")) {
+                cache_dir = get_short_optarg(&optind, 0, "", argc, argv);
                 break;
             }
             if (opt) {
