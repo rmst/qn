@@ -258,14 +258,20 @@ Notes: Low-level transport API, not the Node.js socket API. Used internally by `
 
 | Function | Status | Notes |
 |----------|--------|-------|
-| `createHash` | ✅ | SHA-256, SHA-1 (via BearSSL) |
-| `Hash.update` / `Hash.digest` | ✅ | hex, base64, buffer output |
-| `randomBytes` / `randomFillSync` | ✅ | Via `uv_random()` |
+| `createHash` | ✅ | MD5, SHA-1, SHA-256, SHA-384, SHA-512 |
+| `createHmac` | ✅ | Same algorithms as createHash |
+| `createCipheriv` | ✅ | AES-128/192/256-CTR, AES-128/256-GCM, ChaCha20-Poly1305 |
+| `createDecipheriv` | ✅ | Same algorithms as createCipheriv |
+| `createECDH` | ✅ | P-256, P-384, P-521, curve25519 |
+| `createSign` | ⚠️ | ECDSA only, raw key format |
+| `createVerify` | ⚠️ | ECDSA only, raw key format |
+| `randomBytes` | ✅ | |
+| `randomFillSync` | ✅ | |
 | `randomUUID` | ✅ | |
 | `timingSafeEqual` | ✅ | |
-| HMAC, ciphers, sign/verify | ❌ | |
-| `pbkdf2` / `scrypt` | ❌ | |
-| Key generation, `KeyObject`, `webcrypto` | ❌ | |
+| `getHashes` | ✅ | |
+| `getCiphers` | ✅ | |
+| `getCurves` | ✅ | |
 
 ### node:stream / node:stream/promises
 
@@ -412,6 +418,8 @@ Available as `import WebSocket from "ws"` (vendored ws v8.19.0), not as a global
 
 | Module | Description |
 |--------|-------------|
+| `qn:crypto` | BearSSL-backed crypto primitives (used by `node:crypto`) |
+| `qn:tls` | Low-level TLS I/O (qn-specific API, not Node.js compatible) |
 | `qn:http` | High-level HTTP server (`serve()` API) |
 | `qn:worker` | Worker class (re-exported as global `Worker`) |
 | `qn:introspect` | Closure introspection and function serialization |
