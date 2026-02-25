@@ -91,6 +91,14 @@ export class EventEmitter {
 	emit(event, ...args) {
 		const listeners = this.#listeners[event]
 		if (!listeners || listeners.length === 0) {
+			// Node.js: emitting 'error' with no listeners throws the error
+			if (event === 'error') {
+				const err = args[0]
+				if (err instanceof Error) throw err
+				const wrapped = new Error('Unhandled error.' + (err !== undefined ? ' (' + err + ')' : ''))
+				wrapped.context = err
+				throw wrapped
+			}
 			return false
 		}
 		for (const listener of [...listeners]) {
@@ -120,6 +128,35 @@ export class EventEmitter {
 	 */
 	eventNames() {
 		return Object.keys(this.#listeners)
+	}
+
+	/**
+	 * @param {string} event
+	 * @param {Function} listener
+	 * @returns {this}
+	 */
+	prependListener(event, listener) {
+		if (!this.#listeners[event]) {
+			this.#listeners[event] = []
+		}
+		this.#listeners[event].unshift(listener)
+		return this
+	}
+
+	/**
+	 * @param {number} n
+	 * @returns {this}
+	 */
+	setMaxListeners(n) {
+		// Accept but don't enforce (matching common usage patterns)
+		return this
+	}
+
+	/**
+	 * @returns {Function[]}
+	 */
+	rawListeners(event) {
+		return this.#listeners[event] ? [...this.#listeners[event]] : []
 	}
 }
 

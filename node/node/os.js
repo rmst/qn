@@ -40,10 +40,23 @@ export function platform() {
  * Returns the operating system CPU architecture.
  * @returns {string} 'x64', 'arm64', etc.
  */
+let _arch
 export function arch() {
-	// QuickJS doesn't expose arch directly, try to detect
-	// This is a simplified implementation
-	return 'x64'
+	if (_arch) return _arch
+	// Detect via uname -m
+	try {
+		const f = std.popen('uname -m', 'r')
+		const raw = f.getline().trim()
+		f.close()
+		if (raw === 'x86_64' || raw === 'amd64') _arch = 'x64'
+		else if (raw === 'aarch64' || raw === 'arm64') _arch = 'arm64'
+		else if (raw === 'armv7l') _arch = 'arm'
+		else if (raw === 'i686' || raw === 'i386') _arch = 'ia32'
+		else _arch = raw
+	} catch {
+		_arch = 'x64'
+	}
+	return _arch
 }
 
 /**

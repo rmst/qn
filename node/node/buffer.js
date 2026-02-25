@@ -88,12 +88,10 @@ class Buffer extends Uint8Array {
 		}
 
 		if (value instanceof ArrayBuffer) {
-			if (encodingOrOffset !== undefined || length !== undefined) {
-				const offset = encodingOrOffset || 0
-				const len = length !== undefined ? length : value.byteLength - offset
-				return new Buffer(value.slice(offset, offset + len))
-			}
-			return new Buffer(value)
+			// Uint8Array(buffer, offset, length) creates a view (no copy)
+			const offset = encodingOrOffset || 0
+			const len = length !== undefined ? length : value.byteLength - offset
+			return new Buffer(value, offset, len)
 		}
 
 		if (ArrayBuffer.isView(value)) {

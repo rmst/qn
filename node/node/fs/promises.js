@@ -6,6 +6,7 @@
  */
 
 import * as uv_fs from 'qn/uv-fs'
+import { Buffer } from 'node:buffer'
 import {
 	rmSync,
 	cpSync,
@@ -51,12 +52,21 @@ function addStatMethods(obj) {
 
 export async function readFile(path, options) {
 	let encoding = null
-	if (typeof options === 'string') encoding = options
-	else if (options && options.encoding) encoding = options.encoding
+	let flag = 'r'
+	if (typeof options === 'string') {
+		encoding = options
+	} else if (options) {
+		if (options.encoding) encoding = options.encoding
+		if (options.flag) flag = options.flag
+	}
+
+	if (encoding != null && encoding !== 'utf8' && encoding !== 'utf-8') {
+		throw new Error(`readFile: encoding '${encoding}' is not supported, only 'utf8' is supported`)
+	}
 	const useUtf8 = encoding === 'utf8' || encoding === 'utf-8'
 
 	const p = String(path)
-	const fd = await uv_fs.open(p, 'r')
+	const fd = await uv_fs.open(p, flag)
 	try {
 		const st = await uv_fs.fstat(fd)
 		const size = st.size
@@ -73,7 +83,7 @@ export async function readFile(path, options) {
 				total += n
 			}
 			if (chunks.length === 0) {
-				return useUtf8 ? '' : new Uint8Array(0).buffer
+				return useUtf8 ? '' : Buffer.alloc(0)
 			}
 			const result = new Uint8Array(total)
 			let offset = 0
@@ -84,20 +94,34 @@ export async function readFile(path, options) {
 			if (useUtf8) {
 				return new TextDecoder().decode(result)
 			}
-			return result.buffer
+			return Buffer.from(result)
 		}
 		const buf = new Uint8Array(size)
 		await uv_fs.read(fd, buf, 0)
 		if (useUtf8) {
 			return new TextDecoder().decode(buf)
 		}
-		return buf.buffer
+		return Buffer.from(buf)
 	} finally {
 		await uv_fs.close(fd)
 	}
 }
 
 export async function writeFile(path, data, options) {
+	let flag = 'w'
+	let mode = 0o666
+	if (typeof options === 'object' && options) {
+		if (options.encoding != null && options.encoding !== 'utf8' && options.encoding !== 'utf-8') {
+			throw new Error(`writeFile: encoding '${options.encoding}' is not supported, only 'utf8' is supported`)
+		}
+		if (options.flag) flag = options.flag
+		if (options.mode != null) mode = options.mode
+	} else if (typeof options === 'string') {
+		if (options !== 'utf8' && options !== 'utf-8') {
+			throw new Error(`writeFile: encoding '${options}' is not supported, only 'utf8' is supported`)
+		}
+	}
+
 	const p = String(path)
 	let buf
 	if (typeof data === 'string') {
@@ -109,12 +133,17 @@ export async function writeFile(path, data, options) {
 	} else {
 		throw new TypeError('writeFile: data must be string, ArrayBuffer, or TypedArray')
 	}
-	const fd = await uv_fs.open(p, 'w')
+	const fd = await uv_fs.open(p, flag, mode)
 	try {
-		await uv_fs.write(fd, buf, 0)
+		await uv_fs.write(fd, buf, -1)
 	} finally {
 		await uv_fs.close(fd)
 	}
+}
+
+export async function appendFile(path, data, options) {
+	const opts = typeof options === 'string' ? { encoding: options } : (options || {})
+	return writeFile(path, data, { ...opts, flag: opts.flag || 'a' })
 }
 
 /* ==== Path operations (thin wrappers) ==== */
@@ -128,6 +157,9 @@ export function lstat(path) {
 }
 
 export async function readdir(path, options) {
+	if (options && options.recursive) {
+		throw new Error("readdir: 'recursive' option is not supported")
+	}
 	const p = String(path)
 	const entries = await uv_fs.readdir(p)
 	if (options && options.withFileTypes) {
@@ -153,14 +185,44 @@ export async function readdir(path, options) {
 	return entries
 }
 
-export function mkdir(path, options) {
+export async function mkdir(path, options) {
 	let mode = 0o777
+	let recursive = false
 	if (typeof options === 'object' && options) {
 		if (options.mode != null) mode = options.mode
+		if (options.recursive) recursive = true
 	} else if (typeof options === 'number') {
 		mode = options
 	}
-	return uv_fs.mkdir(String(path), mode)
+
+	const p = String(path)
+	if (!recursive) return uv_fs.mkdir(p, mode)
+
+	const parts = p.split('/').filter(s => s.length > 0)
+	let current = p.startsWith('/') ? '/' : ''
+
+	for (const part of parts) {
+		current = current === '/' ? `/${part}` : `${current}/${part}`
+		try {
+			const st = await uv_fs.stat(current)
+			if ((st.mode & S_IFMT) !== S_IFDIR) {
+				throw new Error(`ENOTDIR: not a directory, mkdir '${current}'`)
+			}
+		} catch (e) {
+			if (e.errno !== -2) throw e
+			try {
+				await uv_fs.mkdir(current, mode)
+			} catch (e2) {
+				// Race: another process may have created it
+				try {
+					const st = await uv_fs.stat(current)
+					if ((st.mode & S_IFMT) !== S_IFDIR) throw e2
+				} catch {
+					throw e2
+				}
+			}
+		}
+	}
 }
 
 export function unlink(path) {
@@ -171,7 +233,8 @@ export function rename(oldPath, newPath) {
 	return uv_fs.rename(String(oldPath), String(newPath))
 }
 
-export function symlink(target, path) {
+export function symlink(target, path, type) {
+	// type param is only meaningful on Windows; accept but ignore on POSIX
 	return uv_fs.symlink(String(target), String(path))
 }
 
@@ -210,6 +273,21 @@ export function lchown(path, uid, gid) {
 
 export function rmdir(path) {
 	return uv_fs.rmdir(String(path))
+}
+
+export function copyFile(src, dest, mode) {
+	if (mode !== undefined && mode !== 0) {
+		throw new Error("copyFile: mode flags are not supported")
+	}
+	return uv_fs.copyfile(String(src), String(dest))
+}
+
+export function mkdtemp(prefix) {
+	return uv_fs.mkdtemp(String(prefix) + 'XXXXXX')
+}
+
+export function link(existingPath, newPath) {
+	return uv_fs.link(String(existingPath), String(newPath))
 }
 
 /* Fallbacks (no native async implementation yet) */

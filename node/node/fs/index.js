@@ -72,8 +72,19 @@ export const writeFileSync = (path, data, options) => {
 
 	const file = std.open(path, flag + (isBinary ? 'b' : ''))
 	if (!file) {
-		const err = new Error(`ENOENT: no such file or directory, open '${path}'`)
-		err.code = 'ENOENT'
+		// std.open returns null on failure but doesn't tell us the errno.
+		// Try to distinguish the error by checking if the parent directory exists.
+		const lastSlash = path.lastIndexOf('/')
+		if (lastSlash > 0) {
+			try { native_stat(path.substring(0, lastSlash)) } catch {
+				const err = new Error(`ENOENT: no such file or directory, open '${path}'`)
+				err.code = 'ENOENT'
+				err.path = path
+				err.syscall = 'open'
+				throw err
+			}
+		}
+		const err = new Error(`Failed to open '${path}' for writing`)
 		err.path = path
 		err.syscall = 'open'
 		throw err
@@ -106,8 +117,7 @@ export const appendFileSync = (path, data, options) => {
 
 	const file = std.open(path, 'a' + (isBinary ? 'b' : ''))
 	if (!file) {
-		const err = new Error(`ENOENT: no such file or directory, open '${path}'`)
-		err.code = 'ENOENT'
+		const err = new Error(`Failed to open '${path}' for appending`)
 		err.path = path
 		err.syscall = 'open'
 		throw err
@@ -141,8 +151,17 @@ export const readFileSync = (path, options) => {
 
 	const file = std.open(path, flag + 'b')
 	if (!file) {
-		const err = new Error(`ENOENT: no such file or directory, open '${path}'`)
-		err.code = 'ENOENT'
+		// Check if file doesn't exist vs other errors
+		let exists = true
+		try { native_stat(path) } catch { exists = false }
+		if (!exists) {
+			const err = new Error(`ENOENT: no such file or directory, open '${path}'`)
+			err.code = 'ENOENT'
+			err.path = path
+			err.syscall = 'open'
+			throw err
+		}
+		const err = new Error(`Failed to open '${path}' for reading`)
 		err.path = path
 		err.syscall = 'open'
 		throw err
@@ -165,6 +184,9 @@ export const readFileSync = (path, options) => {
 }
 
 export const readdirSync = (path, options = {}) => {
+	if (options?.recursive) {
+		throw new Error("readdirSync: 'recursive' option is not supported")
+	}
 	const withFileTypes = options?.withFileTypes || false
 
 	const files = native_readdir(path)
@@ -272,8 +294,8 @@ export function existsSync(path) {
 	}
 }
 
-export function openSync(path, flags) {
-	return native_open(path, flags)
+export function openSync(path, flags, mode) {
+	return native_open(path, flags, mode)
 }
 
 export function closeSync(fd) {
@@ -460,4 +482,8 @@ export const constants = {
 	S_IFREG,
 	S_IFDIR,
 	S_IFLNK,
+	S_IFBLK,
+	S_IFCHR,
+	S_IFIFO,
+	S_IFSOCK,
 }

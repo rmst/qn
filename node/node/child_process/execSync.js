@@ -54,7 +54,7 @@ export function execSync(command, options = {}) {
 		input: options.input,
 		timeout: options.timeout,
 		killSignal: options.killSignal,
-		encoding: 'utf8',
+		encoding: options.encoding ?? 'utf8',
 		stdio,
 	})
 }

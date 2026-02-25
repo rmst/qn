@@ -712,6 +712,10 @@ static int build_native_package(const char *pkg_dir, const char *out_filename,
         const char **arg = argv;
         *arg++ = CONFIG_CC;
         *arg++ = "-shared";
+#ifdef __APPLE__
+        *arg++ = "-undefined";
+        *arg++ = "dynamic_lookup";
+#endif
         *arg++ = "-o";
         *arg++ = so_path;
 

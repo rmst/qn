@@ -172,7 +172,7 @@ const process = {
     if (event === 'exit') {
       globalThis.__qn_exitHandler = (code) => {
         const handlers = eventHandlers.get('exit');
-        if (handlers) handlers.forEach(h => {
+        if (handlers) [...handlers].forEach(h => {
           try { h(code); } catch (e) { console.error(e); }
         });
       };
@@ -201,6 +201,39 @@ const process = {
       throw new TypeError('Callback must be a function')
     }
     queueMicrotask(() => callback(...args))
+  },
+
+  once(event, handler) {
+    const wrapper = (...args) => {
+      this.removeListener(event, wrapper);
+      handler(...args);
+    };
+    wrapper._originalListener = handler;
+    return this.on(event, wrapper);
+  },
+
+  removeListener(event, handler) {
+    const handlers = eventHandlers.get(event);
+    if (!handlers) return this;
+    const index = handlers.findIndex(
+      h => h === handler || h._originalListener === handler
+    );
+    if (index !== -1) {
+      handlers.splice(index, 1);
+      // If no more handlers for this signal, close the uv handle
+      if (handlers.length === 0) {
+        const handle = signalHandles.get(event);
+        if (handle) {
+          handle.close();
+          signalHandles.delete(event);
+        }
+      }
+    }
+    return this;
+  },
+
+  off(event, handler) {
+    return this.removeListener(event, handler);
   },
 
   removeAllListeners(event) {

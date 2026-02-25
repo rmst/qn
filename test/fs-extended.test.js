@@ -1,6 +1,6 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
-import { writeFileSync, mkdirSync, symlinkSync } from 'node:fs'
+import { writeFileSync, mkdirSync, symlinkSync, chmodSync } from 'node:fs'
 import { test, testQnOnly, $ } from './util.js'
 
 describe('node:fs extended APIs', () => {
@@ -151,6 +151,57 @@ describe('node:fs extended APIs', () => {
 		assert.ok(result.events.includes('finish'))
 		assert.ok(result.events.includes('close'))
 	})
+
+	test('constants has S_IF* values', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { constants } from 'node:fs'
+			console.log(JSON.stringify({
+				hasIFMT: typeof constants.S_IFMT === 'number',
+				hasIFREG: typeof constants.S_IFREG === 'number',
+				hasIFDIR: typeof constants.S_IFDIR === 'number',
+				hasIFLNK: typeof constants.S_IFLNK === 'number',
+				hasIFBLK: typeof constants.S_IFBLK === 'number',
+				hasIFCHR: typeof constants.S_IFCHR === 'number',
+				hasIFIFO: typeof constants.S_IFIFO === 'number',
+				hasIFSOCK: typeof constants.S_IFSOCK === 'number',
+			}))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		for (const [key, val] of Object.entries(result)) {
+			assert.strictEqual(val, true, `constants.${key.replace('has', 'S_')} should be a number`)
+		}
+	})
+
+	testQnOnly('readdirSync throws on recursive option', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { readdirSync } from 'node:fs'
+			let threw = false
+			try { readdirSync('${dir}', { recursive: true }) }
+			catch (e) { threw = e.message.includes('not supported') }
+			console.log(JSON.stringify({ threw }))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { threw: true })
+	})
+
+	test('readFileSync returns Buffer when no encoding', ({ bin, dir }) => {
+		writeFileSync(`${dir}/data.txt`, 'hello')
+		writeFileSync(`${dir}/test.js`, `
+			import { readFileSync } from 'node:fs'
+			const buf = readFileSync('${dir}/data.txt')
+			console.log(JSON.stringify({
+				isBuffer: Buffer.isBuffer(buf),
+				length: buf.length,
+				str: buf.toString('utf8'),
+			}))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.isBuffer, true)
+		assert.strictEqual(result.length, 5)
+		assert.strictEqual(result.str, 'hello')
+	})
 })
 
 describe('node:fs/promises', () => {
@@ -187,11 +238,34 @@ describe('node:fs/promises', () => {
 		assert.deepStrictEqual(JSON.parse(output), { isFile: true, isDir: false })
 	})
 
-	testQnOnly('mkdir creates directory', ({ bin, dir }) => {
+	test('mkdir creates directory', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { mkdir, stat } from 'node:fs/promises'
 			await mkdir('${dir}/newdir')
 			const s = await stat('${dir}/newdir')
+			console.log(JSON.stringify({ isDir: s.isDirectory() }))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { isDir: true })
+	})
+
+	test('mkdir recursive creates nested directories', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { mkdir, stat } from 'node:fs/promises'
+			await mkdir('${dir}/a/b/c', { recursive: true })
+			const s = await stat('${dir}/a/b/c')
+			console.log(JSON.stringify({ isDir: s.isDirectory() }))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { isDir: true })
+	})
+
+	test('mkdir recursive is idempotent', ({ bin, dir }) => {
+		mkdirSync(`${dir}/existing/child`, { recursive: true })
+		writeFileSync(`${dir}/test.js`, `
+			import { mkdir, stat } from 'node:fs/promises'
+			await mkdir('${dir}/existing/child', { recursive: true })
+			const s = await stat('${dir}/existing/child')
 			console.log(JSON.stringify({ isDir: s.isDirectory() }))
 		`)
 		const output = $`${bin} ${dir}/test.js`
@@ -338,5 +412,137 @@ describe('node:fs/promises', () => {
 		`)
 		const output = $`${bin} ${dir}/test.js`
 		assert.deepStrictEqual(JSON.parse(output), { ok: true })
+	})
+
+	test('readFile returns Buffer when no encoding', ({ bin, dir }) => {
+		writeFileSync(`${dir}/data.txt`, 'hello')
+		writeFileSync(`${dir}/test.js`, `
+			import { readFile } from 'node:fs/promises'
+			const buf = await readFile('${dir}/data.txt')
+			console.log(JSON.stringify({
+				isBuffer: Buffer.isBuffer(buf),
+				isUint8Array: buf instanceof Uint8Array,
+				length: buf.length,
+				str: buf.toString('utf8'),
+			}))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.isBuffer, true)
+		assert.strictEqual(result.isUint8Array, true)
+		assert.strictEqual(result.length, 5)
+		assert.strictEqual(result.str, 'hello')
+	})
+
+	test('writeFile with flag option appends', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { writeFile, readFile } from 'node:fs/promises'
+			await writeFile('${dir}/out.txt', 'first')
+			await writeFile('${dir}/out.txt', ' second', { flag: 'a' })
+			const content = await readFile('${dir}/out.txt', 'utf8')
+			console.log(JSON.stringify({ content }))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: 'first second' })
+	})
+
+	testQnOnly('writeFile throws on unsupported encoding', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { writeFile } from 'node:fs/promises'
+			let threw = false
+			try { await writeFile('${dir}/out.txt', 'data', { encoding: 'latin1' }) }
+			catch (e) { threw = e.message.includes('not supported') }
+			console.log(JSON.stringify({ threw }))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { threw: true })
+	})
+
+	testQnOnly('readFile throws on unsupported encoding', ({ bin, dir }) => {
+		writeFileSync(`${dir}/data.txt`, 'content')
+		writeFileSync(`${dir}/test.js`, `
+			import { readFile } from 'node:fs/promises'
+			let threw = false
+			try { await readFile('${dir}/data.txt', 'hex') }
+			catch (e) { threw = e.message.includes('not supported') }
+			console.log(JSON.stringify({ threw }))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { threw: true })
+	})
+
+	testQnOnly('readdir throws on recursive option', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { readdir } from 'node:fs/promises'
+			let threw = false
+			try { await readdir('${dir}', { recursive: true }) }
+			catch (e) { threw = e.message.includes('not supported') }
+			console.log(JSON.stringify({ threw }))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { threw: true })
+	})
+
+	test('appendFile appends to file', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { writeFile, appendFile, readFile } from 'node:fs/promises'
+			await writeFile('${dir}/out.txt', 'hello')
+			await appendFile('${dir}/out.txt', ' world')
+			const content = await readFile('${dir}/out.txt', 'utf8')
+			console.log(JSON.stringify({ content }))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: 'hello world' })
+	})
+
+	test('copyFile copies a file', ({ bin, dir }) => {
+		writeFileSync(`${dir}/src.txt`, 'copy me')
+		writeFileSync(`${dir}/test.js`, `
+			import { copyFile, readFile } from 'node:fs/promises'
+			await copyFile('${dir}/src.txt', '${dir}/dst.txt')
+			const content = await readFile('${dir}/dst.txt', 'utf8')
+			console.log(JSON.stringify({ content }))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { content: 'copy me' })
+	})
+
+	test('mkdtemp creates temporary directory', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { mkdtemp, stat } from 'node:fs/promises'
+			import { realpathSync } from 'node:fs'
+			import { tmpdir } from 'node:os'
+			import { join } from 'node:path'
+			const prefix = join(realpathSync(tmpdir()), 'test-mkdtemp-')
+			const created = await mkdtemp(prefix)
+			const s = await stat(created)
+			console.log(JSON.stringify({
+				isDir: s.isDirectory(),
+				startsWith: created.startsWith(prefix),
+			}))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.isDir, true)
+		assert.strictEqual(result.startsWith, true)
+	})
+
+	test('link creates hard link', ({ bin, dir }) => {
+		writeFileSync(`${dir}/original.txt`, 'linked content')
+		writeFileSync(`${dir}/test.js`, `
+			import { link, readFile, stat } from 'node:fs/promises'
+			await link('${dir}/original.txt', '${dir}/hardlink.txt')
+			const content = await readFile('${dir}/hardlink.txt', 'utf8')
+			const s1 = await stat('${dir}/original.txt')
+			const s2 = await stat('${dir}/hardlink.txt')
+			console.log(JSON.stringify({
+				content,
+				sameIno: s1.ino === s2.ino,
+			}))
+		`)
+		const output = $`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.content, 'linked content')
+		assert.strictEqual(result.sameIno, true)
 	})
 })

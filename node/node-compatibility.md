@@ -134,7 +134,7 @@ CommonJS is not supported. Use ES modules with `import.meta.dirname` and `import
 
 | Function | Status | Notes |
 |----------|--------|-------|
-| `readFileSync` | ✅ | Returns `Uint8Array` if no encoding, string if `utf8` |
+| `readFileSync` | ✅ | Returns `Buffer` if no encoding, string if `utf8` |
 | `writeFileSync` | ✅ | String, `ArrayBuffer`, or `TypedArray` |
 | `appendFileSync` | ✅ | |
 | `existsSync` | ✅ | |
@@ -160,9 +160,9 @@ CommonJS is not supported. Use ES modules with `import.meta.dirname` and `import
 | `readSync` / `writeSync` (public) | ❌ | Internal only |
 | `opendir` | ❌ | |
 
-**Promises API:** `readFile`, `writeFile`, `stat`, `lstat`, `readdir`, `mkdir`, `unlink`, `rename`, `symlink`, `readlink`, `realpath`, `access`, `chmod`, `utimes`, `chown`, `lchown`, `rmdir`, `rm`, `cp`. Some wrap sync.
+**Promises API:** `readFile`, `writeFile`, `appendFile`, `stat`, `lstat`, `readdir`, `mkdir`, `unlink`, `rename`, `symlink`, `readlink`, `realpath`, `access`, `chmod`, `utimes`, `chown`, `lchown`, `rmdir`, `rm`, `cp`, `copyFile`, `mkdtemp`, `link`. Some wrap sync.
 
-Notes: Only `utf8` encoding for `readFileSync`. Promises `FileHandle` API not available.
+Notes: `utf8` is the only supported text encoding (no latin1, hex, base64, etc.). `readFile` returns `Buffer` when no encoding specified. Promises `FileHandle` API not available.
 
 ### node:path
 
@@ -182,8 +182,8 @@ Notes: Only `utf8` encoding for `readFileSync`. Promises `FileHandle` API not av
 | `on` / `addListener` / `once` / `off` / `removeListener` | ✅ |
 | `removeAllListeners` / `emit` | ✅ |
 | `listeners` / `listenerCount` / `eventNames` | ✅ |
-| `prependListener` / `prependOnceListener` | ❌ |
-| `setMaxListeners` / `getMaxListeners` | ❌ |
+| `prependListener` / `prependOnceListener` | ⚠️ | `prependListener` only; `prependOnceListener` not yet |
+| `setMaxListeners` / `getMaxListeners` | ⚠️ | `setMaxListeners` accepted (no-op); `getMaxListeners` not yet |
 | Static `EventEmitter.on` / `EventEmitter.once` | ❌ |
 
 ### node:net
@@ -341,7 +341,7 @@ Notes: Minimal fd-backed streams, not the full Node.js stream infrastructure.
 | `exit` / `exitCode` | ✅ | |
 | `cwd` / `chdir` / `kill` | ✅ | |
 | `stdin` / `stdout` / `stderr` | ✅ | `write`, `isTTY`, `columns`/`rows` |
-| `on` (`exit`, signals) | ✅ | Via `uv_signal_t` |
+| `on` / `once` / `off` / `removeListener` (`exit`, signals) | ✅ | Via `uv_signal_t` |
 | `nextTick` | ✅ | Via `queueMicrotask` |
 | `getuid` / `getgid` | ✅ | |
 | `hrtime` / `memoryUsage` / `cpuUsage` | ❌ | |
@@ -353,7 +353,7 @@ Notes: Minimal fd-backed streams, not the full Node.js stream infrastructure.
 |----------|--------|-------|
 | `tmpdir` / `platform` / `EOL` | ✅ | |
 | `homedir` / `userInfo` | ✅ | |
-| `arch` | ⚠️ | Hardcoded `'x64'` |
+| `arch` | ✅ | Detected via `uname -m` |
 | `hostname` | ⚠️ | Hardcoded `'localhost'` |
 | `cpus` / `totalmem` / `freemem` / `uptime` | ⚠️ | Stubbed (return 0 or dummy values) |
 | `type` / `release` / `networkInterfaces` / `loadavg` | ❌ | |
