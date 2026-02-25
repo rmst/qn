@@ -160,9 +160,11 @@ CommonJS is not supported. Use ES modules with `import.meta.dirname` and `import
 | `readSync` / `writeSync` (public) | ❌ | Internal only |
 | `opendir` | ❌ | |
 
-**Promises API:** `readFile`, `writeFile`, `appendFile`, `stat`, `lstat`, `readdir`, `mkdir`, `unlink`, `rename`, `symlink`, `readlink`, `realpath`, `access`, `chmod`, `utimes`, `chown`, `lchown`, `rmdir`, `rm`, `cp`, `copyFile`, `mkdtemp`, `link`. Some wrap sync.
+**Promises API:** `open` (returns `FileHandle`), `readFile`, `writeFile`, `appendFile`, `stat`, `lstat`, `readdir`, `mkdir`, `unlink`, `rename`, `symlink`, `readlink`, `realpath`, `access`, `chmod`, `utimes`, `chown`, `lchown`, `rmdir`, `rm`, `cp`, `copyFile`, `mkdtemp`, `link`. Some wrap sync.
 
-Notes: `utf8` is the only supported text encoding (no latin1, hex, base64, etc.). `readFile` returns `Buffer` when no encoding specified. Promises `FileHandle` API not available.
+**FileHandle methods:** `read`, `write`, `close`, `stat`, `truncate`, `chmod`, `chown`, `utimes`, `datasync`, `sync`, `readFile`, `writeFile`, `appendFile`, `fd` (getter), `[Symbol.asyncDispose]`.
+
+Notes: `utf8` is the only supported text encoding (no latin1, hex, base64, etc.). `readFile` returns `Buffer` when no encoding specified.
 
 ### node:path
 

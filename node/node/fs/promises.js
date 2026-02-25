@@ -290,6 +290,164 @@ export function link(existingPath, newPath) {
 	return uv_fs.link(String(existingPath), String(newPath))
 }
 
+/* ==== FileHandle ==== */
+
+class FileHandle {
+	#fd
+
+	constructor(fd) {
+		this.#fd = fd
+	}
+
+	get fd() {
+		return this.#fd.fd
+	}
+
+	async read(bufferOrOptions, offset, length, position) {
+		let buffer, pos
+		if (bufferOrOptions instanceof Uint8Array || bufferOrOptions instanceof ArrayBuffer || ArrayBuffer.isView(bufferOrOptions)) {
+			buffer = bufferOrOptions instanceof Uint8Array ? bufferOrOptions : new Uint8Array(bufferOrOptions.buffer ?? bufferOrOptions, bufferOrOptions.byteOffset ?? 0, bufferOrOptions.byteLength)
+			pos = position ?? null
+		} else {
+			// Options object form: { buffer, offset, length, position }
+			const opts = bufferOrOptions || {}
+			buffer = opts.buffer || Buffer.alloc(16384)
+			offset = opts.offset ?? 0
+			length = opts.length ?? buffer.byteLength
+			pos = opts.position ?? null
+		}
+		if (offset !== undefined && offset > 0) {
+			buffer = new Uint8Array(buffer.buffer, buffer.byteOffset + offset, length ?? (buffer.byteLength - offset))
+		} else if (length !== undefined && length < buffer.byteLength) {
+			buffer = new Uint8Array(buffer.buffer, buffer.byteOffset, length)
+		}
+		const bytesRead = await uv_fs.read(this.#fd, buffer, pos ?? -1)
+		return { bytesRead, buffer }
+	}
+
+	async write(bufferOrString, offsetOrPosition, lengthOrEncoding, position) {
+		let buf, pos
+		if (typeof bufferOrString === 'string') {
+			buf = new TextEncoder().encode(bufferOrString)
+			pos = offsetOrPosition ?? -1
+		} else {
+			buf = bufferOrString
+			const offset = offsetOrPosition ?? 0
+			const length = lengthOrEncoding ?? (buf.byteLength - offset)
+			if (offset > 0 || length < buf.byteLength) {
+				buf = new Uint8Array(buf.buffer, buf.byteOffset + offset, length)
+			}
+			pos = position ?? -1
+		}
+		const bytesWritten = await uv_fs.write(this.#fd, buf, pos)
+		return { bytesWritten, buffer: bufferOrString }
+	}
+
+	async close() {
+		await uv_fs.close(this.#fd)
+	}
+
+	async stat() {
+		const s = await uv_fs.fstat(this.#fd)
+		return addStatMethods(s)
+	}
+
+	async truncate(len = 0) {
+		await uv_fs.ftruncate(this.#fd, len)
+	}
+
+	async chmod(mode) {
+		await uv_fs.fchmod(this.#fd, mode)
+	}
+
+	async chown(uid, gid) {
+		await uv_fs.fchown(this.#fd, uid, gid)
+	}
+
+	async utimes(atime, mtime) {
+		const toSec = (t) => {
+			if (t instanceof Date) return t.getTime() / 1000
+			if (typeof t === 'string') return new Date(t).getTime() / 1000
+			return Number(t)
+		}
+		await uv_fs.futime(this.#fd, toSec(atime), toSec(mtime))
+	}
+
+	async datasync() {
+		await uv_fs.fdatasync(this.#fd)
+	}
+
+	async sync() {
+		await uv_fs.fsync(this.#fd)
+	}
+
+	async readFile(options) {
+		let encoding = null
+		if (typeof options === 'string') {
+			encoding = options
+		} else if (options?.encoding) {
+			encoding = options.encoding
+		}
+		if (encoding != null && encoding !== 'utf8' && encoding !== 'utf-8') {
+			throw new Error(`readFile: encoding '${encoding}' is not supported, only 'utf8' is supported`)
+		}
+		const st = await uv_fs.fstat(this.#fd)
+		const buf = new Uint8Array(st.size)
+		await uv_fs.read(this.#fd, buf, 0)
+		if (encoding === 'utf8' || encoding === 'utf-8') {
+			return new TextDecoder().decode(buf)
+		}
+		return Buffer.from(buf)
+	}
+
+	async writeFile(data, options) {
+		if (typeof options === 'string') options = { encoding: options }
+		if (options?.encoding != null && options.encoding !== 'utf8' && options.encoding !== 'utf-8') {
+			throw new Error(`writeFile: encoding '${options.encoding}' is not supported, only 'utf8' is supported`)
+		}
+		let buf
+		if (typeof data === 'string') {
+			buf = new TextEncoder().encode(data)
+		} else if (data instanceof ArrayBuffer) {
+			buf = new Uint8Array(data)
+		} else if (ArrayBuffer.isView(data)) {
+			buf = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+		} else {
+			throw new TypeError('writeFile: data must be string, ArrayBuffer, or TypedArray')
+		}
+		// Truncate then write from beginning
+		await uv_fs.ftruncate(this.#fd, 0)
+		await uv_fs.write(this.#fd, buf, 0)
+	}
+
+	async appendFile(data, options) {
+		if (typeof options === 'string') options = { encoding: options }
+		if (options?.encoding != null && options.encoding !== 'utf8' && options.encoding !== 'utf-8') {
+			throw new Error(`appendFile: encoding '${options.encoding}' is not supported, only 'utf8' is supported`)
+		}
+		let buf
+		if (typeof data === 'string') {
+			buf = new TextEncoder().encode(data)
+		} else if (data instanceof ArrayBuffer) {
+			buf = new Uint8Array(data)
+		} else if (ArrayBuffer.isView(data)) {
+			buf = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+		} else {
+			throw new TypeError('appendFile: data must be string, ArrayBuffer, or TypedArray')
+		}
+		await uv_fs.write(this.#fd, buf, -1)
+	}
+
+	[Symbol.asyncDispose]() {
+		return this.close()
+	}
+}
+
+export async function open(path, flags = 'r', mode = 0o666) {
+	const fd = await uv_fs.open(String(path), flags, mode)
+	return new FileHandle(fd)
+}
+
 /* Fallbacks (no native async implementation yet) */
 
 export const rm = wrapSync(rmSync)

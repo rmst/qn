@@ -12,7 +12,7 @@ import {
 	copyfileSync as native_copyfile, mkdtempSync as native_mkdtemp,
 	openSync as native_open, closeSync as native_close,
 	S_IFMT, S_IFREG, S_IFDIR, S_IFLNK, S_IFBLK, S_IFCHR, S_IFIFO, S_IFSOCK,
-	O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND,
+	O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, O_EXCL,
 } from 'qn:uv-fs'
 
 // Re-export glob functions from separate module
@@ -478,6 +478,7 @@ export const constants = {
 	O_CREAT,
 	O_TRUNC,
 	O_APPEND,
+	O_EXCL,
 	S_IFMT,
 	S_IFREG,
 	S_IFDIR,
