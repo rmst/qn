@@ -156,7 +156,7 @@ describe('TypeScript execution', () => {
 	})
 })
 
-describe('TypeScript compilation (qnc)', () => {
+describe('TypeScript compilation (qnc)', { concurrency: true }, () => {
 	const nodeDir = resolve(ROOT, 'node')
 	const $qnc = $({ env: { ...process.env, NODE_PATH: nodeDir, NO_COLOR: '1' } })
 

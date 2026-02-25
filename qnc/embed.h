@@ -22,13 +22,13 @@
 #define QNC_PACK_FOOTER_SIZE 24
 
 /*
- * Extract embedded support files to a temporary directory.
- * Returns the path to the temp directory (caller must free),
- * or NULL if no embedded files found (fall back to exe_dir).
- * The temp directory contains the same layout as bin/<platform>/
- * (headers at top level, subdirs for module_resolution/ and libuv/).
+ * Extract embedded support files.
+ * If target_dir is non-NULL, extract there and skip files that already
+ * exist (for use with --cache-dir). The directory is created if needed.
+ * If target_dir is NULL, extract to a fresh mkdtemp under /tmp/.
+ * Returns the directory path (caller must free), or NULL on failure.
  */
-char *qnc_embed_extract(const char *exe_path);
+char *qnc_embed_extract(const char *exe_path, const char *target_dir);
 
 /*
  * Clean up the temp directory created by qnc_embed_extract.

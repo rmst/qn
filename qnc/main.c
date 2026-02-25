@@ -47,7 +47,7 @@
 #include "module_resolution/module-resolution.h"
 #include "qnc/embed.h"
 
-/* --- TypeScript transform (isolated runtime) --- */
+/* --- Source transform (TypeScript stripping + CJS wrapping) --- */
 
 static JSRuntime *ts_rt;
 static JSContext *ts_ctx;
@@ -97,48 +97,6 @@ static void ts_init(void)
     }
 }
 
-/* Transform source via the isolated TS runtime.
-   Returns a new buffer (allocated with js_malloc on compile_ctx) or the
-   original buf unchanged.  On error returns NULL. */
-static uint8_t *ts_transform(JSContext *compile_ctx, uint8_t *buf,
-                              size_t buf_len, const char *filename,
-                              size_t *out_len)
-{
-    *out_len = buf_len;
-    if (!ts_available)
-        return buf;
-
-    /* Call transform function in the isolated ts_ctx */
-    JSValue args[2];
-    args[0] = JS_NewStringLen(ts_ctx, (char *)buf, buf_len);
-    args[1] = JS_NewString(ts_ctx, filename);
-    JSValue result = JS_Call(ts_ctx, ts_fn, JS_UNDEFINED, 2, args);
-    JS_FreeValue(ts_ctx, args[0]);
-    JS_FreeValue(ts_ctx, args[1]);
-    if (JS_IsException(result)) {
-        js_std_dump_error(ts_ctx);
-        return NULL;
-    }
-
-    /* Extract result string and copy into compile_ctx's allocator */
-    size_t new_len;
-    const char *str = JS_ToCStringLen(ts_ctx, &new_len, result);
-    JS_FreeValue(ts_ctx, result);
-    if (!str)
-        return NULL;
-
-    uint8_t *new_buf = js_malloc(compile_ctx, new_len + 1);
-    if (!new_buf) {
-        JS_FreeCString(ts_ctx, str);
-        return NULL;
-    }
-    memcpy(new_buf, str, new_len + 1);
-    JS_FreeCString(ts_ctx, str);
-    js_free(compile_ctx, buf);
-    *out_len = new_len;
-    return new_buf;
-}
-
 static void ts_free(void)
 {
     if (!ts_rt) return;
@@ -152,7 +110,139 @@ static void ts_free(void)
     ts_available = FALSE;
 }
 
-/* --- End TypeScript transform --- */
+/**
+ * Check if a file should be treated as CommonJS.
+ * - .cjs → always CJS
+ * - .mjs → never CJS
+ * - .js  → CJS only if nearest package.json has "type": "commonjs"
+ *
+ * Uses compile_ctx for JSON parsing when checking package.json.
+ */
+static int is_cjs(JSContext *compile_ctx, const char *filename)
+{
+    if (has_suffix(filename, ".cjs")) return 1;
+    if (has_suffix(filename, ".mjs")) return 0;
+    if (!has_suffix(filename, ".js")) return 0;
+
+    /* .js file — walk up from file's directory looking for package.json */
+    char dir[PATH_MAX];
+    size_t len = strlen(filename);
+    if (len >= sizeof(dir)) return 0;
+    memcpy(dir, filename, len + 1);
+
+    char *slash = strrchr(dir, '/');
+    if (slash) *slash = '\0';
+    else return 0;
+
+    for (;;) {
+        char pkg_path[PATH_MAX];
+        snprintf(pkg_path, sizeof(pkg_path), "%s/package.json", dir);
+
+        size_t buf_len;
+        uint8_t *buf = js_load_file(compile_ctx, &buf_len, pkg_path);
+        if (buf) {
+            JSValue pkg = JS_ParseJSON(compile_ctx, (char *)buf, buf_len, pkg_path);
+            js_free(compile_ctx, buf);
+            if (!JS_IsException(pkg)) {
+                JSValue type_val = JS_GetPropertyStr(compile_ctx, pkg, "type");
+                const char *type_str = JS_ToCString(compile_ctx, type_val);
+                int is_commonjs = type_str && strcmp(type_str, "commonjs") == 0;
+                if (type_str) JS_FreeCString(compile_ctx, type_str);
+                JS_FreeValue(compile_ctx, type_val);
+                JS_FreeValue(compile_ctx, pkg);
+                return is_commonjs;
+            }
+            /* JSON parse error — clear exception and continue walking */
+            JSValue ex = JS_GetException(compile_ctx);
+            JS_FreeValue(compile_ctx, ex);
+        }
+
+        slash = strrchr(dir, '/');
+        if (!slash || slash == dir) break;
+        *slash = '\0';
+    }
+
+    return 0;
+}
+
+static const char cjs_prefix[] =
+    "import { __cjsLoad } from \"qn:cjs\"\n"
+    "const { module: __cjs_module } = __cjsLoad("
+    "import.meta.filename, import.meta.dirname, "
+    "function(exports, require, module, __filename, __dirname) {\n";
+
+static const char cjs_suffix[] =
+    "\n});\n"
+    "export default __cjs_module.exports;\n";
+
+/**
+ * Apply source transforms: TypeScript stripping and CJS-to-ESM wrapping.
+ * Returns a new buffer (allocated with js_malloc on compile_ctx) or the
+ * original buf unchanged.  On error returns NULL.
+ */
+static uint8_t *source_transform(JSContext *compile_ctx, uint8_t *buf,
+                                  size_t buf_len, const char *filename,
+                                  size_t *out_len)
+{
+    *out_len = buf_len;
+
+    /* TypeScript stripping (via isolated JS runtime) */
+    if (ts_available) {
+        JSValue args[2];
+        args[0] = JS_NewStringLen(ts_ctx, (char *)buf, buf_len);
+        args[1] = JS_NewString(ts_ctx, filename);
+        JSValue result = JS_Call(ts_ctx, ts_fn, JS_UNDEFINED, 2, args);
+        JS_FreeValue(ts_ctx, args[0]);
+        JS_FreeValue(ts_ctx, args[1]);
+        if (JS_IsException(result)) {
+            js_std_dump_error(ts_ctx);
+            return NULL;
+        }
+
+        size_t new_len;
+        const char *str = JS_ToCStringLen(ts_ctx, &new_len, result);
+        JS_FreeValue(ts_ctx, result);
+        if (!str)
+            return NULL;
+
+        uint8_t *new_buf = js_malloc(compile_ctx, new_len + 1);
+        if (!new_buf) {
+            JS_FreeCString(ts_ctx, str);
+            return NULL;
+        }
+        memcpy(new_buf, str, new_len + 1);
+        JS_FreeCString(ts_ctx, str);
+        js_free(compile_ctx, buf);
+        buf = new_buf;
+        buf_len = new_len;
+        *out_len = new_len;
+    }
+
+    /* CJS-to-ESM wrapping */
+    if (is_cjs(compile_ctx, filename)) {
+        size_t prefix_len = sizeof(cjs_prefix) - 1;
+        size_t suffix_len = sizeof(cjs_suffix) - 1;
+        size_t new_len = prefix_len + buf_len + suffix_len;
+
+        uint8_t *new_buf = js_malloc(compile_ctx, new_len + 1);
+        if (!new_buf) {
+            js_free(compile_ctx, buf);
+            return NULL;
+        }
+        memcpy(new_buf, cjs_prefix, prefix_len);
+        memcpy(new_buf + prefix_len, buf, buf_len);
+        memcpy(new_buf + prefix_len + buf_len, cjs_suffix, suffix_len);
+        new_buf[new_len] = '\0';
+
+        js_free(compile_ctx, buf);
+        *out_len = new_len;
+        return new_buf;
+    }
+
+    return buf;
+}
+
+/* --- End source transform --- */
 
 typedef struct {
     char *name;
@@ -219,6 +309,11 @@ static int native_module_cap = 0;
 
 /* Extra files to pass to the linker (--link flag) */
 static namelist_t extra_link_files;
+
+/* Embedded native C source files (auto-detected from libuv/ in embedded pack).
+   These are compiled to .o and linked automatically by output_executable.
+   name=relative path (libuv/foo.c), short_name=module c_name */
+static namelist_t embedded_native_sources;
 
 /* Optional cache directory for compiled .o files (--cache-dir flag) */
 static const char *cache_dir = NULL;
@@ -454,7 +549,13 @@ static char *resolve_support_dir(const char *exename,
     char exe_path[4096];
     size_t exe_path_size = sizeof(exe_path);
     if (uv_exepath(exe_path, &exe_path_size) == 0) {
-        char *tmpdir = qnc_embed_extract(exe_path);
+        char embed_path[PATH_MAX];
+        const char *embed_dir = NULL;
+        if (cache_dir) {
+            snprintf(embed_path, sizeof(embed_path), "%s/embed", cache_dir);
+            embed_dir = embed_path;
+        }
+        char *tmpdir = qnc_embed_extract(exe_path, embed_dir);
         if (tmpdir) {
             snprintf(buf, sizeof(buf), "%s/quickjs.h", tmpdir);
             if (access(buf, R_OK) == 0) {
@@ -462,7 +563,7 @@ static char *resolve_support_dir(const char *exename,
                 pstrcpy(lib_dir, lib_size, tmpdir);
                 return tmpdir;
             }
-            qnc_embed_cleanup(tmpdir);
+            if (!cache_dir) qnc_embed_cleanup(tmpdir);
             free(tmpdir);
         }
     }
@@ -749,7 +850,7 @@ static int build_native_package(const char *pkg_dir, const char *out_filename,
             }
             free(obj_files);
             free(obj_is_prebuilt);
-            qnc_embed_cleanup(embed_tmpdir);
+            if (!cache_dir) qnc_embed_cleanup(embed_tmpdir);
             free(embed_tmpdir);
             native_module_free(&nm);
             return ret;
@@ -803,7 +904,7 @@ static int build_native_package(const char *pkg_dir, const char *out_filename,
     free(obj_files);
     free(obj_is_prebuilt);
 
-    qnc_embed_cleanup(embed_tmpdir);
+    if (!cache_dir) qnc_embed_cleanup(embed_tmpdir);
     free(embed_tmpdir);
     native_module_free(&nm);
 
@@ -1080,6 +1181,33 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
             fprintf(stderr, "Warning: binary module '%s' will be dynamically loaded\n", disk_name);
             m = JS_NewCModule(ctx, reg_name, js_module_dummy_init);
         }
+    } else if (strcmp(disk_name, "qn/version-info") == 0 ||
+               has_suffix(disk_name, "/qn/version-info.js")) {
+        /* Synthetic qn:version-info module — generated from build-time defines */
+        char version_src[512];
+#ifdef CONFIG_GIT_DIRTY
+        snprintf(version_src, sizeof(version_src),
+                 "export const commit = '%s', buildTime = '%s';",
+                 CONFIG_GIT_COMMIT, CONFIG_BUILD_TIME);
+#else
+        snprintf(version_src, sizeof(version_src),
+                 "export const commit = '%s', buildTime = null;",
+                 CONFIG_GIT_COMMIT);
+#endif
+        size_t buf_len = strlen(version_src);
+        JSValue func_val = JS_Eval(ctx, version_src, buf_len, reg_name,
+                                   JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+        if (JS_IsException(func_val))
+            return NULL;
+        char cname[1024];
+        get_c_name(cname, sizeof(cname), disk_name);
+        if (namelist_find(&cname_list, cname))
+            find_unique_cname(cname, sizeof(cname));
+        output_object_code(ctx, outfile, func_val, cname, CNAME_TYPE_MODULE);
+        if (!namelist_find(&embedded_module_names, disk_name))
+            namelist_add(&embedded_module_names, disk_name, NULL, 0);
+        m = JS_VALUE_GET_PTR(func_val);
+        JS_FreeValue(ctx, func_val);
     } else {
         size_t buf_len;
         uint8_t *buf;
@@ -1114,7 +1242,7 @@ JSModuleDef *jsc_module_loader(JSContext *ctx,
         }
 
         /* Apply source transform (e.g. TypeScript stripping) */
-        buf = ts_transform(ctx, buf, buf_len, resolved_name, &buf_len);
+        buf = source_transform(ctx, buf, buf_len, resolved_name, &buf_len);
         if (!buf) {
             if (nodepath_resolved) js_free(ctx, nodepath_resolved);
             if (index_resolved) js_free(ctx, index_resolved);
@@ -1212,7 +1340,7 @@ static void compile_file(JSContext *ctx, FILE *fo,
         exit(1);
     }
     /* Apply source transform (e.g. TypeScript stripping) */
-    buf = ts_transform(ctx, buf, buf_len, filename, &buf_len);
+    buf = source_transform(ctx, buf, buf_len, filename, &buf_len);
     if (!buf) {
         js_std_dump_error(ctx);
         exit(1);
@@ -1277,6 +1405,23 @@ static const char main_c_template1[] =
     "  js_std_init_handlers(rt);\n"
     ;
 
+/* Default modules included in every qnc build unless --no-default-modules */
+static const char *default_modules[] = {
+    "node-globals", "repl",
+    "node:fs", "node:fs/promises", "node:process", "node:child_process",
+    "node:crypto", "node:path", "node:events",
+    "node:stream", "node:stream/promises",
+    "node:buffer", "node:url", "node:abort",
+    "node:fetch", "node:fetch/Headers", "node:fetch/Response",
+    "node:dgram", "node:net", "node:tls", "node:http", "node:http/parse",
+    "node:sqlite", "node:util", "node:assert", "node:test",
+    "node:os", "node:module",
+    "qn:introspect", "qn:http", "qn:pty", "qn:version-info",
+    "qn:sucrase", "qn:worker", "qn:cjs",
+    "qx", "ws",
+    NULL,
+};
+
 #define PROG_NAME "qnc"
 
 void help(void)
@@ -1299,7 +1444,8 @@ void help(void)
            "-s            strip all the debug info\n"
            "--keep-source keep the source code\n"
            "--link file   pass file (.o/.a) to the linker\n"
-           "--cache-dir d cache compiled native module .o files in directory d\n",
+           "--cache-dir d cache compiled native module .o files in directory d\n"
+           "--no-default-modules  don't include default modules (node:*, qn:*, etc.)\n",
            JS_DEFAULT_STACK_SIZE);
 #ifdef CONFIG_LTO
     {
@@ -1346,26 +1492,111 @@ static int output_executable(const char *out_filename, const char *cfilename,
     char *embed_tmpdir = resolve_support_dir(exename, inc_dir, sizeof(inc_dir),
                                              lib_dir, sizeof(lib_dir));
 
-    /* Max argv slots: base args + native module .o/.a files + ldflags + extra link files */
+    /* Compile embedded native C sources (libuv modules) to .o files.
+       When embed_tmpdir is set, sources are in the extracted tmpdir.
+       When running locally (embed_tmpdir == NULL), we need a separate
+       extraction to get the C sources (resolve_support_dir only checks
+       for headers, not C sources). */
+    namelist_t embedded_native_objs;
+    memset(&embedded_native_objs, 0, sizeof(embedded_native_objs));
+    char *native_tmpdir = NULL;
+    if (!embed_tmpdir && embedded_native_sources.count > 0) {
+        char exe_path[4096];
+        size_t exe_path_size = sizeof(exe_path);
+        if (uv_exepath(exe_path, &exe_path_size) == 0) {
+            char embed_path[PATH_MAX];
+            const char *embed_dir = NULL;
+            if (cache_dir) {
+                snprintf(embed_path, sizeof(embed_path), "%s/embed", cache_dir);
+                embed_dir = embed_path;
+            }
+            native_tmpdir = qnc_embed_extract(exe_path, embed_dir);
+        }
+    }
+    const char *native_base = embed_tmpdir ? embed_tmpdir : native_tmpdir;
+    char uv_inc_dir[PATH_MAX];
+    if (native_base)
+        snprintf(uv_inc_dir, sizeof(uv_inc_dir), "%s/vendor/libuv/include", native_base);
+    for (int i = 0; native_base && i < embedded_native_sources.count; i++) {
+        char src_path[PATH_MAX];
+        snprintf(src_path, sizeof(src_path), "%s/%s",
+                 native_base, embedded_native_sources.array[i].name);
+        char obj_path[PATH_MAX];
+        if (cache_dir) {
+            ensure_dir(cache_dir);
+            snprintf(obj_path, sizeof(obj_path), "%s/%s.o",
+                     cache_dir, embedded_native_sources.array[i].short_name);
+        } else {
+            snprintf(obj_path, sizeof(obj_path), "/tmp/qnc_native_%d_%d.o", getpid(), i);
+        }
+
+        /* Skip compilation if cached .o exists — embedded sources are baked
+           into the binary and don't change between runs, so existence is enough */
+        if (cache_dir) {
+            struct stat cache_st;
+            if (stat(obj_path, &cache_st) == 0) {
+                namelist_add(&embedded_native_objs, obj_path, NULL, 1);
+                continue;
+            }
+        }
+
+        const char *cc_argv[20];
+        const char **cc_arg = cc_argv;
+        *cc_arg++ = CONFIG_CC;
+        *cc_arg++ = "-O2";
+        *cc_arg++ = "-D_GNU_SOURCE";
+        *cc_arg++ = "-I";
+        *cc_arg++ = inc_dir;
+        *cc_arg++ = "-I";
+        *cc_arg++ = uv_inc_dir;
+        *cc_arg++ = "-c";
+        *cc_arg++ = "-o";
+        *cc_arg++ = obj_path;
+        *cc_arg++ = src_path;
+        *cc_arg = NULL;
+
+        if (verbose) {
+            for (const char **p = cc_argv; *p; p++)
+                printf("%s ", *p);
+            printf("\n");
+        }
+        int cc_ret = exec_cmd((char **)cc_argv);
+        if (cc_ret != 0) {
+            fprintf(stderr, "qnc: failed to compile embedded native source '%s'\n", src_path);
+            namelist_free(&embedded_native_objs);
+            if (!cache_dir) qnc_embed_cleanup(embed_tmpdir);
+            free(embed_tmpdir);
+            if (!cache_dir) qnc_embed_cleanup(native_tmpdir);
+            free(native_tmpdir);
+            return cc_ret;
+        }
+        namelist_add(&embedded_native_objs, obj_path, NULL, cache_dir ? 1 : 0);
+    }
+
+    /* Max argv slots: base args + native module .o/.a files + ldflags + extra link files + embedded native .o */
     int total_obj_slots = 0;
     int total_ldflags = 0;
     for (int mi = 0; mi < native_module_count; mi++) {
         total_obj_slots += native_modules[mi].source_count + native_modules[mi].object_count;
         total_ldflags += native_modules[mi].ldflag_count;
     }
-    int max_argv = 64 + total_obj_slots + total_ldflags + extra_link_files.count;
+    int max_argv = 64 + total_obj_slots + total_ldflags + extra_link_files.count
+                   + embedded_native_objs.count;
     const char **argv = malloc(sizeof(const char *) * max_argv);
     const char **arg, *bn_suffix, *lto_suffix;
     char libjsname[1024];
     char libuvname[1024];
     int ret;
 
-    /* Compile native module C sources to .o files */
+    /* Compile native module C sources to .o files (from -M / package.json) */
     if (native_module_count > 0) {
         ret = compile_native_modules(inc_dir, verbose);
         if (ret != 0) {
             free(argv);
-            qnc_embed_cleanup(embed_tmpdir);
+            for (int i = 0; i < embedded_native_objs.count; i++)
+                unlink(embedded_native_objs.array[i].name);
+            namelist_free(&embedded_native_objs);
+            if (!cache_dir) qnc_embed_cleanup(embed_tmpdir);
             free(embed_tmpdir);
             return ret;
         }
@@ -1394,12 +1625,17 @@ static int output_executable(const char *out_filename, const char *cfilename,
     *arg++ = "-rdynamic";
     *arg++ = cfilename;
 
-    /* Add native module .o files */
+    /* Add native module .o files (from -M / package.json) */
     for (int mi = 0; mi < native_module_count; mi++) {
         NativeModule *nm = &native_modules[mi];
         for (int oi = 0; oi < nm->obj_count; oi++) {
             *arg++ = nm->obj_files[oi];
         }
+    }
+
+    /* Add embedded native module .o files */
+    for (int i = 0; i < embedded_native_objs.count; i++) {
+        *arg++ = embedded_native_objs.array[i].name;
     }
 
     /* Add extra link files (--link flag) */
@@ -1447,9 +1683,18 @@ static int output_executable(const char *out_filename, const char *cfilename,
         }
     }
 
-    /* Clean up embedded tmpdir if we extracted one */
-    qnc_embed_cleanup(embed_tmpdir);
+    /* Clean up embedded native .o files (skip cached ones) */
+    for (int i = 0; i < embedded_native_objs.count; i++) {
+        if (!embedded_native_objs.array[i].flags)
+            unlink(embedded_native_objs.array[i].name);
+    }
+    namelist_free(&embedded_native_objs);
+
+    /* Clean up embedded tmpdirs */
+    if (!cache_dir) qnc_embed_cleanup(embed_tmpdir);
     free(embed_tmpdir);
+    if (!cache_dir) qnc_embed_cleanup(native_tmpdir);
+    free(native_tmpdir);
 
     free(argv);
     return ret;
@@ -1524,6 +1769,7 @@ int main(int argc, char **argv)
     OutputTypeEnum output_type;
     size_t stack_size;
     namelist_t dynamic_module_list;
+    BOOL no_default_modules = FALSE;
 
     out_filename = NULL;
     output_type = OUTPUT_EXECUTABLE;
@@ -1703,6 +1949,10 @@ int main(int argc, char **argv)
                 cache_dir = get_short_optarg(&optind, 0, "", argc, argv);
                 break;
             }
+            if (!strcmp(longopt, "no-default-modules")) {
+                no_default_modules = TRUE;
+                continue;
+            }
             if (opt) {
                 fprintf(stderr, "qjsc: unknown option '-%c'\n", opt);
             } else {
@@ -1714,6 +1964,14 @@ int main(int argc, char **argv)
 
     if (optind >= argc)
         help();
+
+    /* Add default modules unless --no-default-modules was passed */
+    if (!no_default_modules) {
+        for (i = 0; default_modules[i]; i++) {
+            if (!namelist_find(&dynamic_module_list, default_modules[i]))
+                namelist_add(&dynamic_module_list, default_modules[i], NULL, 0);
+        }
+    }
 
     if (!out_filename) {
         if (output_type == OUTPUT_EXECUTABLE) {
@@ -1748,6 +2006,101 @@ int main(int argc, char **argv)
 
     /* TypeScript transform in an isolated runtime (no interference with compile tracking) */
     ts_init();
+
+    /* Extract embedded JS sources and prepend to NODE_PATH so qnc can
+       resolve node:*, qn:*, etc. without requiring an external NODE_PATH.
+       Embedded JS files are stored under a js/ prefix matching the source
+       tree layout (js/node/, js/qx/, js/vendor/). */
+    char *js_embed_tmpdir = NULL;
+    {
+        char exe_path[4096];
+        size_t exe_path_size = sizeof(exe_path);
+        if (uv_exepath(exe_path, &exe_path_size) == 0) {
+            /* When --cache-dir is set, extract embedded files there so
+               subsequent invocations skip extraction entirely (cache hit). */
+            const char *embed_target = NULL;
+            char embed_cache_path[PATH_MAX];
+            if (cache_dir) {
+                snprintf(embed_cache_path, sizeof(embed_cache_path),
+                         "%s/embed", cache_dir);
+                embed_target = embed_cache_path;
+            }
+            char *tmpdir = qnc_embed_extract(exe_path, embed_target);
+            if (tmpdir) {
+                /* Check if js/ subdirectory exists in extracted files */
+                char js_dir[PATH_MAX];
+                snprintf(js_dir, sizeof(js_dir), "%s/js", tmpdir);
+                struct stat st;
+                if (stat(js_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
+                    js_embed_tmpdir = tmpdir;
+                    /* Append js/, js/node, js/vendor to NODE_PATH as fallback.
+                       js/ is needed for bare imports like "qx" → js/qx/index.js.
+                       js/node is needed for "node:fs" → js/node/node/fs.js.
+                       js/vendor is needed for "ws" → js/vendor/ws/index.js.
+                       User-provided NODE_PATH entries take precedence. */
+                    char top_dir[PATH_MAX], node_dir[PATH_MAX], vendor_dir[PATH_MAX];
+                    snprintf(top_dir, sizeof(top_dir), "%s/js", tmpdir);
+                    snprintf(node_dir, sizeof(node_dir), "%s/js/node", tmpdir);
+                    snprintf(vendor_dir, sizeof(vendor_dir), "%s/js/vendor", tmpdir);
+                    const char *existing = getenv("NODE_PATH");
+                    if (existing && existing[0]) {
+                        char *new_path = malloc(strlen(existing) + strlen(top_dir) +
+                                                strlen(node_dir) + strlen(vendor_dir) + 4);
+                        sprintf(new_path, "%s:%s:%s:%s", existing, top_dir, node_dir, vendor_dir);
+                        setenv("NODE_PATH", new_path, 1);
+                        free(new_path);
+                    } else {
+                        char *new_path = malloc(strlen(top_dir) + strlen(node_dir) +
+                                                strlen(vendor_dir) + 3);
+                        sprintf(new_path, "%s:%s:%s", top_dir, node_dir, vendor_dir);
+                        setenv("NODE_PATH", new_path, 1);
+                        free(new_path);
+                    }
+                    /* Auto-detect embedded native C sources in libuv/ dir.
+                       Register them in cmodule_list so the compiler recognizes
+                       native module imports, and track them for compilation
+                       during output_executable. Paths stored as relative
+                       (libuv/foo.c) so output_executable can resolve them
+                       against its own extracted tmpdir. */
+                    char libuv_dir[PATH_MAX];
+                    snprintf(libuv_dir, sizeof(libuv_dir), "%s/libuv", tmpdir);
+                    DIR *dp = opendir(libuv_dir);
+                    if (dp) {
+                        struct dirent *ep;
+                        while ((ep = readdir(dp))) {
+                            size_t nlen = strlen(ep->d_name);
+                            if (nlen < 3 || strcmp(ep->d_name + nlen - 2, ".c") != 0)
+                                continue;
+                            /* Derive module c_name from filename:
+                               qn-uv-fs.c → qn_uv_fs (replace '-' with '_', strip .c) */
+                            char c_name[256];
+                            pstrcpy(c_name, sizeof(c_name), ep->d_name);
+                            c_name[strlen(c_name) - 2] = '\0';  /* strip .c */
+                            for (char *p = c_name; *p; p++)
+                                if (*p == '-') *p = '_';
+
+                            /* Relative path for output_executable to resolve */
+                            char rel_path[PATH_MAX];
+                            snprintf(rel_path, sizeof(rel_path), "libuv/%s", ep->d_name);
+
+                            /* Register in cmodule_list (like -M) so compiler
+                               recognizes imports of this native module.
+                               Skip if already provided via -M flag. */
+                            if (!namelist_find(&cmodule_list, c_name)) {
+                                namelist_add(&cmodule_list, c_name, c_name, 0);
+                                /* Track source for compilation in output_executable */
+                                namelist_add(&embedded_native_sources, rel_path, c_name, 0);
+                            }
+                        }
+                        closedir(dp);
+                    }
+                } else {
+                    if (!cache_dir) qnc_embed_cleanup(tmpdir);
+                    free(tmpdir);
+                }
+            }
+        }
+    }
 
     /* loader for ES6 modules (compile_mode context for embedded:// prefixing) */
     JS_SetModuleLoaderFunc2(rt, qn_module_normalizer, jsc_module_loader, NULL, &compile_resolver_ctx);
@@ -1923,10 +2276,19 @@ int main(int argc, char **argv)
                 "  static const char worker_init_src[] =\n"
                 "    \"import \\\"node-globals\\\"\\n\"\n"
                 "    \"import { stripTypeScriptTypes } from \\\"node:module\\\"\\n\"\n"
+                "    \"import { isCjs } from \\\"qn:cjs\\\"\\n\"\n"
                 "    \"__qn_setSourceTransform((source, filename) => {\\n\"\n"
-                "    \"  if (!filename.endsWith(\\\".ts\\\")) return source\\n\"\n"
-                "    \"  try { return stripTypeScriptTypes(source) }\\n\"\n"
-                "    \"  catch { return stripTypeScriptTypes(source, { mode: \\\"transform\\\" }) }\\n\"\n"
+                "    \"  if (filename.endsWith(\\\".ts\\\")) {\\n\"\n"
+                "    \"    try { source = stripTypeScriptTypes(source) }\\n\"\n"
+                "    \"    catch { source = stripTypeScriptTypes(source, { mode: \\\"transform\\\" }) }\\n\"\n"
+                "    \"  }\\n\"\n"
+                "    \"  if (isCjs(filename)) {\\n\"\n"
+                "    \"    source = `import { __cjsLoad } from \\\"qn:cjs\\\"\\\\n` +\\n\"\n"
+                "    \"      `const { module: __cjs_module } = __cjsLoad(import.meta.filename, import.meta.dirname, function(exports, require, module, __filename, __dirname) {\\\\n` +\\n\"\n"
+                "    \"      source + `\\\\n});\\\\n` +\\n\"\n"
+                "    \"      `export default __cjs_module.exports;\\\\n`\\n\"\n"
+                "    \"  }\\n\"\n"
+                "    \"  return source\\n\"\n"
                 "    \"})\\n\";\n"
                 "  JSValue val = JS_Eval(ctx, worker_init_src, sizeof(worker_init_src) - 1,\n"
                 "                        \"<worker-init>\", JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);\n"
@@ -1987,19 +2349,25 @@ int main(int argc, char **argv)
 
     fclose(fo);
 
+    int ret;
     if (output_type == OUTPUT_EXECUTABLE) {
-        return output_executable(out_filename, cfilename, use_lto, verbose,
-                                 argv[0]);
+        ret = output_executable(out_filename, cfilename, use_lto, verbose,
+                                argv[0]);
+    } else {
+        ret = 0;
     }
     namelist_free(&cname_list);
     namelist_free(&cmodule_list);
     namelist_free(&init_module_list);
     namelist_free(&embedded_module_names);
+    namelist_free(&embedded_native_sources);
     for(i = 0; i < import_map_count; i++) {
         free(import_map_records[i].base);
         free(import_map_records[i].specifier);
         free(import_map_records[i].resolved);
     }
     free(import_map_records);
-    return 0;
+    if (!cache_dir) qnc_embed_cleanup(js_embed_tmpdir);
+    free(js_embed_tmpdir);
+    return ret;
 }

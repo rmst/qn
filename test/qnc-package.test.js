@@ -3,22 +3,22 @@ import assert from 'node:assert'
 import { writeFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { platform } from 'node:os'
-import { test, testQnOnly, $, QN, QNC } from './util.js'
+import { testQnOnly, $, QN, QNC, QNC_PATH } from './util.js'
 
 const ROOT = resolve(dirname(import.meta.filename), '..')
 const FIXTURES = resolve(dirname(import.meta.filename), 'fixtures')
 const NATIVE_FIXTURE = join(FIXTURES, 'native-test')
 const QJS_INC = join(ROOT, 'bin', platform(), 'quickjs')
 
-describe('qnc package', () => {
-	test('builds .so from fixture and loads it', ({ dir }) => {
+describe('qnc package', { concurrency: true }, () => {
+	testQnOnly('builds .so from fixture and loads it', ({ dir }) => {
 		// Copy fixture into temp dir so we don't pollute the repo
 		mkdirSync(`${dir}/pkg`)
 		copyFileSync(join(NATIVE_FIXTURE, 'test_native.c'), `${dir}/pkg/test_native.c`)
 		copyFileSync(join(NATIVE_FIXTURE, 'package.json'), `${dir}/pkg/package.json`)
 
 		// Build the .so
-		const soPath = $`${QNC()} package -o ${dir}/pkg/test_native.so ${dir}/pkg`
+		const soPath = $`${QNC_PATH()} package -o ${dir}/pkg/test_native.so ${dir}/pkg`
 		assert.ok(existsSync(soPath), `.so should exist at ${soPath}`)
 
 		// Write a JS wrapper that imports the .so
@@ -40,7 +40,7 @@ describe('qnc package', () => {
 		copyFileSync(join(NATIVE_FIXTURE, 'test_native.c'), `${dir}/pkg/test_native.c`)
 		copyFileSync(join(NATIVE_FIXTURE, 'package.json'), `${dir}/pkg/package.json`)
 
-		const soPath = $`${QNC()} package ${dir}/pkg`
+		const soPath = $`${QNC_PATH()} package ${dir}/pkg`
 		assert.strictEqual(soPath, `${dir}/pkg/test_native.so`)
 		assert.ok(existsSync(soPath))
 	})
@@ -82,7 +82,7 @@ describe('qnc package', () => {
 			}
 		}))
 
-		const soPath = $`${QNC()} package ${dir}/pkg`
+		const soPath = $`${QNC_PATH()} package ${dir}/pkg`
 		assert.ok(existsSync(soPath))
 
 		writeFileSync(`${dir}/pkg/index.js`, `
@@ -129,13 +129,13 @@ describe('qnc package', () => {
 		writeFileSync(`${dir}/pkg/package.json`, '{"name": "no-qnc"}')
 
 		assert.throws(() => {
-			$`${QNC()} package ${dir}/pkg`
+			$`${QNC_PATH()} package ${dir}/pkg`
 		}, /no "qnc" field/)
 	})
 
 	testQnOnly('error on nonexistent directory', ({ dir }) => {
 		assert.throws(() => {
-			$`${QNC()} package ${dir}/nonexistent`
+			$`${QNC_PATH()} package ${dir}/nonexistent`
 		}, /cannot resolve path/)
 	})
 })

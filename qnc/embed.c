@@ -59,7 +59,7 @@ static void ensure_parent_dirs(const char *path) {
 	free(tmp);
 }
 
-char *qnc_embed_extract(const char *exe_path) {
+char *qnc_embed_extract(const char *exe_path, const char *target_dir) {
 	FILE *f = fopen(exe_path, "rb");
 	if (!f) return NULL;
 
@@ -84,10 +84,17 @@ char *qnc_embed_extract(const char *exe_path) {
 	if (!dir) goto fail;
 	if (fread(dir, 1, dir_size, f) != dir_size) { free(dir); goto fail; }
 
-	/* Create temp directory */
-	char tmpdir[] = "/tmp/qnc_XXXXXX";
-	if (!mkdtemp(tmpdir)) { free(dir); goto fail; }
-	char *result = strdup(tmpdir);
+	/* Create or reuse target directory */
+	char *result;
+	if (target_dir) {
+		ensure_parent_dirs(target_dir);
+		mkdir(target_dir, 0700);
+		result = strdup(target_dir);
+	} else {
+		char tmpdir[] = "/tmp/qnc_XXXXXX";
+		if (!mkdtemp(tmpdir)) { free(dir); goto fail; }
+		result = strdup(tmpdir);
+	}
 
 	/* Parse directory and extract files */
 	const uint8_t *dp = dir;
@@ -108,10 +115,20 @@ char *qnc_embed_extract(const char *exe_path) {
 
 		/* Build output path */
 		char outpath[2048];
-		snprintf(outpath, sizeof(outpath), "%s/%s", tmpdir, name);
+		snprintf(outpath, sizeof(outpath), "%s/%s", result, name);
+
+		/* When using a persistent target dir, skip existing files */
+		if (target_dir) {
+			struct stat st;
+			if (stat(outpath, &st) == 0) {
+				file_offset += fsize;
+				continue;
+			}
+		}
+
 		ensure_parent_dirs(outpath);
 
-		/* Read file data and write to tmpdir */
+		/* Read file data and write */
 		if (fseek(f, (long)file_offset, SEEK_SET) != 0) break;
 		uint8_t *buf = malloc(fsize);
 		if (!buf) break;

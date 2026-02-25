@@ -2,7 +2,7 @@
 
 `qn` provides a subset of the Node.js and Web platform APIs on top of QuickJS. This document lists what's available and what's not.
 
-CommonJS is not supported. Use ES modules with `import.meta.dirname` and `import.meta.filename` instead of `__dirname` and `__filename`.
+CommonJS modules are partially supported. ESM files can import `.cjs` files and `require()` is available via `createRequire`. Use ES modules with `import.meta.dirname` and `import.meta.filename` instead of `__dirname` and `__filename`.
 
 ---
 
@@ -384,7 +384,8 @@ BLOBs returned as `Uint8Array`. Transactions via `exec('BEGIN')`/`exec('COMMIT')
 | API | Status | Notes |
 |-----|--------|-------|
 | `stripTypeScriptTypes` | ✅ | `strip` (whitespace replace) and `transform` (Sucrase) modes |
-| `createRequire` / `builtinModules` / `isBuiltin` | ❌ | |
+| `createRequire` | ✅ | String path or `file://` URL |
+| `builtinModules` / `isBuiltin` | ❌ | |
 
 ---
 

@@ -11,7 +11,10 @@ const BIN = join(ROOT, 'bin', platform())
 
 export const QJSX = () => join(BIN, 'qjsx')
 export const QN = () => join(BIN, 'qn')
-export const QNC = () => join(BIN, 'qnc')
+const QNC_BIN = join(BIN, 'qnc')
+const QNC_TEST_FLAGS = `--no-default-modules --cache-dir ${join(BIN, 'obj', 'qnc-test')}`
+export const QNC = () => `${QNC_BIN} ${QNC_TEST_FLAGS}`
+export const QNC_PATH = () => QNC_BIN
 export const QX = () => join(BIN, 'qx')
 
 /**

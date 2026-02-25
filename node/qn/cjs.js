@@ -10,7 +10,14 @@
  */
 
 import * as std from "std"
-import { dirname, resolve, join, extname } from "node:path"
+import { dirname, join, extname } from "node:path"
+
+const EMBEDDED_PREFIX = "embedded://"
+
+/** Strip embedded:// prefix to get a real filesystem path */
+function toFsPath(path) {
+	return path.startsWith(EMBEDDED_PREFIX) ? path.slice(EMBEDDED_PREFIX.length) : path
+}
 
 
 /** Module cache: absolute path → { exports, loaded } */
@@ -75,7 +82,7 @@ export function isCjs(filename) {
 function resolveRequire(specifier, fromDir) {
 	// Relative or absolute path
 	if (specifier.startsWith("./") || specifier.startsWith("../") || specifier.startsWith("/")) {
-		const base = specifier.startsWith("/") ? specifier : resolve(fromDir, specifier)
+		const base = specifier.startsWith("/") ? specifier : join(fromDir, specifier)
 		return resolveFile(base)
 	}
 
@@ -268,24 +275,28 @@ function makeRequire(fromDir) {
  * @returns {{ module: { exports: any }, exports: object, require: function }}
  */
 export function __cjsLoad(filename, dir, body) {
+	// Strip embedded:// prefix for filesystem access in standalone binaries
+	const fsDir = toFsPath(dir)
+	const fsFilename = toFsPath(filename)
+
 	// Check cache (in case this module was already require()'d)
-	if (moduleCache.has(filename)) {
-		const cached = moduleCache.get(filename)
-		return { module: cached, exports: cached.exports, require: makeRequire(dir) }
+	if (moduleCache.has(fsFilename)) {
+		const cached = moduleCache.get(fsFilename)
+		return { module: cached, exports: cached.exports, require: makeRequire(fsDir) }
 	}
 
-	const module = { exports: {}, loaded: false, id: filename, filename }
-	moduleCache.set(filename, module)
+	const module = { exports: {}, loaded: false, id: fsFilename, filename: fsFilename }
+	moduleCache.set(fsFilename, module)
 
-	const require = makeRequire(dir)
+	const require = makeRequire(fsDir)
 	require.resolve = (specifier) => {
-		const resolved = resolveRequire(specifier, dir)
-		if (!resolved) throw new Error(`Cannot find module '${specifier}' from '${dir}'`)
+		const resolved = resolveRequire(specifier, fsDir)
+		if (!resolved) throw new Error(`Cannot find module '${specifier}' from '${fsDir}'`)
 		return resolved
 	}
 	require.cache = moduleCache
 
-	body(module.exports, require, module, filename, dir)
+	body(module.exports, require, module, fsFilename, fsDir)
 	module.loaded = true
 
 	return { module, exports: module.exports, require }

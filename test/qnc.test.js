@@ -1,103 +1,82 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
-import { writeFileSync, mkdirSync } from 'node:fs'
-import { test, $, QNC } from './util.js'
+import { writeFileSync, mkdirSync, copyFileSync } from 'node:fs'
+import { testQnOnly, $, QNC, QNC_PATH } from './util.js'
 
-describe('qnc compiler', () => {
-	describe('standalone compilation', () => {
-		test('compiles and runs with NODE_PATH imports', ({ dir }) => {
-			mkdirSync(`${dir}/modules/math`, { recursive: true })
-			writeFileSync(`${dir}/modules/math/index.js`, `
-				export function add(a, b) { return a + b }
-				export const PI = 3.14159
-			`)
-			writeFileSync(`${dir}/modules/utils.js`, `
-				export function greet(name) { return "Hello, " + name }
-			`)
-			writeFileSync(`${dir}/app.js`, `
-				import { add, PI } from "math"
-				import { greet } from "utils"
-				console.log(JSON.stringify({
-					greeting: greet("qnc"),
-					sum: add(2, 3),
-					pi: PI
-				}))
-			`)
+describe('qnc compiler', { concurrency: true }, () => {
+	testQnOnly('compiles and runs with NODE_PATH imports', ({ dir }) => {
+		mkdirSync(`${dir}/modules/math`, { recursive: true })
+		writeFileSync(`${dir}/modules/math/index.js`, `
+			export function add(a, b) { return a + b }
+			export const PI = 3.14159
+		`)
+		writeFileSync(`${dir}/modules/utils.js`, `
+			export function greet(name) { return "Hello, " + name }
+		`)
+		writeFileSync(`${dir}/app.js`, `
+			import { add, PI } from "math"
+			import { greet } from "utils"
+			console.log(JSON.stringify({
+				greeting: greet("qnc"),
+				sum: add(2, 3),
+				pi: PI
+			}))
+		`)
 
-			$`NODE_PATH=${dir}/modules ${QNC()} -o ${dir}/app ${dir}/app.js`
-			const output = $`${dir}/app`
+		$`NODE_PATH=${dir}/modules ${QNC()} -o ${dir}/app ${dir}/app.js`
+		const output = $`${dir}/app`
 
-			assert.deepStrictEqual(JSON.parse(output.trim()), {
-				greeting: "Hello, qnc",
-				sum: 5,
-				pi: 3.14159
-			})
-		})
-
-		test('compiles with relative imports', ({ dir }) => {
-			writeFileSync(`${dir}/helper.js`, `export const msg = "from helper"`)
-			writeFileSync(`${dir}/main.js`, `
-				import { msg } from "./helper.js"
-				console.log(JSON.stringify({ msg }))
-			`)
-
-			$`${QNC()} -o ${dir}/main ${dir}/main.js`
-			const output = $`${dir}/main`
-
-			assert.deepStrictEqual(JSON.parse(output.trim()), { msg: "from helper" })
+		assert.deepStrictEqual(JSON.parse(output.trim()), {
+			greeting: "Hello, qnc",
+			sum: 5,
+			pi: 3.14159
 		})
 	})
 
-	describe('dynamic script loading', () => {
-		test('compiled runtime loads external scripts with NODE_PATH', ({ dir }) => {
-			writeFileSync(`${dir}/runtime.js`, `
-				import * as std from "std"
-				import * as os from "os"
-				if (scriptArgs.length < 2) std.exit(1)
-				async function run() {
-					await import(scriptArgs[1])
-				}
-				run()
-				os.setTimeout(() => {}, 50)
-			`)
+	testQnOnly('compiles with relative imports', ({ dir }) => {
+		writeFileSync(`${dir}/helper.js`, `export const msg = "from helper"`)
+		writeFileSync(`${dir}/main.js`, `
+			import { msg } from "./helper.js"
+			console.log(JSON.stringify({ msg }))
+		`)
 
-			mkdirSync(`${dir}/modules`)
-			writeFileSync(`${dir}/modules/utils.js`, `
-				export function greet(name) { return "Hello, " + name }
-			`)
-			writeFileSync(`${dir}/external.js`, `
-				import { greet } from "utils"
-				console.log(JSON.stringify({ result: greet("dynamic") }))
-			`)
+		$`${QNC()} -o ${dir}/main ${dir}/main.js`
+		const output = $`${dir}/main`
 
-			$`${QNC()} -o ${dir}/runtime ${dir}/runtime.js`
-			const output = $`NODE_PATH=${dir}/modules ${dir}/runtime ${dir}/external.js`
+		assert.deepStrictEqual(JSON.parse(output.trim()), { msg: "from helper" })
+	})
 
-			assert.deepStrictEqual(JSON.parse(output.trim()), { result: "Hello, dynamic" })
-		})
+	testQnOnly('compiles CJS module', ({ dir }) => {
+		writeFileSync(`${dir}/lib.cjs`, `module.exports = { hello: "world" }`)
+		writeFileSync(`${dir}/main.js`, `
+			import lib from "./lib.cjs"
+			console.log(JSON.stringify(lib))
+		`)
 
-		test('compiled runtime loads external scripts with relative imports', ({ dir }) => {
-			writeFileSync(`${dir}/runtime.js`, `
-				import * as std from "std"
-				import * as os from "os"
-				if (scriptArgs.length < 2) std.exit(1)
-				async function run() {
-					await import(scriptArgs[1])
-				}
-				run()
-				os.setTimeout(() => {}, 50)
-			`)
+		$`${QNC()} -o ${dir}/app ${dir}/main.js`
+		const output = $`${dir}/app`
 
-			writeFileSync(`${dir}/lib.js`, `export const value = 42`)
-			writeFileSync(`${dir}/script.js`, `
-				import { value } from "./lib.js"
-				console.log(JSON.stringify({ value }))
-			`)
+		assert.deepStrictEqual(JSON.parse(output.trim()), { hello: "world" })
+	})
 
-			$`${QNC()} -o ${dir}/runtime ${dir}/runtime.js`
-			const output = $`${dir}/runtime ${dir}/script.js`
+	testQnOnly('self-contained compilation with node:fs', ({ dir }) => {
+		// Copy qnc to isolated dir (away from support files next to it)
+		// so it must use embedded native sources
+		mkdirSync(`${dir}/bin`)
+		copyFileSync(QNC_PATH(), `${dir}/bin/qnc`)
 
-			assert.deepStrictEqual(JSON.parse(output.trim()), { value: 42 })
-		})
+		writeFileSync(`${dir}/main.js`, `
+			import { writeFileSync, readFileSync, unlinkSync } from 'node:fs'
+			import { join } from 'node:path'
+			import { tmpdir } from 'node:os'
+			const tmp = join(tmpdir(), 'qnc_self_contained_test.txt')
+			writeFileSync(tmp, 'hello')
+			const content = readFileSync(tmp, 'utf8')
+			unlinkSync(tmp)
+			console.log(content)
+		`)
+
+		$`${dir}/bin/qnc --no-default-modules --cache-dir ${dir}/cache -o ${dir}/app ${dir}/main.js`
+		assert.strictEqual($`${dir}/app`, 'hello')
 	})
 })

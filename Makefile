@@ -141,6 +141,11 @@ $(QNC_PROG): $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/qnc-embed.o $(BIN_DIR)/obj/quic
 	# Embed support files into the qnc binary for standalone use.
 	# Headers are embedded at both top level (for generated C includes)
 	# and quickjs/ subdirectory (for module-resolution.h includes).
+	# Source tree (node/, qx/, vendor/) is embedded under js/ prefix:
+	#   - JS sources for module resolution
+	#   - Native module C sources + package.json for auto-compilation (tls, sqlite)
+	# Native C sources from libuv/ and libuv headers from vendor/libuv/include/
+	# are embedded for auto-compilation of libuv bindings at link time.
 	$(QNC_PACK) $@ \
 		quickjs.h:$(BIN_DIR)/quickjs/quickjs.h \
 		quickjs-libc.h:$(BIN_DIR)/quickjs/quickjs-libc.h \
@@ -152,14 +157,18 @@ $(QNC_PROG): $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/qnc-embed.o $(BIN_DIR)/obj/quic
 		quickjs/list.h:$(BIN_DIR)/quickjs/list.h \
 		module_resolution/module-resolution.h:module_resolution/module-resolution.h \
 		exit-handler.h:exit-handler.h \
-		libuv/qn-vm.h:libuv/qn-vm.h \
-		libuv/qn-worker.h:libuv/qn-worker.h \
 		libquickjs.a:$(BIN_DIR)/libquickjs.a \
-		libuv.a:$(LIBUV_LIB)
+		libuv.a:$(LIBUV_LIB) \
+		$$(find libuv/ -name '*.c' -o -name '*.h' | sed 's|.*|&:&|') \
+		$$(find vendor/libuv/include -name '*.h' | sed 's|.*|&:&|') \
+		$$(find node/ qx/ vendor/ \( -name '*.js' -o -name '*.c' -o -name '*.h' -o -name 'package.json' \) | sed 's|.*|js/&:&|')
 
 # Build qnc.o from standalone source
 $(BIN_DIR)/obj/qnc.o: qnc/main.c qnc/embed.h module_resolution/module-resolution.h quickjs-deps | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -DCONFIG_CC=\"$(CC)\" -DCONFIG_PREFIX=\"/usr/local\" -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
+	$(CC) $(CFLAGS_OPT) -DCONFIG_CC=\"$(CC)\" -DCONFIG_PREFIX=\"/usr/local\" \
+		-DCONFIG_GIT_COMMIT=\"$(GIT_COMMIT)\" \
+		$(if $(filter 1,$(GIT_DIRTY)),-DCONFIG_GIT_DIRTY -DCONFIG_BUILD_TIME=\"$(BUILD_TIME)\") \
+		-I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
 
 # Build qnc embed extraction module
 $(BIN_DIR)/obj/qnc-embed.o: qnc/embed.c qnc/embed.h | $(BIN_DIR)/obj
@@ -229,47 +238,17 @@ $(BIN_DIR)/obj/qn-vm.o: libuv/qn-vm.c libuv/qn-vm.h libuv/qn-uv-utils.h quickjs-
 $(BIN_DIR)/obj/qn-worker.o: libuv/qn-worker.c libuv/qn-worker.h libuv/qn-vm.h libuv/qn-uv-utils.h quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)/obj
 	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
 
-# Native C extensions for linking (sqlite is now auto-embedded via binding.gyp)
-NATIVE_OBJS = $(BIN_DIR)/obj/qn-uv-utils.o $(BIN_DIR)/obj/qn-uv-fs.o $(BIN_DIR)/obj/qn-uv-dns.o $(BIN_DIR)/obj/qn-uv-signals.o $(BIN_DIR)/obj/qn-uv-stream.o $(BIN_DIR)/obj/qn-uv-dgram.o $(BIN_DIR)/obj/qn-uv-process.o $(BIN_DIR)/obj/qn-uv-pty.o $(BIN_DIR)/obj/qn-vm.o $(BIN_DIR)/obj/qn-worker.o
-# Generate version info module for qn/qx --version
-# Uses FORCE + cmp to always check but only update when content changes,
-# avoiding unnecessary rebuilds of qn/qx.
-$(BIN_DIR)/obj/qn/version-info.js: FORCE | $(BIN_DIR)/obj
-	@mkdir -p $(BIN_DIR)/obj/qn
-	@if [ "$(GIT_DIRTY)" = "1" ]; then \
-		echo "export const commit = '$(GIT_COMMIT)', buildTime = '$(BUILD_TIME)';" > $@.tmp; \
-	else \
-		echo "export const commit = '$(GIT_COMMIT)', buildTime = null;" > $@.tmp; \
-	fi
-	@cmp -s $@ $@.tmp && rm $@.tmp || mv $@.tmp $@
-
-# Common qnc flags for building qn/qx
-QNC_FLAGS = --cache-dir $(BIN_DIR)/obj/qnc \
-            -M qn_uv_fs,qn_uv_fs -M qn_uv_dns,qn_uv_dns \
-            -M qn_uv_signals,qn_uv_signals -M qn_uv_stream,qn_uv_stream \
-            -M qn_uv_dgram,qn_uv_dgram -M qn_uv_process,qn_uv_process \
-            -M qn_uv_pty,qn_uv_pty -M qn_vm,qn_vm \
-            -M qn_worker,qn_worker
-QNC_MODULES = -D node-globals -D repl -D node:fs -D node:process \
-              -D node:child_process -D node:crypto -D node:path -D node:events \
-              -D node:stream -D node:stream/promises -D node:fs/promises \
-              -D node:buffer -D node:url -D node:abort -D node:fetch \
-              -D node:fetch/Headers -D node:fetch/Response -D node:dgram \
-              -D node:net -D node:tls -D node:http -D node:http/parse \
-              -D node:sqlite -D node:util -D node:assert -D node:test \
-              -D node:os -D qn:introspect -D qn:http -D qn:pty -D qn:version-info \
-              -D qn:sucrase -D qn:worker -D qn:cjs -D node:module -D qx
-# Extra .o/.a files to pass through to the linker (non-packaged native modules)
-QNC_EXTRA_LINK = $(patsubst %,--link %,$(NATIVE_OBJS))
+# qnc includes all default modules (node:*, qn:*, qx, ws, etc.) automatically.
+# Use --no-default-modules to build a minimal binary with only explicit -D modules.
+QNC_FLAGS = --cache-dir $(BIN_DIR)/obj/qnc
 
 # Build qn (standalone executable with embedded node modules, qx, sqlite, and native extensions)
-# SQLite and TLS are auto-embedded via package.json "qnc" field; other native modules still use -M + --link
-$(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js vendor/ws/*.js $(QNC_PROG) $(NATIVE_OBJS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
-	NODE_PATH=./node:./qx:./vendor:$(BIN_DIR)/obj $(QNC_PROG) $(QNC_FLAGS) $(QNC_MODULES) -D ws $(QNC_EXTRA_LINK) -o $@ node/bootstrap.js
+$(QN_PROG): node/bootstrap.js node/node-globals.js node/node/* node/node/*/* node/repl.js qx/index.js qx/core.js vendor/ws/*.js $(QNC_PROG) quickjs-deps | $(BIN_DIR)
+	$(QNC_PROG) $(QNC_FLAGS) -o $@ node/bootstrap.js
 
 # Build qx (zx-compatible shell scripting with $ function)
-$(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js vendor/ws/*.js $(QNC_PROG) $(NATIVE_OBJS) $(BIN_DIR)/obj/qn/version-info.js quickjs-deps | $(BIN_DIR)
-	NODE_PATH=./node:./qx:./vendor:$(BIN_DIR)/obj $(QNC_PROG) $(QNC_FLAGS) $(QNC_MODULES) -D ws $(QNC_EXTRA_LINK) -o $@ qx/bootstrap.js
+$(QX_PROG): qx/bootstrap.js node/node-globals.js qx/* node/node/* node/node/*/* node/repl.js vendor/ws/*.js $(QNC_PROG) quickjs-deps | $(BIN_DIR)
+	$(QNC_PROG) $(QNC_FLAGS) -o $@ qx/bootstrap.js
 
 # Create convenience symlinks in bin/ directory
 convenience-links: $(QN_PROG) $(QX_PROG) $(QNC_PROG)
@@ -338,5 +317,4 @@ help:
 	@echo "  ./bin/qx script.js     # zx-compatible shell scripting"
 	@echo "  NODE_PATH=./my_modules ./bin/qnc -o app.c app.js"
 
-.PHONY: all build clean clean-all install help quickjs-deps convenience-links test FORCE
-FORCE:
+.PHONY: all build clean clean-all install help quickjs-deps convenience-links test
