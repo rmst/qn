@@ -80,7 +80,7 @@ function startHttpsServer() {
 describe('qn_tls native module', () => {
 	testQnOnly('CA certificates can be loaded', async ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
-			import { loadCACerts, caCertCount } from 'node:tls'
+			import { loadCACerts, caCertCount } from 'qn:tls'
 			const before = caCertCount()
 			loadCACerts(${JSON.stringify(certFile)})
 			const after = caCertCount()
@@ -94,7 +94,7 @@ describe('qn_tls native module', () => {
 		const { port, close } = await startHttpsServer()
 		try {
 			writeFileSync(`${dir}/test.js`, `
-				import * as tls from 'node:tls'
+				import * as tls from 'qn:tls'
 				import { _op, TCP_NEW, TCP_CONNECT, SET_ON_CONNECT, CLOSE, AF_INET } from 'qn_uv_stream'
 
 				tls.loadCACerts(${JSON.stringify(certFile)})
@@ -267,7 +267,7 @@ function startQnTlsServer(serverScript) {
 describe('TLS server', { concurrency: true }, () => {
 	testQnOnly('Server credentials can be loaded', async ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
-			import { loadServerCert } from 'node:tls'
+			import { loadServerCert } from 'qn:tls'
 			const cred = loadServerCert(${JSON.stringify(certFile)}, ${JSON.stringify(keyFile)})
 			console.log(cred ? 'ok' : 'fail')
 		`)
@@ -277,7 +277,7 @@ describe('TLS server', { concurrency: true }, () => {
 
 	testQnOnly('TLS server accept and serve response', async ({ bin, dir }) => {
 		writeFileSync(`${dir}/server.js`, `
-			import * as tls from 'node:tls'
+			import * as tls from 'qn:tls'
 			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
 			const tcpNew = (f) => _op(TCP_NEW, f)
 			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
@@ -330,7 +330,7 @@ describe('TLS server', { concurrency: true }, () => {
 
 	testQnOnly('TLS server handles POST with body', async ({ bin, dir }) => {
 		writeFileSync(`${dir}/server.js`, `
-			import * as tls from 'node:tls'
+			import * as tls from 'qn:tls'
 			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
 			const tcpNew = (f) => _op(TCP_NEW, f)
 			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
@@ -408,7 +408,7 @@ describe('TLS server', { concurrency: true }, () => {
 
 	testQnOnly('TLS server with multiple sequential connections', async ({ bin, dir }) => {
 		writeFileSync(`${dir}/server.js`, `
-			import * as tls from 'node:tls'
+			import * as tls from 'qn:tls'
 			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
 			const tcpNew = (f) => _op(TCP_NEW, f)
 			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
@@ -671,7 +671,7 @@ if (!NO_NODE) describe('Streaming response body', { concurrency: true }, () => {
  */
 function writeRawServer(dir, rawResponseExpr) {
 	const script = `
-		import * as tls from 'node:tls'
+		import * as tls from 'qn:tls'
 		import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
 			const tcpNew = (f) => _op(TCP_NEW, f)
 			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
@@ -733,7 +733,7 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 
 	testQnOnly('server closes connection immediately (no response)', async ({ bin, dir }) => {
 		const script = `
-			import * as tls from 'node:tls'
+			import * as tls from 'qn:tls'
 			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
 			const tcpNew = (f) => _op(TCP_NEW, f)
 			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
@@ -860,7 +860,7 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 	testQnOnly('redirect loop is detected', async ({ bin, dir }) => {
 		// Server that always redirects to itself
 		const script = `
-			import * as tls from 'node:tls'
+			import * as tls from 'qn:tls'
 			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
 			const tcpNew = (f) => _op(TCP_NEW, f)
 			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
@@ -952,7 +952,7 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 	testQnOnly('large response body (1MB)', async ({ bin, dir }) => {
 		// Server that sends 1MB of data
 		const script = `
-			import * as tls from 'node:tls'
+			import * as tls from 'qn:tls'
 			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
 			const tcpNew = (f) => _op(TCP_NEW, f)
 			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)
@@ -1014,7 +1014,7 @@ describe('Adversarial: malformed responses', { concurrency: true }, () => {
 	testQnOnly('abort during streaming body read', async ({ bin, dir }) => {
 		// Server that sends headers quickly, then delays body
 		const script = `
-			import * as tls from 'node:tls'
+			import * as tls from 'qn:tls'
 			import { _op, TCP_NEW, TCP_BIND, LISTEN, SET_ON_CONNECTION, TCP_GETSOCKNAME, CLOSE, AF_INET } from 'qn_uv_stream'
 			const tcpNew = (f) => _op(TCP_NEW, f)
 			const tcpBind = (h, host, port) => _op(TCP_BIND, h, host, port)

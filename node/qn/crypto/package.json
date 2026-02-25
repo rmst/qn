@@ -1,0 +1,10 @@
+{
+	"name": "qn:crypto",
+	"qnc": {
+		"target_name": "qn_crypto",
+		"sources": ["qn-crypto.c"],
+		"source_dirs": ["../../../vendor/bearssl/src"],
+		"include_dirs": [".", "../../../vendor/bearssl/inc", "../../../vendor/bearssl/src"],
+		"defines": []
+	}
+}

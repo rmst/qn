@@ -196,7 +196,7 @@ $(BIN_DIR)/obj/sandboxed-worker.o: sandboxed-worker/sandboxed-worker.c sandboxed
 
 # SQLite is now built automatically by qnc via package.json "qnc" field in node/node/sqlite/
 
-# TLS (qn_tls + BearSSL) is now built automatically by qnc via package.json "qnc" field in node/node/tls/
+# Crypto + TLS (qn_crypto + BearSSL) is now built automatically by qnc via package.json "qnc" field in node/qn/crypto/
 
 # Build qn-uv-utils (shared utility infrastructure for libuv modules)
 $(BIN_DIR)/obj/qn-uv-utils.o: libuv/qn-uv-utils.c libuv/qn-uv-utils.h quickjs-deps $(LIBUV_LIB) | $(BIN_DIR)/obj

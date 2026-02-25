@@ -10,7 +10,7 @@ import {
 	AF_INET, AF_INET6,
 } from 'qn/uv-stream'
 import { getaddrinfo as _getaddrinfo } from 'qn_uv_dns'
-import * as tls from 'node:tls'
+import * as tls from 'qn:tls'
 import { existsSync } from 'node:fs'
 import { Headers } from './Headers.js'
 import { Request } from './Request.js'

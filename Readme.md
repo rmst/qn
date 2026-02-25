@@ -5,7 +5,7 @@ Qn is a lightweight JavaScript runtime built on [QuickJS](https://bellard.org/qu
 Features:
 
 1. **libuv-based async I/O** — true async file I/O via thread pool (io_uring on supported kernels), TCP/TLS/HTTP networking, child process spawning, signal handling, DNS resolution
-2. **Node.js compatibility** — `node:fs`, `node:net`, `node:dgram`, `node:tls`, `node:http`, `node:child_process`, `node:stream`, `node:crypto`, `node:path`, `node:events`, `node:url`, `node:os`, `node:buffer`, `node:assert`, `node:test`, `node:sqlite`, `node:module`
+2. **Node.js compatibility** — `node:fs`, `node:net`, `node:dgram`, `node:http`, `node:child_process`, `node:stream`, `node:crypto`, `node:path`, `node:events`, `node:url`, `node:os`, `node:buffer`, `node:assert`, `node:test`, `node:sqlite`, `node:module`
 2. **WebSocket support** — `ws` (client + server, RFC 6455) vendored and importable as `"ws"`
 3. **TypeScript support** — `.ts` files run directly (`qn script.ts`), with source-position-preserving type stripping (falls back to full transform for enums/namespaces). Extension probing resolves `./foo` to `./foo.ts` when no `.js` exists.
 4. **Module resolution** with two modes (see [docs](module_resolution/Readme.md), [tests](test/module-resolution/)):

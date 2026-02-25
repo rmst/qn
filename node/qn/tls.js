@@ -1,8 +1,8 @@
 /**
- * node:tls - Async TLS I/O module
+ * qn:tls - Async TLS I/O module
  *
  * Drives BearSSL's non-blocking engine using the QuickJS event loop.
- * The C side (qn_tls) exposes thin wrappers around the BearSSL engine
+ * The C side (qn:crypto) exposes thin wrappers around the BearSSL engine
  * state machine; this module provides the async I/O loop on top.
  *
  * All I/O goes through a transport object { read, write } created from
@@ -16,7 +16,7 @@ import {
 	tlsSendApp, tlsRecvApp, tlsFlush as _tlsFlush, tlsClose as _tlsClose,
 	tlsGetSendRec, tlsSendRecAck, tlsRecvRecPush,
 	TLS_CLOSED, TLS_SENDREC, TLS_RECVREC, TLS_SENDAPP, TLS_RECVAPP,
-} from './qn_tls.so'
+} from 'qn:crypto'
 import {
 	readStart, readStop, write as _streamWrite,
 	close as _streamClose, setOnRead,

@@ -4,11 +4,11 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 
 ## Own Code (~24K LOC)
 
-**Node.js compatibility** (`node/node/`) — ~12.6K LOC JS. Shims for `node:fs`, `node:net`, `node:dgram`, `node:tls`, `node:http`, `node:child_process`, `node:stream`, `node:crypto`, `node:path`, `node:events`, `node:url`, `node:os`, `node:buffer`, `node:assert`, `node:test`, `node:sqlite`, `node:module`, etc.
+**Node.js compatibility** (`node/node/`) — ~12.6K LOC JS. Shims for `node:fs`, `node:net`, `node:dgram`, `node:http`, `node:child_process`, `node:stream`, `node:crypto`, `node:path`, `node:events`, `node:url`, `node:os`, `node:buffer`, `node:assert`, `node:test`, `node:sqlite`, `node:module`, etc.
 
 **Bootstrap and REPL** (`node/bootstrap.js`, `node/node-globals.js`, `node/repl.js`) — ~1.9K LOC JS. Startup, global setup, interactive shell.
 
-**qn modules** (`node/qn/`) — ~0.5K LOC JS. Higher-level APIs: HTTP server (`qn:http`), pseudo-terminal (`qn:pty`), TypeScript transform (`qn:sucrase`), libuv JS wrappers.
+**qn modules** (`node/qn/`) — ~0.5K LOC JS + crypto native module. Higher-level APIs: crypto primitives (`qn:crypto`, BearSSL-backed), async TLS I/O (`qn:tls`), HTTP server (`qn:http`), pseudo-terminal (`qn:pty`), TypeScript transform (`qn:sucrase`), libuv JS wrappers.
 
 **qx** (`qx/`) — ~1K LOC JS. Shell scripting with `$` function (similar to zx).
 
@@ -30,7 +30,7 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 - `introspect/` (30) — closure introspection (bulk is in QuickJS patch)
 
 **Native module packages** — C modules auto-compiled and embedded by qnc at build time via `package.json` `"qnc"` field:
-- `node/node/tls/qn-tls.c` — TLS bindings + SHA-256 crypto, compiled with BearSSL sources
+- `node/qn/crypto/qn-crypto.c` — crypto primitives + TLS bindings, compiled with BearSSL sources
 - `node/node/sqlite/qjs-sqlite.c` — SQLite bindings, compiled with amalgamation
 
 **Module resolution** ([`module_resolution/`](module_resolution/Readme.md)) — ~1.2K LOC C. NODE_PATH, node_modules walking, package.json resolution, `.ts`/`.js` extension probing. For standalone binaries: `embedded://` namespace separation, compile-time import map, `file://` protocol for forced disk loading.
@@ -55,9 +55,9 @@ The JavaScript engine. Qn patches it lightly:
 
 Single-file amalgamation. Bound to JS via `qjs-sqlite.c`. ~281K LOC.
 
-### [BearSSL](https://github.com/nickray/bearssl) (submodule: `node/node/tls/bearssl/`)
+### [BearSSL](https://github.com/nickray/bearssl) (submodule: `vendor/bearssl/`)
 
-TLS library. BearSSL's state machine API fits well with libuv streams. Lives inside the `qn_tls` native module package and is compiled as part of it via qnc's `source_dirs` feature. ~90K LOC.
+Crypto library providing TLS, hashing, HMAC, symmetric ciphers, RSA, ECDSA, and ECDH. Compiled as part of the `qn:crypto` native module via qnc's `source_dirs` feature. ~90K LOC.
 
 ### [ws](https://github.com/websockets/ws) (vendored: `vendor/ws/`)
 
