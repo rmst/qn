@@ -7,11 +7,15 @@
  * extract them at runtime. Each argument is name:path where name
  * is the relative path in the extract directory (e.g. "quickjs.h",
  * "module_resolution/module-resolution.h", "libquickjs.a").
+ *
+ * File mtimes are preserved in the archive so that extracted files
+ * retain their original timestamps for correct incremental builds.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <sys/stat.h>
 
 #include "embed.h"
 
@@ -39,6 +43,12 @@ static long file_size(const char *path) {
 	return sz;
 }
 
+static uint64_t file_mtime(const char *path) {
+	struct stat st;
+	if (stat(path, &st) != 0) return 0;
+	return (uint64_t)st.st_mtime;
+}
+
 static int copy_file(FILE *dst, const char *src_path) {
 	FILE *src = fopen(src_path, "rb");
 	if (!src) return -1;
@@ -63,6 +73,7 @@ int main(int argc, char **argv) {
 	const char **names = calloc(nfiles, sizeof(char *));
 	const char **paths = calloc(nfiles, sizeof(char *));
 	uint32_t *sizes = calloc(nfiles, sizeof(uint32_t));
+	uint64_t *mtimes = calloc(nfiles, sizeof(uint64_t));
 
 	for (int i = 0; i < nfiles; i++) {
 		char *colon = strchr(argv[i + 2], ':');
@@ -79,6 +90,7 @@ int main(int argc, char **argv) {
 			return 1;
 		}
 		sizes[i] = (uint32_t)sz;
+		mtimes[i] = file_mtime(paths[i]);
 	}
 
 	/* Open binary for appending */
@@ -106,12 +118,13 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	/* Write directory */
+	/* Write directory: name_len(u16) + name + mtime(u64) + size(u32) per entry */
 	long dir_start = ftell(f);
 	for (int i = 0; i < nfiles; i++) {
 		uint16_t name_len = (uint16_t)strlen(names[i]);
 		write_u16(f, name_len);
 		fwrite(names[i], 1, name_len, f);
+		write_u64(f, mtimes[i]);
 		write_u32(f, sizes[i]);
 	}
 	uint32_t dir_size = (uint32_t)(ftell(f) - dir_start);
@@ -126,5 +139,6 @@ int main(int argc, char **argv) {
 	free(names);
 	free(paths);
 	free(sizes);
+	free(mtimes);
 	return 0;
 }

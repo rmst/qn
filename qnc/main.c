@@ -315,6 +315,14 @@ static namelist_t extra_link_files;
    name=relative path (libuv/foo.c), short_name=module c_name */
 static namelist_t embedded_native_sources;
 
+/* Embedded quickjs core C sources (auto-detected from quickjs/ in embedded pack).
+   Compiled to .o and linked instead of libquickjs.a. */
+static namelist_t embedded_quickjs_sources;
+
+/* Embedded libuv core C sources (auto-detected from vendor/libuv/src/ in embedded pack).
+   Compiled to .o and linked instead of libuv.a. */
+static namelist_t embedded_libuv_sources;
+
 /* Optional cache directory for compiled .o files (--cache-dir flag) */
 static const char *cache_dir = NULL;
 
@@ -596,6 +604,31 @@ static int obj_is_up_to_date(const char *obj, const char *src) {
     if (stat(obj, &obj_st) != 0) return 0;
     if (stat(src, &src_st) != 0) return 0;
     return obj_st.st_mtime >= src_st.st_mtime;
+}
+
+/* Return 1 if 'obj' is newer than all .h files in 'dir', 0 otherwise.
+   Conservative check: any header change triggers recompilation. */
+static int obj_newer_than_headers(const char *obj, const char *dir) {
+    struct stat obj_st;
+    if (stat(obj, &obj_st) != 0) return 0;
+
+    DIR *dp = opendir(dir);
+    if (!dp) return 1; /* no dir = no headers to check */
+    struct dirent *ep;
+    while ((ep = readdir(dp))) {
+        size_t nlen = strlen(ep->d_name);
+        if (nlen < 3 || strcmp(ep->d_name + nlen - 2, ".h") != 0)
+            continue;
+        char hpath[PATH_MAX];
+        snprintf(hpath, sizeof(hpath), "%s/%s", dir, ep->d_name);
+        struct stat h_st;
+        if (stat(hpath, &h_st) == 0 && h_st.st_mtime > obj_st.st_mtime) {
+            closedir(dp);
+            return 0;
+        }
+    }
+    closedir(dp);
+    return 1;
 }
 
 /* Compile native module C sources to .o files.
@@ -1530,14 +1563,15 @@ static int output_executable(const char *out_filename, const char *cfilename,
             snprintf(obj_path, sizeof(obj_path), "/tmp/qnc_native_%d_%d.o", getpid(), i);
         }
 
-        /* Skip compilation if cached .o exists — embedded sources are baked
-           into the binary and don't change between runs, so existence is enough */
-        if (cache_dir) {
-            struct stat cache_st;
-            if (stat(obj_path, &cache_st) == 0) {
-                namelist_add(&embedded_native_objs, obj_path, NULL, 1);
-                continue;
-            }
+        /* Skip compilation if cached .o is newer than source and all headers
+           in the include dirs (conservative: any header change triggers recompile) */
+        if (cache_dir && obj_is_up_to_date(obj_path, src_path) &&
+            obj_newer_than_headers(obj_path, inc_dir) &&
+            obj_newer_than_headers(obj_path, uv_inc_dir)) {
+            if (verbose)
+                printf("qnc: cached %s\n", obj_path);
+            namelist_add(&embedded_native_objs, obj_path, NULL, 1);
+            continue;
         }
 
         const char *cc_argv[20];
@@ -1573,7 +1607,142 @@ static int output_executable(const char *out_filename, const char *cfilename,
         namelist_add(&embedded_native_objs, obj_path, NULL, cache_dir ? 1 : 0);
     }
 
-    /* Max argv slots: base args + native module .o/.a files + ldflags + extra link files + embedded native .o */
+    /* Compile embedded quickjs core C sources to .o files */
+    namelist_t embedded_quickjs_objs;
+    memset(&embedded_quickjs_objs, 0, sizeof(embedded_quickjs_objs));
+    for (int i = 0; native_base && i < embedded_quickjs_sources.count; i++) {
+        char src_path[PATH_MAX];
+        snprintf(src_path, sizeof(src_path), "%s/%s",
+                 native_base, embedded_quickjs_sources.array[i].name);
+        char obj_path[PATH_MAX];
+        if (cache_dir) {
+            char target_dir[PATH_MAX];
+            snprintf(target_dir, sizeof(target_dir), "%s/quickjs_core", cache_dir);
+            ensure_dir(target_dir);
+            snprintf(obj_path, sizeof(obj_path), "%s/%s.o",
+                     target_dir, embedded_quickjs_sources.array[i].short_name);
+        } else {
+            snprintf(obj_path, sizeof(obj_path), "/tmp/qnc_qjs_%d_%d.o", getpid(), i);
+        }
+
+        if (cache_dir && obj_is_up_to_date(obj_path, src_path) &&
+            obj_newer_than_headers(obj_path, inc_dir)) {
+            if (verbose)
+                printf("qnc: cached %s\n", obj_path);
+            namelist_add(&embedded_quickjs_objs, obj_path, NULL, 1);
+            continue;
+        }
+
+        const char *cc_argv[28];
+        const char **cc_arg = cc_argv;
+        *cc_arg++ = CONFIG_CC;
+        *cc_arg++ = "-O2";
+        *cc_arg++ = "-D_GNU_SOURCE";
+        *cc_arg++ = "-DCONFIG_BIGNUM";
+        *cc_arg++ = "-DCONFIG_VERSION=\"" CONFIG_VERSION "\"";
+        *cc_arg++ = "-DUSE_SANDBOX";
+        *cc_arg++ = "-fwrapv";
+        *cc_arg++ = "-I";
+        *cc_arg++ = inc_dir;
+        *cc_arg++ = "-I";
+        *cc_arg++ = native_base;
+        *cc_arg++ = "-I";
+        *cc_arg++ = uv_inc_dir;
+        *cc_arg++ = "-c";
+        *cc_arg++ = "-o";
+        *cc_arg++ = obj_path;
+        *cc_arg++ = src_path;
+        *cc_arg = NULL;
+
+        if (verbose) {
+            for (const char **p = cc_argv; *p; p++)
+                printf("%s ", *p);
+            printf("\n");
+        }
+        int cc_ret = exec_cmd((char **)cc_argv);
+        if (cc_ret != 0) {
+            fprintf(stderr, "qnc: failed to compile quickjs source '%s'\n", src_path);
+            namelist_free(&embedded_quickjs_objs);
+            namelist_free(&embedded_native_objs);
+            if (!cache_dir) qnc_embed_cleanup(embed_tmpdir);
+            free(embed_tmpdir);
+            if (!cache_dir) qnc_embed_cleanup(native_tmpdir);
+            free(native_tmpdir);
+            return cc_ret;
+        }
+        namelist_add(&embedded_quickjs_objs, obj_path, NULL, cache_dir ? 1 : 0);
+    }
+
+    /* Compile embedded libuv core C sources to .o files */
+    namelist_t embedded_libuv_objs;
+    memset(&embedded_libuv_objs, 0, sizeof(embedded_libuv_objs));
+    char uv_src_inc_dir[PATH_MAX];
+    if (native_base)
+        snprintf(uv_src_inc_dir, sizeof(uv_src_inc_dir), "%s/vendor/libuv/src", native_base);
+    for (int i = 0; native_base && i < embedded_libuv_sources.count; i++) {
+        char src_path[PATH_MAX];
+        snprintf(src_path, sizeof(src_path), "%s/%s",
+                 native_base, embedded_libuv_sources.array[i].name);
+        char obj_path[PATH_MAX];
+        if (cache_dir) {
+            char target_dir[PATH_MAX];
+            snprintf(target_dir, sizeof(target_dir), "%s/libuv_core", cache_dir);
+            ensure_dir(target_dir);
+            snprintf(obj_path, sizeof(obj_path), "%s/%s.o",
+                     target_dir, embedded_libuv_sources.array[i].short_name);
+        } else {
+            snprintf(obj_path, sizeof(obj_path), "/tmp/qnc_uv_%d_%d.o", getpid(), i);
+        }
+
+        if (cache_dir && obj_is_up_to_date(obj_path, src_path) &&
+            obj_newer_than_headers(obj_path, uv_inc_dir) &&
+            obj_newer_than_headers(obj_path, uv_src_inc_dir)) {
+            if (verbose)
+                printf("qnc: cached %s\n", obj_path);
+            namelist_add(&embedded_libuv_objs, obj_path, NULL, 1);
+            continue;
+        }
+
+        const char *cc_argv[20];
+        const char **cc_arg = cc_argv;
+        *cc_arg++ = CONFIG_CC;
+        *cc_arg++ = "-O2";
+        *cc_arg++ = "-D_GNU_SOURCE";
+        *cc_arg++ = "-I";
+        *cc_arg++ = uv_inc_dir;
+        *cc_arg++ = "-I";
+        *cc_arg++ = uv_src_inc_dir;
+#ifdef __APPLE__
+        *cc_arg++ = "-D_DARWIN_UNLIMITED_SELECT=1";
+        *cc_arg++ = "-D_DARWIN_USE_64_BIT_INODE=1";
+#endif
+        *cc_arg++ = "-c";
+        *cc_arg++ = "-o";
+        *cc_arg++ = obj_path;
+        *cc_arg++ = src_path;
+        *cc_arg = NULL;
+
+        if (verbose) {
+            for (const char **p = cc_argv; *p; p++)
+                printf("%s ", *p);
+            printf("\n");
+        }
+        int cc_ret = exec_cmd((char **)cc_argv);
+        if (cc_ret != 0) {
+            fprintf(stderr, "qnc: failed to compile libuv source '%s'\n", src_path);
+            namelist_free(&embedded_libuv_objs);
+            namelist_free(&embedded_quickjs_objs);
+            namelist_free(&embedded_native_objs);
+            if (!cache_dir) qnc_embed_cleanup(embed_tmpdir);
+            free(embed_tmpdir);
+            if (!cache_dir) qnc_embed_cleanup(native_tmpdir);
+            free(native_tmpdir);
+            return cc_ret;
+        }
+        namelist_add(&embedded_libuv_objs, obj_path, NULL, cache_dir ? 1 : 0);
+    }
+
+    /* Max argv slots */
     int total_obj_slots = 0;
     int total_ldflags = 0;
     for (int mi = 0; mi < native_module_count; mi++) {
@@ -1581,11 +1750,10 @@ static int output_executable(const char *out_filename, const char *cfilename,
         total_ldflags += native_modules[mi].ldflag_count;
     }
     int max_argv = 64 + total_obj_slots + total_ldflags + extra_link_files.count
-                   + embedded_native_objs.count;
+                   + embedded_native_objs.count + embedded_quickjs_objs.count
+                   + embedded_libuv_objs.count;
     const char **argv = malloc(sizeof(const char *) * max_argv);
-    const char **arg, *bn_suffix, *lto_suffix;
-    char libjsname[1024];
-    char libuvname[1024];
+    const char **arg;
     int ret;
 
     /* Compile native module C sources to .o files (from -M / package.json) */
@@ -1593,8 +1761,8 @@ static int output_executable(const char *out_filename, const char *cfilename,
         ret = compile_native_modules(inc_dir, verbose);
         if (ret != 0) {
             free(argv);
-            for (int i = 0; i < embedded_native_objs.count; i++)
-                unlink(embedded_native_objs.array[i].name);
+            namelist_free(&embedded_libuv_objs);
+            namelist_free(&embedded_quickjs_objs);
             namelist_free(&embedded_native_objs);
             if (!cache_dir) qnc_embed_cleanup(embed_tmpdir);
             free(embed_tmpdir);
@@ -1602,18 +1770,9 @@ static int output_executable(const char *out_filename, const char *cfilename,
         }
     }
 
-    lto_suffix = "";
-    bn_suffix = "";
-
     arg = argv;
     *arg++ = CONFIG_CC;
     *arg++ = "-O2";
-#ifdef CONFIG_LTO
-    if (use_lto) {
-        *arg++ = "-flto";
-        lto_suffix = ".lto";
-    }
-#endif
     *arg++ = "-D";
     *arg++ = "_GNU_SOURCE";
     *arg++ = "-I";
@@ -1633,9 +1792,19 @@ static int output_executable(const char *out_filename, const char *cfilename,
         }
     }
 
-    /* Add embedded native module .o files */
+    /* Add embedded native module .o files (libuv wrappers) */
     for (int i = 0; i < embedded_native_objs.count; i++) {
         *arg++ = embedded_native_objs.array[i].name;
+    }
+
+    /* Add embedded quickjs core .o files */
+    for (int i = 0; i < embedded_quickjs_objs.count; i++) {
+        *arg++ = embedded_quickjs_objs.array[i].name;
+    }
+
+    /* Add embedded libuv core .o files */
+    for (int i = 0; i < embedded_libuv_objs.count; i++) {
+        *arg++ = embedded_libuv_objs.array[i].name;
     }
 
     /* Add extra link files (--link flag) */
@@ -1651,11 +1820,6 @@ static int output_executable(const char *out_filename, const char *cfilename,
         }
     }
 
-    snprintf(libjsname, sizeof(libjsname), "%s/libquickjs%s%s.a",
-             lib_dir, bn_suffix, lto_suffix);
-    *arg++ = libjsname;
-    snprintf(libuvname, sizeof(libuvname), "%s/libuv.a", lib_dir);
-    *arg++ = libuvname;
     *arg++ = "-lm";
     *arg++ = "-ldl";
     *arg++ = "-lpthread";
@@ -1689,6 +1853,18 @@ static int output_executable(const char *out_filename, const char *cfilename,
             unlink(embedded_native_objs.array[i].name);
     }
     namelist_free(&embedded_native_objs);
+
+    /* Clean up embedded quickjs/libuv core .o files (skip cached ones) */
+    for (int i = 0; i < embedded_quickjs_objs.count; i++) {
+        if (!embedded_quickjs_objs.array[i].flags)
+            unlink(embedded_quickjs_objs.array[i].name);
+    }
+    namelist_free(&embedded_quickjs_objs);
+    for (int i = 0; i < embedded_libuv_objs.count; i++) {
+        if (!embedded_libuv_objs.array[i].flags)
+            unlink(embedded_libuv_objs.array[i].name);
+    }
+    namelist_free(&embedded_libuv_objs);
 
     /* Clean up embedded tmpdirs */
     if (!cache_dir) qnc_embed_cleanup(embed_tmpdir);
@@ -2093,6 +2269,101 @@ int main(int argc, char **argv)
                             }
                         }
                         closedir(dp);
+                    }
+
+                    /* Auto-detect embedded quickjs core C sources in quickjs/ dir.
+                       These replace the pre-built libquickjs.a. */
+                    char qjs_dir[PATH_MAX];
+                    snprintf(qjs_dir, sizeof(qjs_dir), "%s/quickjs", tmpdir);
+                    dp = opendir(qjs_dir);
+                    if (dp) {
+                        struct dirent *ep;
+                        while ((ep = readdir(dp))) {
+                            size_t nlen = strlen(ep->d_name);
+                            if (nlen < 3 || strcmp(ep->d_name + nlen - 2, ".c") != 0)
+                                continue;
+                            char rel_path[PATH_MAX];
+                            snprintf(rel_path, sizeof(rel_path), "quickjs/%s", ep->d_name);
+                            char short_name[256];
+                            pstrcpy(short_name, sizeof(short_name), ep->d_name);
+                            short_name[strlen(short_name) - 2] = '\0';
+                            namelist_add(&embedded_quickjs_sources, rel_path, short_name, 0);
+                        }
+                        closedir(dp);
+                    }
+
+                    /* Also scan introspect/ and sandboxed-worker/ for C sources
+                       that are compiled alongside quickjs core (needed by patched
+                       quickjs-libc.c) */
+                    {
+                        static const char *extra_dirs[] = {
+                            "introspect", "sandboxed-worker", NULL
+                        };
+                        for (const char **ed = extra_dirs; *ed; ed++) {
+                            char edir[PATH_MAX];
+                            snprintf(edir, sizeof(edir), "%s/%s", tmpdir, *ed);
+                            DIR *edp = opendir(edir);
+                            if (!edp) continue;
+                            struct dirent *ep;
+                            while ((ep = readdir(edp))) {
+                                size_t nlen = strlen(ep->d_name);
+                                if (nlen < 3 || strcmp(ep->d_name + nlen - 2, ".c") != 0)
+                                    continue;
+                                char rel_path[PATH_MAX];
+                                snprintf(rel_path, sizeof(rel_path), "%s/%s", *ed, ep->d_name);
+                                char short_name[256];
+                                pstrcpy(short_name, sizeof(short_name), ep->d_name);
+                                short_name[strlen(short_name) - 2] = '\0';
+                                namelist_add(&embedded_quickjs_sources, rel_path, short_name, 0);
+                            }
+                            closedir(edp);
+                        }
+                    }
+
+                    /* Auto-detect embedded libuv core C sources in vendor/libuv/src/.
+                       These replace the pre-built libuv.a. Only .c files that were
+                       packed by the Makefile (platform-appropriate) are present. */
+                    {
+                        /* Recursively scan vendor/libuv/src/ for .c files */
+                        char uvsrc_dir[PATH_MAX];
+                        snprintf(uvsrc_dir, sizeof(uvsrc_dir), "%s/vendor/libuv/src", tmpdir);
+                        /* Scan top-level src/ */
+                        DIR *uvdp = opendir(uvsrc_dir);
+                        if (uvdp) {
+                            struct dirent *ep;
+                            while ((ep = readdir(uvdp))) {
+                                size_t nlen = strlen(ep->d_name);
+                                if (nlen < 3 || strcmp(ep->d_name + nlen - 2, ".c") != 0)
+                                    continue;
+                                char rel_path[PATH_MAX];
+                                snprintf(rel_path, sizeof(rel_path), "vendor/libuv/src/%s", ep->d_name);
+                                char short_name[256];
+                                pstrcpy(short_name, sizeof(short_name), ep->d_name);
+                                short_name[strlen(short_name) - 2] = '\0'; /* strip .c */
+                                namelist_add(&embedded_libuv_sources, rel_path, short_name, 0);
+                            }
+                            closedir(uvdp);
+                        }
+                        /* Scan src/unix/ (or src/win/ on Windows) */
+                        char uvsub_dir[PATH_MAX];
+                        snprintf(uvsub_dir, sizeof(uvsub_dir), "%s/vendor/libuv/src/unix", tmpdir);
+                        uvdp = opendir(uvsub_dir);
+                        if (uvdp) {
+                            struct dirent *ep;
+                            while ((ep = readdir(uvdp))) {
+                                size_t nlen = strlen(ep->d_name);
+                                if (nlen < 3 || strcmp(ep->d_name + nlen - 2, ".c") != 0)
+                                    continue;
+                                char rel_path[PATH_MAX];
+                                snprintf(rel_path, sizeof(rel_path), "vendor/libuv/src/unix/%s", ep->d_name);
+                                char short_name[256];
+                                snprintf(short_name, sizeof(short_name), "unix_");
+                                pstrcpy(short_name + 5, sizeof(short_name) - 5, ep->d_name);
+                                short_name[strlen(short_name) - 2] = '\0'; /* strip .c */
+                                namelist_add(&embedded_libuv_sources, rel_path, short_name, 0);
+                            }
+                            closedir(uvdp);
+                        }
                     }
                 } else {
                     if (!cache_dir) qnc_embed_cleanup(tmpdir);
