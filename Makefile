@@ -6,11 +6,6 @@
 
 VERSION = 2024-01-13
 
-# Git version info for --version flag
-GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-GIT_DIRTY := $(shell test -n "$$(git status --porcelain 2>/dev/null)" && echo 1 || echo 0)
-BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-
 # Install prefix (override with: make install PREFIX=~/.local)
 PREFIX ?= /usr/local
 
@@ -31,64 +26,14 @@ endif
 CFLAGS += -DUSE_SANDBOX
 
 CFLAGS_OPT = $(CFLAGS) -O2
-LDFLAGS = -rdynamic
-ifneq ($(PLATFORM),darwin)
-LDFLAGS += -s
-endif
-
-# Debug build: make DEBUG=1
-ifdef DEBUG
-CFLAGS += -g
-LDFLAGS += -g
-endif
-LIBS = -lm -ldl -lpthread
-ifneq ($(PLATFORM),darwin)
-LIBS += -lrt -lutil
-endif
 
 # Build directories (can be overridden: make BIN_DIR=/tmp/build)
 BIN_DIR ?= bin/$(PLATFORM)
-
-# libuv static library path (must be defined before rules that reference it)
-LIBUV_LIB := $(BIN_DIR)/libuv.a
-LIBUV_DIR := vendor/libuv
-LIBUV_CFLAGS := -Ivendor/libuv/include -Ivendor/libuv/src
-
-# libuv source files (core + unix platform-specific)
-LIBUV_SRCS = src/fs-poll.c src/idna.c src/inet.c src/random.c src/strscpy.c \
-             src/strtok.c src/thread-common.c src/threadpool.c src/timer.c \
-             src/uv-common.c src/uv-data-getter-setters.c src/version.c \
-             src/unix/async.c src/unix/core.c src/unix/dl.c src/unix/fs.c \
-             src/unix/getaddrinfo.c src/unix/getnameinfo.c src/unix/loop.c \
-             src/unix/loop-watcher.c src/unix/pipe.c src/unix/poll.c \
-             src/unix/process.c src/unix/proctitle.c \
-             src/unix/random-devurandom.c \
-             src/unix/signal.c src/unix/stream.c src/unix/tcp.c \
-             src/unix/thread.c src/unix/tty.c src/unix/udp.c
-
-# Platform-specific libuv sources
-ifeq ($(PLATFORM),darwin)
-LIBUV_SRCS += src/unix/bsd-ifaddrs.c src/unix/kqueue.c \
-              src/unix/random-getentropy.c \
-              src/unix/darwin-proctitle.c src/unix/darwin.c src/unix/fsevents.c
-LIBUV_CFLAGS += -D_DARWIN_UNLIMITED_SELECT=1 -D_DARWIN_USE_64_BIT_INODE=1
-else
-LIBUV_SRCS += src/unix/linux.c src/unix/procfs-exepath.c \
-              src/unix/random-getrandom.c src/unix/random-sysctl-linux.c
-endif
 
 # Program names
 QN_PROG = $(BIN_DIR)/qn
 QX_PROG = $(BIN_DIR)/qx
 QNC_PROG = $(BIN_DIR)/qnc
-
-# QuickJS object files (from our copied and built QuickJS)
-# Note: use our patched quickjs-libc.o to extend import.meta
-QUICKJS_OBJS = $(BIN_DIR)/quickjs/.obj/quickjs.o $(BIN_DIR)/quickjs/.obj/libregexp.o \
-               $(BIN_DIR)/quickjs/.obj/libunicode.o $(BIN_DIR)/quickjs/.obj/cutils.o \
-               $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/quickjs/.obj/dtoa.o \
-               $(BIN_DIR)/quickjs/.obj/repl.o $(BIN_DIR)/obj/sandboxed-worker.o \
-               $(BIN_DIR)/obj/introspect.o
 
 # Convenience symlinks
 QN_LINK = bin/qn
@@ -96,7 +41,7 @@ QX_LINK = bin/qx
 QNC_LINK = bin/qnc
 
 # Default target
-all: quickjs-deps $(QN_PROG) $(QX_PROG) $(QNC_PROG) convenience-links
+all: $(QN_PROG) $(QX_PROG) $(QNC_PROG) convenience-links
 
 # Create directories
 $(BIN_DIR):
@@ -105,23 +50,14 @@ $(BIN_DIR):
 $(BIN_DIR)/obj:
 	mkdir -p $(BIN_DIR)/obj
 
-# Build libuv static library from source (no cmake needed)
-$(LIBUV_LIB): $(addprefix $(LIBUV_DIR)/,$(LIBUV_SRCS)) | $(BIN_DIR)
-	@echo "Building libuv..."
-	@rm -rf $(BIN_DIR)/obj/libuv
-	@mkdir -p $(BIN_DIR)/obj/libuv
-	@set -e; for f in $(LIBUV_SRCS); do \
-		oname=$$(echo $$f | tr '/' '_' | sed 's/\.c$$/.o/'); \
-		$(CC) $(CFLAGS_OPT) $(LIBUV_CFLAGS) -c -o $(BIN_DIR)/obj/libuv/$$oname $(LIBUV_DIR)/$$f; \
-	done
-	@ar rcs $@ $(BIN_DIR)/obj/libuv/*.o
-
-# Build qnc executable (compiler)
-# After linking, copy support files next to it (for local builds) and embed them
-# into the binary (for standalone distribution).
+# Build qnc (JS-based compiler, self-contained binary)
+# qnc is a small C wrapper that extracts embedded support files and execs
+# qjs to run qnc.js. The qnc-pack tool appends the archive at build time.
+QJS_PROG = $(BIN_DIR)/quickjs/qjs
+QNC_ENGINE = $(BIN_DIR)/qnc-engine.so
 QNC_PACK = $(BIN_DIR)/qnc-pack
 
-# All sources packed into qnc via qnc-pack (JS, C, H, package.json).
+# All sources packed into qnc (JS, C, H, package.json).
 # $(shell find ...) is re-evaluated every make invocation, catching new/removed files.
 QNC_EMBED_SOURCES := $(shell find node/ qx/ vendor/ws/ -name '*.js' -o -name '*.c' -o -name '*.h' -o -name 'package.json') \
                      $(shell find libuv/ -name '*.c' -o -name '*.h') \
@@ -130,26 +66,29 @@ QNC_EMBED_SOURCES := $(shell find node/ qx/ vendor/ws/ -name '*.js' -o -name '*.
                      module_resolution/module-resolution.h exit-handler.h \
                      introspect/introspect.h sandboxed-worker/sandboxed-worker.h
 
-$(QNC_PROG): $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/qnc-embed.o $(BIN_DIR)/obj/quickjs-libc.o $(BIN_DIR)/obj/sandboxed-worker.o $(BIN_DIR)/obj/introspect.o $(BIN_DIR)/obj/qn-vm.o $(BIN_DIR)/obj/qn-uv-utils.o $(BIN_DIR)/obj/qn-worker.o $(BIN_DIR)/quickjs/.patched $(LIBUV_LIB) $(QNC_PACK) $(QNC_EMBED_SOURCES) | $(BIN_DIR)
-	$(CC) $(LDFLAGS) -o $@ $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/qnc-embed.o $(BIN_DIR)/obj/qn-worker.o $(BIN_DIR)/obj/qn-vm.o $(BIN_DIR)/obj/qn-uv-utils.o $(QUICKJS_OBJS) $(LIBUV_LIB) $(LIBS)
-	chmod +x $@
-	# Copy headers next to exe for resolve_support_dir local fallback.
-	# Use cp -p to preserve mtimes so qnc's .o cache isn't invalidated.
-	cp -p $(BIN_DIR)/quickjs/*.h $(BIN_DIR)/
-	mkdir -p $(BIN_DIR)/module_resolution
-	cp -p module_resolution/module-resolution.h $(BIN_DIR)/module_resolution/
-	cp -p exit-handler.h $(BIN_DIR)/
-	mkdir -p $(BIN_DIR)/libuv
-	cp -p libuv/qn-vm.h $(BIN_DIR)/libuv/
-	cp -p libuv/qn-worker.h $(BIN_DIR)/libuv/
-	# Embed all C sources (no pre-built .a files) so qnc can compile
-	# them from source with whatever toolchain is available.
-	# - quickjs/ C+H sources (patched) including our patched quickjs-libc.c
-	# - vendor/libuv/ C sources (platform-appropriate) + internal headers
-	# - libuv/ our libuv module wrapper C sources
-	# - Headers at top level for generated C #includes
-	# - JS sources under js/ prefix for module resolution
+# Build vanilla qjs from upstream QuickJS (for bootstrapping qnc.js)
+$(QJS_PROG): $(BIN_DIR)/quickjs/.patched
+	@$(MAKE) -s -C $(BIN_DIR)/quickjs qjs
+
+# Build qnc-engine.so native module (bytecode compilation API for JS)
+QNC_ENGINE_LDFLAGS = -shared
+ifeq ($(PLATFORM),darwin)
+QNC_ENGINE_LDFLAGS += -undefined dynamic_lookup
+endif
+$(QNC_ENGINE): qnc/engine.c $(BIN_DIR)/quickjs/.patched | $(BIN_DIR)
+	$(CC) -Wall -O2 -fPIC $(QNC_ENGINE_LDFLAGS) -D_GNU_SOURCE -I. -I$(BIN_DIR)/quickjs -o $@ $<
+
+# Build qnc-pack tool (used at build time to embed support files)
+$(QNC_PACK): qnc/pack.c qnc/embed.h | $(BIN_DIR)
+	$(CC) $(CFLAGS_OPT) -I. -o $@ $<
+
+# Build qnc: compile wrapper, then pack all support files into it
+$(QNC_PROG): qnc/wrapper.c qnc/embed.h $(QJS_PROG) $(QNC_ENGINE) qnc/qnc.js $(BIN_DIR)/obj/quickjs-libc.c $(QNC_PACK) $(QNC_EMBED_SOURCES) | $(BIN_DIR)
+	$(CC) $(CFLAGS_OPT) -Iqnc -o $@ qnc/wrapper.c
 	$(QNC_PACK) $@ \
+		qjs:$(QJS_PROG) \
+		qnc-engine.so:$(QNC_ENGINE) \
+		qnc.js:qnc/qnc.js \
 		quickjs.h:$(BIN_DIR)/quickjs/quickjs.h \
 		quickjs-libc.h:$(BIN_DIR)/quickjs/quickjs-libc.h \
 		cutils.h:$(BIN_DIR)/quickjs/cutils.h \
@@ -167,86 +106,16 @@ $(QNC_PROG): $(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/qnc-embed.o $(BIN_DIR)/obj/quic
 		quickjs/cutils.c:$(BIN_DIR)/quickjs/cutils.c \
 		quickjs/dtoa.c:$(BIN_DIR)/quickjs/dtoa.c \
 		quickjs/quickjs-libc.c:$(BIN_DIR)/obj/quickjs-libc.c \
-		$$(for f in $(LIBUV_SRCS); do echo "vendor/libuv/$$f:$(LIBUV_DIR)/$$f"; done) \
+		$$(find vendor/libuv/src -name '*.c' | sed 's|.*|&:&|') \
 		$$(find vendor/libuv/include -name '*.h' | sed 's|.*|&:&|') \
 		$$(find vendor/libuv/src -name '*.h' | sed 's|.*|&:&|') \
 		$$(find libuv/ -name '*.c' -o -name '*.h' | sed 's|.*|&:&|') \
 		$$(find node/ qx/ vendor/ws/ vendor/sucrase-js/ vendor/bearssl/ \( -name '*.js' -o -name '*.c' -o -name '*.h' -o -name 'package.json' \) | sed 's|.*|js/&:&|')
 
-# Build qnc.o from standalone source
-$(BIN_DIR)/obj/qnc.o: qnc/main.c qnc/embed.h module_resolution/module-resolution.h $(BIN_DIR)/quickjs/.patched | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -DCONFIG_CC=\"$(CC)\" -DCONFIG_PREFIX=\"/usr/local\" \
-		-DCONFIG_GIT_COMMIT=\"$(GIT_COMMIT)\" \
-		$(if $(filter 1,$(GIT_DIRTY)),-DCONFIG_GIT_DIRTY -DCONFIG_BUILD_TIME=\"$(BUILD_TIME)\") \
-		-I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
-
-# Build qnc embed extraction module (uses libuv for cross-platform file I/O)
-$(BIN_DIR)/obj/qnc-embed.o: qnc/embed.c qnc/embed.h | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -Ivendor/libuv/include -c -o $@ $<
-
-# Build qnc-pack tool (used at build time to embed support files)
-$(QNC_PACK): qnc/pack.c qnc/embed.h | $(BIN_DIR)
-	$(CC) $(CFLAGS_OPT) -I. -o $@ $<
-
-# Patch and build quickjs-libc (adds import.meta.dirname, sandbox support, introspection)
+# Patch quickjs-libc (adds import.meta.dirname, sandbox support, introspection)
 $(BIN_DIR)/obj/quickjs-libc.c: quickjs/quickjs-libc.c quickjs-libc.patch introspect/introspect.patch | $(BIN_DIR)/obj
 	patch -p0 < quickjs-libc.patch -o $@ quickjs/quickjs-libc.c
 	patch -p0 < introspect/introspect.patch $@
-
-$(BIN_DIR)/obj/quickjs-libc.o: $(BIN_DIR)/obj/quickjs-libc.c $(LIBUV_LIB) | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
-
-# Build introspect module (depends on $(BIN_DIR)/quickjs/.patched for patched quickjs.h with JS_GetClosureVars)
-$(BIN_DIR)/obj/introspect.o: introspect/introspect.c introspect/introspect.h $(BIN_DIR)/quickjs/.patched | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
-
-# Build sandbox module (compiles to empty if USE_SANDBOX is not defined)
-$(BIN_DIR)/obj/sandboxed-worker.o: sandboxed-worker/sandboxed-worker.c sandboxed-worker/sandboxed-worker.h $(BIN_DIR)/quickjs/.patched | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -c -o $@ $<
-
-# SQLite is now built automatically by qnc via package.json "qnc" field in node/node/sqlite/
-
-# Crypto + TLS (qn_crypto + BearSSL) is now built automatically by qnc via package.json "qnc" field in node/qn/crypto/
-
-# Build qn-uv-utils (shared utility infrastructure for libuv modules)
-$(BIN_DIR)/obj/qn-uv-utils.o: libuv/qn-uv-utils.c libuv/qn-uv-utils.h $(BIN_DIR)/quickjs/.patched $(LIBUV_LIB) | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
-
-# Build qn-uv-fs (async filesystem operations via libuv)
-$(BIN_DIR)/obj/qn-uv-fs.o: libuv/qn-uv-fs.c libuv/qn-uv-utils.h $(BIN_DIR)/quickjs/.patched $(LIBUV_LIB) | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
-
-# Build qn-uv-dns (async DNS resolution via libuv)
-$(BIN_DIR)/obj/qn-uv-dns.o: libuv/qn-uv-dns.c libuv/qn-uv-utils.h $(BIN_DIR)/quickjs/.patched $(LIBUV_LIB) | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
-
-# Build qn-uv-signals (signal handling via libuv uv_signal_t)
-$(BIN_DIR)/obj/qn-uv-signals.o: libuv/qn-uv-signals.c libuv/qn-uv-utils.h $(BIN_DIR)/quickjs/.patched $(LIBUV_LIB) | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
-
-# Build qn-uv-stream (TCP/Pipe/TTY streams via libuv)
-$(BIN_DIR)/obj/qn-uv-stream.o: libuv/qn-uv-stream.c libuv/qn-uv-stream.h libuv/qn-uv-utils.h $(BIN_DIR)/quickjs/.patched $(LIBUV_LIB) | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
-
-# Build qn-uv-dgram (UDP datagram sockets via libuv)
-$(BIN_DIR)/obj/qn-uv-dgram.o: libuv/qn-uv-dgram.c libuv/qn-uv-dgram.h libuv/qn-uv-utils.h $(BIN_DIR)/quickjs/.patched $(LIBUV_LIB) | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
-
-# Build qn-uv-process (child process spawning via libuv)
-$(BIN_DIR)/obj/qn-uv-process.o: libuv/qn-uv-process.c libuv/qn-uv-stream.h libuv/qn-uv-utils.h $(BIN_DIR)/quickjs/.patched $(LIBUV_LIB) | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
-
-# Build qn-uv-pty (pseudo-terminal support via forkpty + libuv)
-$(BIN_DIR)/obj/qn-uv-pty.o: libuv/qn-uv-pty.c libuv/qn-uv-utils.h libuv/qn-vm.h $(BIN_DIR)/quickjs/.patched $(LIBUV_LIB) | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
-
-# Build qn-vm (event loop ownership: timers, poll, uv_run)
-$(BIN_DIR)/obj/qn-vm.o: libuv/qn-vm.c libuv/qn-vm.h libuv/qn-uv-utils.h $(BIN_DIR)/quickjs/.patched $(LIBUV_LIB) | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
-
-# Build qn-worker (Web Worker API via libuv threads + socketpair)
-$(BIN_DIR)/obj/qn-worker.o: libuv/qn-worker.c libuv/qn-worker.h libuv/qn-vm.h libuv/qn-uv-utils.h $(BIN_DIR)/quickjs/.patched $(LIBUV_LIB) | $(BIN_DIR)/obj
-	$(CC) $(CFLAGS_OPT) -I. -I$(BIN_DIR)/quickjs -Ivendor/libuv/include -c -o $@ $<
 
 # qnc includes all default modules (node:*, qn:*, qx, ws, etc.) automatically.
 # Use --no-default-modules to build a minimal binary with only explicit -D modules.
@@ -279,10 +148,6 @@ $(BIN_DIR)/quickjs/.patched: quickjs.patch $(wildcard quickjs/*.c quickjs/*.h) |
 	@touch $@
 
 quickjs-deps: $(BIN_DIR)/quickjs/.patched
-	@$(MAKE) -s -C $(BIN_DIR)/quickjs .obj/quickjs.o .obj/libregexp.o .obj/libunicode.o .obj/cutils.o .obj/dtoa.o .obj/repl.o libquickjs.a
-
-# Objects using -I$(BIN_DIR)/quickjs need patched headers to exist first
-$(BIN_DIR)/obj/qnc.o $(BIN_DIR)/obj/quickjs-libc.o: $(BIN_DIR)/quickjs/.patched
 
 # Clean build artifacts
 clean:

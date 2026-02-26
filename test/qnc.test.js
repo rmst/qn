@@ -1,6 +1,8 @@
 import { describe } from 'node:test'
 import assert from 'node:assert'
-import { writeFileSync, mkdirSync, copyFileSync } from 'node:fs'
+import { writeFileSync, mkdirSync, copyFileSync, symlinkSync, realpathSync } from 'node:fs'
+import { execSync } from 'node:child_process'
+import { platform } from 'node:os'
 import { testQnOnly, $, QNC, QNC_PATH } from './util.js'
 
 describe('qnc compiler', { concurrency: true }, () => {
@@ -59,6 +61,78 @@ describe('qnc compiler', { concurrency: true }, () => {
 		assert.deepStrictEqual(JSON.parse(output.trim()), { hello: "world" })
 	})
 
+	testQnOnly('compiles TypeScript entry point', ({ dir }) => {
+		writeFileSync(`${dir}/main.ts`, `
+			interface Config { name: string; count: number }
+			const config: Config = { name: "qnc", count: 42 }
+			function greet(c: Config): string { return c.name + ":" + c.count }
+			console.log(greet(config))
+		`)
+
+		$`${QNC()} -o ${dir}/app ${dir}/main.ts`
+		assert.strictEqual($`${dir}/app`, 'qnc:42')
+	})
+
+	testQnOnly('compiles TypeScript with cross-file imports', ({ dir }) => {
+		writeFileSync(`${dir}/lib.ts`, `
+			export interface Item { id: number; label: string }
+			export function makeItem(id: number, label: string): Item {
+				return { id, label }
+			}
+		`)
+		writeFileSync(`${dir}/main.ts`, `
+			import { makeItem, type Item } from "./lib.ts"
+			const item: Item = makeItem(1, "hello")
+			console.log(JSON.stringify(item))
+		`)
+
+		$`${QNC()} -o ${dir}/app ${dir}/main.ts`
+		assert.deepStrictEqual(JSON.parse($`${dir}/app`), { id: 1, label: "hello" })
+	})
+
+	testQnOnly('compiles TypeScript with enum (Sucrase full transform)', ({ dir }) => {
+		writeFileSync(`${dir}/main.ts`, `
+			enum Color { Red = "red", Green = "green", Blue = "blue" }
+			console.log(Color.Green)
+		`)
+
+		$`${QNC()} -o ${dir}/app ${dir}/main.ts`
+		assert.strictEqual($`${dir}/app`, 'green')
+	})
+
+	testQnOnly('compiles CJS with named exports', ({ dir }) => {
+		writeFileSync(`${dir}/lib.cjs`, `
+			exports.add = (a, b) => a + b
+			exports.name = "mylib"
+		`)
+		writeFileSync(`${dir}/main.js`, `
+			import lib from "./lib.cjs"
+			console.log(JSON.stringify({ sum: lib.add(3, 4), name: lib.name }))
+		`)
+
+		$`${QNC()} -o ${dir}/app ${dir}/main.js`
+		assert.deepStrictEqual(JSON.parse($`${dir}/app`), { sum: 7, name: "mylib" })
+	})
+
+	testQnOnly('compiles mixed JS importing TS and CJS', ({ dir }) => {
+		writeFileSync(`${dir}/types.ts`, `
+			export interface Result { value: number; ok: boolean }
+			export function makeResult(v: number): Result { return { value: v, ok: v > 0 } }
+		`)
+		writeFileSync(`${dir}/legacy.cjs`, `
+			module.exports = { factor: 10 }
+		`)
+		writeFileSync(`${dir}/main.js`, `
+			import { makeResult } from "./types.ts"
+			import legacy from "./legacy.cjs"
+			const r = makeResult(legacy.factor)
+			console.log(JSON.stringify(r))
+		`)
+
+		$`${QNC()} -o ${dir}/app ${dir}/main.js`
+		assert.deepStrictEqual(JSON.parse($`${dir}/app`), { value: 10, ok: true })
+	})
+
 	testQnOnly('self-contained compilation with node:fs', ({ dir }) => {
 		// Copy qnc to isolated dir (away from support files next to it)
 		// so it must use embedded native sources
@@ -78,5 +152,41 @@ describe('qnc compiler', { concurrency: true }, () => {
 
 		$`${dir}/bin/qnc --no-default-modules --cache-dir ${dir}/cache -o ${dir}/app ${dir}/main.js`
 		assert.strictEqual($`${dir}/app`, 'hello')
+	})
+
+	testQnOnly('self-contained with minimal PATH (only C toolchain)', ({ dir }) => {
+		// Verify qnc works with nothing but a C compiler on PATH
+		mkdirSync(`${dir}/fakebin`)
+		copyFileSync(QNC_PATH(), `${dir}/qnc`)
+
+		// Find C toolchain binaries and symlink them into fakebin
+		const cc = process.env.CC || 'gcc'
+		const ccPath = execSync(`which ${cc}`, { encoding: 'utf8' }).trim()
+		symlinkSync(ccPath, `${dir}/fakebin/${cc}`)
+
+		// gcc needs 'as' and 'ld' on PATH (invokes them by name)
+		for (const tool of ['as', 'ld']) {
+			try {
+				const toolPath = execSync(`which ${tool}`, { encoding: 'utf8' }).trim()
+				symlinkSync(toolPath, `${dir}/fakebin/${tool}`)
+			} catch { /* may not exist separately on all platforms */ }
+		}
+
+		writeFileSync(`${dir}/main.js`, `
+			import { platform } from 'node:os'
+			console.log('platform:' + platform())
+		`)
+
+		// Run with env -i to clear all env vars, only providing minimal PATH and HOME
+		const result = execSync(
+			`env -i PATH=${dir}/fakebin HOME=${dir} ${dir}/qnc --cache-dir ${dir}/cache -o ${dir}/app ${dir}/main.js`,
+			{ encoding: 'utf8', timeout: 120000 }
+		).trim()
+
+		const output = execSync(
+			`env -i ${dir}/app`,
+			{ encoding: 'utf8' }
+		).trim()
+		assert.strictEqual(output, 'platform:' + platform())
 	})
 })
