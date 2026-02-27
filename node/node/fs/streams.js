@@ -1,6 +1,7 @@
 import * as std from 'std'
 import {
-	openSync, closeSync, readSync, writeSync,
+	open as openAsync, close as closeAsync, read as readAsync,
+	openSync, closeSync, writeSync,
 	O_RDONLY, O_WRONLY, O_CREAT, O_APPEND, O_TRUNC,
 } from 'qn:uv-fs'
 import { Buffer } from 'node:buffer'
@@ -10,6 +11,7 @@ import { setTimeout as _setTimeout } from 'qn_vm'
 /**
  * Readable stream for reading from a file path.
  * Supports start/end byte offsets for range reads.
+ * Uses async libuv fs operations to avoid blocking the event loop.
  */
 export class ReadStream extends EventEmitter {
 	#fd = null
@@ -17,7 +19,6 @@ export class ReadStream extends EventEmitter {
 	#start
 	#end
 	#pos
-	#flowing = false
 	#ended = false
 	#destroyed = false
 	#readSize = 65536
@@ -31,61 +32,47 @@ export class ReadStream extends EventEmitter {
 		this.#pos = this.#start
 		this.path = path
 
-		// Open the file
-		try {
-			this.#fd = openSync(path, 'r')
-		} catch (e) {
-			// Defer error to next tick
-			_setTimeout(() => {
+		this.#run()
+	}
+
+	async #run() {
+		if (this.#fd === null) {
+			try {
+				this.#fd = await openAsync(this.#path, 'r')
+			} catch (e) {
 				this.emit('error', e instanceof Error ? e : new Error(String(e)))
-			}, 0)
-			return
-		}
+				return
+			}
 
-		// Defer 'open' and start reading on next tick
-		_setTimeout(() => {
 			this.emit('open', this.#fd)
-			if (!this.#destroyed) {
-				this.#startReading()
-			}
-		}, 0)
-	}
+			if (this.#destroyed) return
+		}
 
-	#startReading() {
 		this.#paused = false
-		this.#readChunk()
-	}
 
-	#readChunk() {
-		if (this.#destroyed || this.#ended || this.#paused) return
-
-		const remaining = this.#end === Infinity ? this.#readSize : Math.min(this.#readSize, this.#end - this.#pos + 1)
-		if (remaining <= 0) {
-			this.#finish()
-			return
-		}
-
-		const buf = new Uint8Array(remaining)
-		let n
-		try {
-			// Use position parameter directly — no seek needed
-			n = readSync(this.#fd, buf, this.#pos)
-		} catch (e) {
-			this.emit('error', e instanceof Error ? e : new Error(String(e)))
-			this.destroy()
-			return
-		}
-
-		if (n > 0) {
-			this.#pos += n
-			const chunk = Buffer.from(buf.buffer, 0, n)
-			this.emit('data', chunk)
-			// Schedule next read
-			if (!this.#paused && !this.#destroyed) {
-				_setTimeout(() => this.#readChunk(), 0)
+		while (!this.#destroyed && !this.#ended && !this.#paused) {
+			const remaining = this.#end === Infinity ? this.#readSize : Math.min(this.#readSize, this.#end - this.#pos + 1)
+			if (remaining <= 0) {
+				this.#finish()
+				return
 			}
-		} else {
-			this.#finish()
+
+			const buf = new Uint8Array(remaining)
+			let n
+			try {
+				n = await readAsync(this.#fd, buf, this.#pos)
+			} catch (e) {
+				this.emit('error', e instanceof Error ? e : new Error(String(e)))
+				this.destroy()
+				return
+			}
+
+			if (n > 0) {
+				this.#pos += n
+				this.emit('data', Buffer.from(buf.buffer, 0, n))
+			} else {
+				this.#finish()
+			}
 		}
 	}
 
@@ -105,7 +92,7 @@ export class ReadStream extends EventEmitter {
 		if (this.#paused) {
 			this.#paused = false
 			if (!this.#ended && !this.#destroyed) {
-				this.#readChunk()
+				this.#run()
 			}
 		}
 		return this
@@ -115,7 +102,7 @@ export class ReadStream extends EventEmitter {
 		if (this.#destroyed) return this
 		this.#destroyed = true
 		if (this.#fd !== null) {
-			try { closeSync(this.#fd) } catch {}
+			closeAsync(this.#fd).catch(() => {})
 			this.#fd = null
 		}
 		if (error) {
