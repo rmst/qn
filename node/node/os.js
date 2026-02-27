@@ -6,7 +6,7 @@
 
 import * as qjsOs from 'os'
 import * as std from 'std'
-import { getArch as _getArch } from 'qn_vm'
+import { getArch as _getArch, getUserInfo as _getUserInfo } from 'qn_vm'
 
 /**
  * Returns the operating system's default directory for temporary files.
@@ -96,17 +96,12 @@ export function uptime() {
 }
 
 /**
- * Returns the string path of the current user's home directory.
- * @returns {string}
+ * Returns information about the current user or a specified user.
+ * @param {object} [options] - Options object (options.encoding currently ignored)
+ * @returns {{ username: string, uid: number, gid: number, shell: string, homedir: string }}
  */
-export function userInfo() {
-	return {
-		username: std.getenv('USER') || std.getenv('USERNAME') || 'user',
-		uid: -1,
-		gid: -1,
-		shell: std.getenv('SHELL') || '/bin/sh',
-		homedir: homedir()
-	}
+export function userInfo(options) {
+	return _getUserInfo()
 }
 
 /**

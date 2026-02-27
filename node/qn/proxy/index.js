@@ -93,7 +93,6 @@ async function forwardHTTP(req, res, target, timeout) {
 	const url = new URL(req.url, target)
 
 	const headers = filterHeaders(req.headers)
-	delete headers['content-length'] // let fetch determine from actual body
 	headers['x-forwarded-for'] = req.socket.remoteAddress
 	headers['x-forwarded-proto'] = 'http'
 	headers['x-forwarded-host'] = req.headers.host || ''
@@ -103,9 +102,19 @@ async function forwardHTTP(req, res, target, timeout) {
 	req.socket.on('close', () => abort.abort())
 	const timer = timeout > 0 ? setTimeout(() => abort.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), timeout) : null
 
+	// If the client sent Content-Length, buffer the body so fetch preserves it.
+	// Otherwise stream through (fetch will use chunked transfer-encoding).
 	let body = undefined
 	if (req.method !== 'GET' && req.method !== 'HEAD') {
-		body = incomingBodyStream(req)
+		if (req.headers['content-length']) {
+			const chunks = []
+			req.on('data', c => chunks.push(c))
+			await new Promise(r => req.on('end', r))
+			if (chunks.length > 0) body = Buffer.concat(chunks)
+		} else {
+			delete headers['content-length']
+			body = incomingBodyStream(req)
+		}
 	}
 
 	let response
@@ -134,45 +143,6 @@ async function forwardHTTP(req, res, target, timeout) {
 		}
 	}
 	res.end()
-}
-
-function forwardWS(wss, req, socket, head, target) {
-	const wsUrl = target.replace(/^http/, 'ws') + req.url
-
-	const backend = new WebSocket(wsUrl)
-	backend.on('error', () => socket.destroy())
-
-	backend.on('open', () => {
-		wss.handleUpgrade(req, socket, head, (client) => {
-			pipeWS(client, backend)
-			pipeWS(backend, client)
-			client.on('close', (code, reason) => backend.close(code, reason))
-			backend.on('close', (code, reason) => client.close(code, reason))
-			client.on('error', () => backend.terminate())
-			backend.on('error', () => client.terminate())
-		})
-	})
-}
-
-/** Pipe messages from src to dst with backpressure */
-function pipeWS(src, dst) {
-	src.on('message', (data, isBinary) => {
-		if (dst.readyState !== WebSocket.OPEN) return
-		dst.send(data, { binary: isBinary }, () => {
-			// Resume src once the send has been flushed
-			if (src.isPaused) src.resume()
-		})
-		if (dst.bufferedAmount > WS_HIGH_WATER) src.pause()
-	})
-}
-
-function filterHeaders(headers) {
-	const out = {}
-	for (const [k, v] of Object.entries(headers)) {
-		if (!HOP_BY_HOP.has(k.toLowerCase()))
-			out[k] = Array.isArray(v) ? v.join(', ') : v
-	}
-	return out
 }
 
 function incomingBodyStream(req) {
@@ -220,3 +190,44 @@ function incomingBodyStream(req) {
 		}
 	}
 }
+
+function forwardWS(wss, req, socket, head, target) {
+	const wsUrl = target.replace(/^http/, 'ws') + req.url
+
+	const backend = new WebSocket(wsUrl)
+	backend.on('error', () => socket.destroy())
+
+	backend.on('open', () => {
+		wss.handleUpgrade(req, socket, head, (client) => {
+			pipeWS(client, backend)
+			pipeWS(backend, client)
+			client.on('close', (code, reason) => backend.close(code, reason))
+			backend.on('close', (code, reason) => client.close(code, reason))
+			client.on('error', () => backend.terminate())
+			backend.on('error', () => client.terminate())
+		})
+	})
+}
+
+/** Pipe messages from src to dst with backpressure */
+function pipeWS(src, dst) {
+	src.on('message', (data, isBinary) => {
+		if (dst.readyState !== WebSocket.OPEN) return
+		dst.send(data, { binary: isBinary }, () => {
+			// Resume src once the send has been flushed
+			if (src.isPaused) src.resume()
+		})
+		if (dst.bufferedAmount > WS_HIGH_WATER) src.pause()
+	})
+}
+
+function filterHeaders(headers) {
+	const out = {}
+	for (const [k, v] of Object.entries(headers)) {
+		if (!HOP_BY_HOP.has(k.toLowerCase()))
+			out[k] = Array.isArray(v) ? v.join(', ') : v
+	}
+	return out
+}
+
+

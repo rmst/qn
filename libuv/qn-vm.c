@@ -720,19 +720,12 @@ static int resolve_gid(JSContext *ctx, JSValueConst val, gid_t *out) {
 	const char *name = JS_ToCString(ctx, val);
 	if (!name) return -1;
 	struct group *gr = getgrnam(name);
-	if (gr) {
-		*out = gr->gr_gid;
-		JS_FreeCString(ctx, name);
-		return 0;
-	}
-	/* Fall back to user's primary group if no group with that name */
-	struct passwd *pw = getpwnam(name);
 	JS_FreeCString(ctx, name);
-	if (!pw) {
+	if (!gr) {
 		JS_ThrowRangeError(ctx, "Unknown group");
 		return -1;
 	}
-	*out = pw->pw_gid;
+	*out = gr->gr_gid;
 	return 0;
 }
 
@@ -809,6 +802,42 @@ static JSValue js_vm_setgroups(JSContext *ctx, JSValueConst this_val,
 
 #endif /* !_WIN32 */
 
+/* JS: getUserInfo(user?) → { uid, gid, username, homedir, shell }
+ * No args: current user. Number: lookup by uid. String: lookup by name (POSIX).
+ * Uses libuv for cross-platform support; string lookup requires POSIX getpwnam. */
+static JSValue js_vm_getUserInfo(JSContext *ctx, JSValueConst this_val,
+                                  int argc, JSValueConst *argv) {
+	uv_passwd_t pwd;
+	int r;
+	if (argc >= 1 && JS_IsNumber(argv[0])) {
+		uint32_t uid;
+		if (JS_ToUint32(ctx, &uid, argv[0])) return JS_EXCEPTION;
+		r = uv_os_get_passwd2(&pwd, uid);
+#if !defined(_WIN32)
+	} else if (argc >= 1 && JS_IsString(argv[0])) {
+		const char *name = JS_ToCString(ctx, argv[0]);
+		if (!name) return JS_EXCEPTION;
+		struct passwd *pw = getpwnam(name);
+		JS_FreeCString(ctx, name);
+		if (!pw)
+			return JS_ThrowRangeError(ctx, "Unknown user");
+		r = uv_os_get_passwd2(&pwd, pw->pw_uid);
+#endif
+	} else {
+		r = uv_os_get_passwd(&pwd);
+	}
+	if (r != 0)
+		return qn_throw_errno(ctx, r);
+	JSValue obj = JS_NewObject(ctx);
+	JS_SetPropertyStr(ctx, obj, "uid", JS_NewUint32(ctx, pwd.uid));
+	JS_SetPropertyStr(ctx, obj, "gid", JS_NewUint32(ctx, pwd.gid));
+	JS_SetPropertyStr(ctx, obj, "username", JS_NewString(ctx, pwd.username));
+	JS_SetPropertyStr(ctx, obj, "homedir", JS_NewString(ctx, pwd.homedir));
+	JS_SetPropertyStr(ctx, obj, "shell", JS_NewString(ctx, pwd.shell ? pwd.shell : ""));
+	uv_os_free_passwd(&pwd);
+	return obj;
+}
+
 /* --------------------------------------------------------------------------
  * JS module: qn_vm
  * -------------------------------------------------------------------------- */
@@ -833,6 +862,7 @@ static const JSCFunctionListEntry vm_funcs[] = {
 	QN_CFUNC_DEF("hrtime", 0, js_vm_hrtime),
 	QN_CFUNC_DEF("getPlatform", 0, js_vm_getPlatform),
 	QN_CFUNC_DEF("getArch", 0, js_vm_getArch),
+	QN_CFUNC_DEF("getUserInfo", 1, js_vm_getUserInfo),
 #if !defined(_WIN32)
 	QN_CFUNC_DEF("getuid", 0, js_vm_getuid),
 	QN_CFUNC_DEF("getgid", 0, js_vm_getgid),
