@@ -38,7 +38,7 @@ async function handleConnection(socket, handler, onError, headerTimeout) {
 		}, response)
 	} catch (err) {
 		clearTimeout(timer)
-		if (err?.name === 'AbortError') return
+		if (err?.name === 'AbortError' || err?.message === 'socket closed') return
 		if (!socket.destroyed) {
 			try {
 				socket.write('HTTP/1.1 500 Internal Server Error\r\nconnection: close\r\ncontent-length: 21\r\n\r\nInternal Server Error')
