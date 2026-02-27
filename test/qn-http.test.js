@@ -270,6 +270,169 @@ describe('qn:http serve()', () => {
 		assert.strictEqual(data.aborted, false)
 	})
 
+	testQnOnly('keep-alive: multiple requests on one connection', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { serve } from 'qn:http'
+			import { createConnection } from 'node:net'
+
+			let count = 0
+			const server = await serve({ port: 0 }, (req) => {
+				count++
+				return new Response("request " + count)
+			})
+			const addr = server.address()
+			const client = createConnection(addr.port, '127.0.0.1', () => {
+				client.write('GET /a HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n')
+			})
+			let data = ''
+			let gotFirst = false
+			client.on('data', (chunk) => {
+				data += new TextDecoder().decode(chunk)
+				if (!gotFirst && data.includes('request 1')) {
+					gotFirst = true
+					client.write('GET /b HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n')
+				}
+			})
+			client.on('end', () => {
+				const responses = data.split('HTTP/1.1').filter(Boolean)
+				console.log(JSON.stringify({
+					count: responses.length,
+					has1: data.includes('request 1'),
+					has2: data.includes('request 2'),
+					keepAlive: data.includes('connection: keep-alive'),
+				}))
+				server.close()
+			})
+		`)
+		const output = $({ timeout: 5000 })`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.count, 2)
+		assert.strictEqual(result.has1, true)
+		assert.strictEqual(result.has2, true)
+		assert.strictEqual(result.keepAlive, true)
+	})
+
+	testQnOnly('keep-alive: POST with body then GET on same connection', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { serve } from 'qn:http'
+			import { createConnection } from 'node:net'
+
+			const server = await serve({ port: 0 }, async (req) => {
+				if (req.method === 'POST') {
+					const body = await req.text()
+					return new Response("post:" + body)
+				}
+				return new Response("get")
+			})
+			const addr = server.address()
+			const bodyStr = 'hello'
+			const client = createConnection(addr.port, '127.0.0.1', () => {
+				client.write(
+					'POST /a HTTP/1.1\\r\\n' +
+					'Host: localhost\\r\\n' +
+					'Content-Length: ' + bodyStr.length + '\\r\\n' +
+					'\\r\\n' +
+					bodyStr
+				)
+			})
+			let data = ''
+			let sentSecond = false
+			client.on('data', (chunk) => {
+				data += new TextDecoder().decode(chunk)
+				if (!sentSecond && data.includes('post:hello')) {
+					sentSecond = true
+					client.write('GET /b HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n')
+				}
+			})
+			client.on('end', () => {
+				console.log(JSON.stringify({
+					hasPost: data.includes('post:hello'),
+					hasGet: data.includes('get'),
+				}))
+				server.close()
+			})
+		`)
+		const output = $({ timeout: 5000 })`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.hasPost, true)
+		assert.strictEqual(result.hasGet, true)
+	})
+
+	testQnOnly('keep-alive: unconsumed POST body is drained', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { serve } from 'qn:http'
+			import { createConnection } from 'node:net'
+
+			let count = 0
+			const server = await serve({ port: 0 }, (req) => {
+				count++
+				// Intentionally do NOT read the POST body
+				return new Response("ok:" + count)
+			})
+			const addr = server.address()
+			const bodyStr = 'ignored body'
+			const client = createConnection(addr.port, '127.0.0.1', () => {
+				client.write(
+					'POST /a HTTP/1.1\\r\\n' +
+					'Host: localhost\\r\\n' +
+					'Content-Length: ' + bodyStr.length + '\\r\\n' +
+					'\\r\\n' +
+					bodyStr
+				)
+			})
+			let data = ''
+			let sentSecond = false
+			client.on('data', (chunk) => {
+				data += new TextDecoder().decode(chunk)
+				if (!sentSecond && data.includes('ok:1')) {
+					sentSecond = true
+					client.write('GET /b HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n')
+				}
+			})
+			client.on('end', () => {
+				console.log(JSON.stringify({
+					has1: data.includes('ok:1'),
+					has2: data.includes('ok:2'),
+				}))
+				server.close()
+			})
+		`)
+		const output = $({ timeout: 5000 })`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.has1, true)
+		assert.strictEqual(result.has2, true)
+	})
+
+	testQnOnly('connection: close respected on first request', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { serve } from 'qn:http'
+			import { createConnection } from 'node:net'
+
+			const server = await serve({ port: 0 }, (req) => {
+				return new Response("hello")
+			})
+			const addr = server.address()
+			const client = createConnection(addr.port, '127.0.0.1', () => {
+				client.write('GET / HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n')
+			})
+			let data = ''
+			client.on('data', (chunk) => {
+				data += new TextDecoder().decode(chunk)
+			})
+			client.on('end', () => {
+				console.log(JSON.stringify({
+					hasClose: data.includes('connection: close'),
+					hasHello: data.includes('hello'),
+				}))
+				server.close()
+			})
+		`)
+		const output = $({ timeout: 5000 })`${bin} ${dir}/test.js`
+		const result = JSON.parse(output)
+		assert.strictEqual(result.hasClose, true)
+		assert.strictEqual(result.hasHello, true)
+	})
+
 	testQnOnly('error after first request does not crash server', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { serve } from 'qn:http'

@@ -9,44 +9,73 @@ import { createServer as createTcpServer } from 'node:net'
 import { socketReader, readRequest, writeResponse } from 'node:http/parse'
 
 const DEFAULT_HEADER_TIMEOUT = 60_000  // 60 seconds
+const DEFAULT_KEEP_ALIVE_TIMEOUT = 5_000  // 5 seconds
 
 /**
- * Handle a single HTTP connection: parse request, call handler, write response.
+ * Handle an HTTP connection: parse requests in a loop, supporting keep-alive.
  */
-async function handleConnection(socket, handler, onError, headerTimeout) {
+async function handleConnection(socket, handler, onError, headerTimeout, keepAliveTimeout) {
 	const reader = socketReader(socket)
 	const abort = new AbortController()
 	socket.on('close', () => abort.abort())
 
-	const timer = setTimeout(() => socket.destroy(), headerTimeout)
+	let firstRequest = true
 
-	try {
-		const request = await readRequest(reader, { signal: abort.signal })
-		clearTimeout(timer)
-		if (!request) { socket.destroy(); return }
+	while (!socket.destroyed) {
+		const timeout = firstRequest ? headerTimeout : keepAliveTimeout
+		const timer = setTimeout(() => socket.destroy(), timeout)
 
-		const response = await handler(request)
-
-		await writeResponse(data => {
-			return new Promise((resolve, reject) => {
-				if (socket.destroyed) { reject(new Error('socket closed')); return }
-				socket.write(data, (err) => {
-					if (err) reject(err)
-					else resolve()
-				})
-			})
-		}, response)
-	} catch (err) {
-		clearTimeout(timer)
-		if (err?.name === 'AbortError' || err?.message === 'socket closed') return
-		if (!socket.destroyed) {
-			try {
-				socket.write('HTTP/1.1 500 Internal Server Error\r\nconnection: close\r\ncontent-length: 21\r\n\r\nInternal Server Error')
-			} catch {}
+		let request, keepAlive
+		try {
+			const result = readRequest(reader, { signal: abort.signal }, { returnKeepAlive: true })
+			// readRequest with returnKeepAlive returns { request, keepAlive }
+			const resolved = await result
+			clearTimeout(timer)
+			if (!resolved) { socket.destroy(); return }
+			request = resolved.request
+			keepAlive = resolved.keepAlive
+		} catch (err) {
+			clearTimeout(timer)
+			if (err?.name === 'AbortError' || err?.message === 'socket closed') return
+			socket.destroy()
+			return
 		}
-		if (onError) onError(err)
-	} finally {
-		socket.end()
+		firstRequest = false
+
+		try {
+			const response = await handler(request)
+
+			await writeResponse(data => {
+				return new Promise((resolve, reject) => {
+					if (socket.destroyed) { reject(new Error('socket closed')); return }
+					socket.write(data, (err) => {
+						if (err) reject(err)
+						else resolve()
+					})
+				})
+			}, response, { keepAlive })
+		} catch (err) {
+			if (err?.name === 'AbortError' || err?.message === 'socket closed') return
+			if (!socket.destroyed) {
+				try {
+					socket.write('HTTP/1.1 500 Internal Server Error\r\nconnection: close\r\ncontent-length: 21\r\n\r\nInternal Server Error')
+				} catch {}
+			}
+			if (onError) onError(err)
+			// After an error, close the connection — state may be inconsistent
+			socket.end()
+			return
+		}
+
+		// Drain any unconsumed request body so the reader is clean for the next request
+		if (request.body) {
+			try { for await (const _ of request.body) {} } catch {}
+		}
+
+		if (!keepAlive) {
+			socket.end()
+			return
+		}
 	}
 }
 
@@ -78,12 +107,13 @@ export function serve(optionsOrHandler, handlerOrOptions) {
 	const hostname = options.hostname ?? '127.0.0.1'
 	const onError = options.onError || null
 	const headerTimeout = options.headerTimeout ?? DEFAULT_HEADER_TIMEOUT
+	const keepAliveTimeout = options.keepAliveTimeout ?? DEFAULT_KEEP_ALIVE_TIMEOUT
 
 	const tcpServer = createTcpServer()
 
 	tcpServer.on('connection', (socket) => {
 		socket.on('error', () => {})
-		handleConnection(socket, handler, onError, headerTimeout)
+		handleConnection(socket, handler, onError, headerTimeout, keepAliveTimeout)
 	})
 
 	return new Promise((resolve, reject) => {

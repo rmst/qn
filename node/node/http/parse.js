@@ -448,7 +448,20 @@ export async function* bodyStream(reader, leftover, contentLength, isChunked) {
  * @param {{ read(buf, off, len): Promise<number> }} reader
  * @returns {Promise<Request|null>}
  */
-export async function readRequest(reader, extraInit) {
+/**
+ * Read an HTTP request from a reader and return a Web standard Request object.
+ * Returns null if the connection closed before headers were complete.
+ *
+ * When options.returnKeepAlive is true, returns { request, keepAlive } instead
+ * of just the Request, so callers can decide whether to reuse the connection.
+ *
+ * @param {{ read(buf, off, len): Promise<number> }} reader
+ * @param {object} [extraInit] - Extra properties for Request constructor
+ * @param {object} [options]
+ * @param {boolean} [options.returnKeepAlive] - Return keep-alive info
+ * @returns {Promise<Request|{request: Request, keepAlive: boolean}|null>}
+ */
+export async function readRequest(reader, extraInit, options) {
 	const head = await readRequestHead(reader)
 	if (!head) return null
 
@@ -467,12 +480,22 @@ export async function readRequest(reader, extraInit) {
 		}
 	}
 
-	return new Request(url, {
+	const request = new Request(url, {
 		method: head.method,
 		headers: head.headers,
 		body,
 		...extraInit,
 	})
+
+	if (options?.returnKeepAlive) {
+		const conn = (head.headers['connection'] || '').toLowerCase()
+		const isHttp11 = head.httpVersion === '1.1'
+		const keepAlive = conn === 'close' ? false :
+			conn === 'keep-alive' ? true : isHttp11
+		return { request, keepAlive }
+	}
+
+	return request
 }
 
 /**
@@ -480,12 +503,15 @@ export async function readRequest(reader, extraInit) {
  *
  * @param {(data: Uint8Array) => Promise<void>} writeFn
  * @param {Response} response
+ * @param {object} [options]
+ * @param {boolean} [options.keepAlive] - Send keep-alive instead of close
  */
-export async function writeResponse(writeFn, response) {
+export async function writeResponse(writeFn, response, options) {
 	const status = response.status || 200
 	const statusText = response.statusText || 'OK'
 	const hasContentLength = response.headers.has('content-length')
 	const useChunked = response.body && !hasContentLength
+	const keepAlive = options?.keepAlive ?? false
 
 	if (/[\r\n]/.test(statusText))
 		throw new TypeError('Invalid status text: contains CR or LF')
@@ -497,7 +523,7 @@ export async function writeResponse(writeFn, response) {
 	}
 	if (useChunked)
 		head += 'transfer-encoding: chunked\r\n'
-	head += 'connection: close\r\n\r\n'
+	head += keepAlive ? 'connection: keep-alive\r\n\r\n' : 'connection: close\r\n\r\n'
 	await writeFn(encode(head))
 
 	if (response.body) {
