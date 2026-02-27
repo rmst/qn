@@ -720,12 +720,19 @@ static int resolve_gid(JSContext *ctx, JSValueConst val, gid_t *out) {
 	const char *name = JS_ToCString(ctx, val);
 	if (!name) return -1;
 	struct group *gr = getgrnam(name);
+	if (gr) {
+		*out = gr->gr_gid;
+		JS_FreeCString(ctx, name);
+		return 0;
+	}
+	/* Fall back to user's primary group if no group with that name */
+	struct passwd *pw = getpwnam(name);
 	JS_FreeCString(ctx, name);
-	if (!gr) {
+	if (!pw) {
 		JS_ThrowRangeError(ctx, "Unknown group");
 		return -1;
 	}
-	*out = gr->gr_gid;
+	*out = pw->pw_gid;
 	return 0;
 }
 
