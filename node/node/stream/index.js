@@ -394,16 +394,20 @@ export class Readable extends EventEmitter {
 					}
 				})
 
-				while (true) {
-					if (error) throw error
-					if (chunks.length > 0) {
-						yield chunks.shift()
-						continue
+				try {
+					while (true) {
+						if (error) throw error
+						if (chunks.length > 0) {
+							yield chunks.shift()
+							continue
+						}
+						if (done) return
+						const result = await new Promise(r => { resolve = r })
+						if (result.done) return
+						yield result.value
 					}
-					if (done) return
-					const result = await new Promise(r => { resolve = r })
-					if (result.done) return
-					yield result.value
+				} finally {
+					if (!streamReadable.destroyed) streamReadable.destroy()
 				}
 			},
 			getReader() {
