@@ -87,6 +87,8 @@ JSValue js_qn_set_source_transform(JSContext *ctx, JSValueConst this_val,
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <signal.h>
+#include <pwd.h>
+#include <grp.h>
 #endif
 
 /* --------------------------------------------------------------------------
@@ -682,6 +684,125 @@ static JSValue js_vm_getArch(JSContext *ctx, JSValueConst this_val,
 }
 
 /* --------------------------------------------------------------------------
+ * UID / GID helpers (POSIX only)
+ * -------------------------------------------------------------------------- */
+
+#if !defined(_WIN32)
+
+/* Resolve a JS value to a uid_t: accepts number or username string */
+static int resolve_uid(JSContext *ctx, JSValueConst val, uid_t *out) {
+	if (JS_IsNumber(val)) {
+		uint32_t n;
+		if (JS_ToUint32(ctx, &n, val)) return -1;
+		*out = (uid_t)n;
+		return 0;
+	}
+	const char *name = JS_ToCString(ctx, val);
+	if (!name) return -1;
+	struct passwd *pw = getpwnam(name);
+	JS_FreeCString(ctx, name);
+	if (!pw) {
+		JS_ThrowRangeError(ctx, "Unknown user");
+		return -1;
+	}
+	*out = pw->pw_uid;
+	return 0;
+}
+
+/* Resolve a JS value to a gid_t: accepts number or group name string */
+static int resolve_gid(JSContext *ctx, JSValueConst val, gid_t *out) {
+	if (JS_IsNumber(val)) {
+		uint32_t n;
+		if (JS_ToUint32(ctx, &n, val)) return -1;
+		*out = (gid_t)n;
+		return 0;
+	}
+	const char *name = JS_ToCString(ctx, val);
+	if (!name) return -1;
+	struct group *gr = getgrnam(name);
+	JS_FreeCString(ctx, name);
+	if (!gr) {
+		JS_ThrowRangeError(ctx, "Unknown group");
+		return -1;
+	}
+	*out = gr->gr_gid;
+	return 0;
+}
+
+static JSValue js_vm_getuid(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv) {
+	return JS_NewInt32(ctx, getuid());
+}
+
+static JSValue js_vm_getgid(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv) {
+	return JS_NewInt32(ctx, getgid());
+}
+
+static JSValue js_vm_getgroups(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv) {
+	int n = getgroups(0, NULL);
+	if (n < 0)
+		return JS_ThrowInternalError(ctx, "getgroups failed");
+	gid_t *gids = js_malloc(ctx, n * sizeof(gid_t));
+	if (!gids) return JS_EXCEPTION;
+	if (getgroups(n, gids) < 0) {
+		js_free(ctx, gids);
+		return JS_ThrowInternalError(ctx, "getgroups failed");
+	}
+	JSValue arr = JS_NewArray(ctx);
+	for (int i = 0; i < n; i++)
+		JS_SetPropertyUint32(ctx, arr, i, JS_NewUint32(ctx, gids[i]));
+	js_free(ctx, gids);
+	return arr;
+}
+
+static JSValue js_vm_setuid(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv) {
+	uid_t uid;
+	if (resolve_uid(ctx, argv[0], &uid)) return JS_EXCEPTION;
+	if (setuid(uid) != 0)
+		return JS_ThrowInternalError(ctx, "setuid failed: %s", strerror(errno));
+	return JS_UNDEFINED;
+}
+
+static JSValue js_vm_setgid(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv) {
+	gid_t gid;
+	if (resolve_gid(ctx, argv[0], &gid)) return JS_EXCEPTION;
+	if (setgid(gid) != 0)
+		return JS_ThrowInternalError(ctx, "setgid failed: %s", strerror(errno));
+	return JS_UNDEFINED;
+}
+
+static JSValue js_vm_setgroups(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv) {
+	JSValue len_val = JS_GetPropertyStr(ctx, argv[0], "length");
+	uint32_t len;
+	if (JS_ToUint32(ctx, &len, len_val)) {
+		JS_FreeValue(ctx, len_val);
+		return JS_EXCEPTION;
+	}
+	JS_FreeValue(ctx, len_val);
+	gid_t *gids = js_malloc(ctx, (len ? len : 1) * sizeof(gid_t));
+	if (!gids) return JS_EXCEPTION;
+	for (uint32_t i = 0; i < len; i++) {
+		JSValue v = JS_GetPropertyUint32(ctx, argv[0], i);
+		int r = resolve_gid(ctx, v, &gids[i]);
+		JS_FreeValue(ctx, v);
+		if (r) { js_free(ctx, gids); return JS_EXCEPTION; }
+	}
+	if (setgroups(len, gids) != 0) {
+		js_free(ctx, gids);
+		return JS_ThrowInternalError(ctx, "setgroups failed: %s", strerror(errno));
+	}
+	js_free(ctx, gids);
+	return JS_UNDEFINED;
+}
+
+#endif /* !_WIN32 */
+
+/* --------------------------------------------------------------------------
  * JS module: qn_vm
  * -------------------------------------------------------------------------- */
 
@@ -705,6 +826,14 @@ static const JSCFunctionListEntry vm_funcs[] = {
 	QN_CFUNC_DEF("hrtime", 0, js_vm_hrtime),
 	QN_CFUNC_DEF("getPlatform", 0, js_vm_getPlatform),
 	QN_CFUNC_DEF("getArch", 0, js_vm_getArch),
+#if !defined(_WIN32)
+	QN_CFUNC_DEF("getuid", 0, js_vm_getuid),
+	QN_CFUNC_DEF("getgid", 0, js_vm_getgid),
+	QN_CFUNC_DEF("getgroups", 0, js_vm_getgroups),
+	QN_CFUNC_DEF("setuid", 1, js_vm_setuid),
+	QN_CFUNC_DEF("setgid", 1, js_vm_setgid),
+	QN_CFUNC_DEF("setgroups", 1, js_vm_setgroups),
+#endif
 };
 
 static int js_vm_module_init(JSContext *ctx, JSModuleDef *m) {
