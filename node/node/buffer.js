@@ -192,8 +192,13 @@ class Buffer extends Uint8Array {
 			case 'hex':
 				return hexEncode(slice)
 			case 'latin1':
-			case 'ascii':
-				return String.fromCharCode(...slice)
+			case 'ascii': {
+				let result = ''
+				for (let i = 0; i < slice.length; i += 8192) {
+					result += String.fromCharCode(...slice.subarray(i, i + 8192))
+				}
+				return result
+			}
 			default:
 				return std._decodeUtf8(slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength))
 		}
