@@ -81,7 +81,7 @@ const DEFAULT_MODULES = [
 	"node:sqlite", "node:util", "node:assert", "node:test",
 	"node:os", "node:module",
 	"qn:crypto", "qn:tls", "qn:introspect", "qn:http", "qn:pty",
-	"qn:version-info", "qn:sucrase", "qn:worker", "qn:cjs", "qn:process",
+	"qn:version-info", "qn:sucrase", "qn:worker", "qn:cjs", "qn:process", "qn:proxy",
 	"qx", "ws",
 ]
 

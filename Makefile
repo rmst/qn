@@ -121,13 +121,21 @@ $(BIN_DIR)/obj/quickjs-libc.c: quickjs/quickjs-libc.c quickjs-libc.patch introsp
 # Use --no-default-modules to build a minimal binary with only explicit -D modules.
 QNC_FLAGS = --cache-dir $(BIN_DIR)/obj/qnc
 
+# Version info embedded at build time
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+GIT_DIRTY := $(shell git diff --quiet 2>/dev/null && echo 0 || echo 1)
+QNC_VERSION_ENV = QNC_GIT_COMMIT=$(GIT_COMMIT)
+ifneq ($(GIT_DIRTY),0)
+QNC_VERSION_ENV += QNC_GIT_DIRTY=1 QNC_BUILD_TIME=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+endif
+
 # Build qn (qnc carries all embedded sources; rebuild triggers through $(QNC_PROG) dep)
 $(QN_PROG): node/bootstrap.js $(QNC_PROG) | $(BIN_DIR)
-	$(QNC_PROG) $(QNC_FLAGS) -o $@ node/bootstrap.js
+	$(QNC_VERSION_ENV) $(QNC_PROG) $(QNC_FLAGS) -o $@ node/bootstrap.js
 
 # Build qx (qnc carries all embedded sources; rebuild triggers through $(QNC_PROG) dep)
 $(QX_PROG): qx/bootstrap.js $(QNC_PROG) | $(BIN_DIR)
-	$(QNC_PROG) $(QNC_FLAGS) -o $@ qx/bootstrap.js
+	$(QNC_VERSION_ENV) $(QNC_PROG) $(QNC_FLAGS) -o $@ qx/bootstrap.js
 
 # Create convenience symlinks in bin/ directory
 convenience-links: $(QN_PROG) $(QX_PROG) $(QNC_PROG)

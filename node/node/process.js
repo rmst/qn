@@ -5,6 +5,8 @@ import {
 	getCwd as _getCwd, chdir as _chdir,
 	kill as _kill, getPid as _getPid, getPlatform as _getPlatform,
 	getArch as _getArch,
+	getuid as _getuid, getgid as _getgid, getgroups as _getgroups,
+	setuid as _setuid, setgid as _setgid, setgroups as _setgroups,
 } from 'qn_vm';
 
 // Create stream-like objects for stdin, stdout, stderr
@@ -131,24 +133,13 @@ const process = {
     return _getPid();
   },
 
-  // User and group IDs (cached since they don't change)
-  getuid() {
-    if (this._uid === undefined) {
-      const f = std.popen('id -u', 'r')
-      this._uid = parseInt(f.getline(), 10)
-      f.close()
-    }
-    return this._uid
-  },
-
-  getgid() {
-    if (this._gid === undefined) {
-      const f = std.popen('id -g', 'r')
-      this._gid = parseInt(f.getline(), 10)
-      f.close()
-    }
-    return this._gid
-  },
+  // User and group IDs
+  getuid: () => _getuid(),
+  getgid: () => _getgid(),
+  getgroups: () => _getgroups(),
+  setuid: (id) => _setuid(id),
+  setgid: (id) => _setgid(id),
+  setgroups: (groups) => _setgroups(groups),
 
   // Platform and architecture
   platform: _getPlatform(),
@@ -261,5 +252,5 @@ const process = {
 export default process;
 
 // Also export individual properties for named imports
-export const { argv, exit, exitCode, cwd, chdir, kill, pid, getuid, getgid, platform, arch, version, versions, stdin, stdout, stderr } = process;
+export const { argv, exit, exitCode, cwd, chdir, kill, pid, getuid, getgid, getgroups, setuid, setgid, setgroups, platform, arch, version, versions, stdin, stdout, stderr } = process;
 export const env = process.env;  // Export env separately to preserve the Proxy
