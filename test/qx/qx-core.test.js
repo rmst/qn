@@ -13,6 +13,16 @@ const runQx = (script, dir) => {
 	return execSync(`${QX()} ${dir}/test.js`, { encoding: 'utf8', cwd: dir }).trim()
 }
 
+/** Check if a process is actually running (not a zombie). */
+const isProcessRunning = (pid) => {
+	try {
+		const state = execSync(`ps -o state= -p ${pid}`, { encoding: 'utf8' }).trim()
+		return state !== '' && !state.startsWith('Z')
+	} catch {
+		return false
+	}
+}
+
 describe('qx config-first API', () => {
 	test('$.quiet`cmd` suppresses output', () => {
 		const dir = mktempdir()
@@ -451,7 +461,7 @@ describe('qx timeout', () => {
 			// Process that ignores SIGTERM but dies from SIGKILL
 			const output = runQx(`
 				const start = Date.now()
-				const p = $.quiet.nothrow\`sh -c "trap '' TERM; sleep 10"\`
+				const p = $.quiet.nothrow\`trap '' TERM; sleep 10\`
 				await new Promise(r => setTimeout(r, 50))
 				p.kill({ sigkillTimeout: 100 })
 				await p
@@ -479,16 +489,74 @@ describe('qx timeout', () => {
 			const elapsed = Date.now() - start
 			assert.ok(elapsed < 2000, `qx should exit promptly, took ${elapsed}ms`)
 
-			// Read the PID and check if it's still running
+			// Read the PID and check if it's still running (not zombie)
 			const pid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10)
-			let isRunning = false
-			try {
-				process.kill(pid, 0)  // Signal 0 checks existence
-				isRunning = true
-			} catch {
-				isRunning = false
-			}
-			assert.strictEqual(isRunning, false, 'Child process should have been killed on exit')
+			assert.strictEqual(isProcessRunning(pid), false, 'Child process should have been killed on exit')
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('.kill({ sigkillTimeout }) kills orphaned grandchildren', () => {
+		const dir = mktempdir()
+		try {
+			// The outer shell (qx's /bin/sh -e -c) does NOT trap SIGTERM, so it dies.
+			// The inner "sh -c" traps SIGTERM and its child (sleep) inherits SIG_IGN.
+			// After the outer shell dies, the inner shell + sleep become orphans.
+			// sigkillTimeout must still find and SIGKILL them.
+			const output = runQx(`
+				const start = Date.now()
+				const p = $.quiet.nothrow\`sh -c "trap '' TERM; sleep 10"\`
+				await new Promise(r => setTimeout(r, 50))
+				p.kill({ sigkillTimeout: 200 })
+				await p
+				const elapsed = Date.now() - start
+				console.log(JSON.stringify({ killedQuickly: elapsed < 1000 }))
+			`, dir)
+			assert.deepStrictEqual(JSON.parse(output), { killedQuickly: true })
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('.kill() on deep process tree kills all levels', () => {
+		const dir = mktempdir()
+		try {
+			const pidFile = `${dir}/deep.pid`
+			// Create a 3-level deep process tree: sh -> sh -> sh -> sleep
+			// The deepest sleep writes its PID to a file.
+			const output = runQx(`
+				const p = $.quiet.nothrow\`sh -c "sh -c 'sh -c \\"echo \\\\\\$\\\\\\$ > ${pidFile}; sleep 10\\"'"\`
+				await new Promise(r => setTimeout(r, 200))
+				p.kill({ sigkillTimeout: 200 })
+				await p
+				const elapsed = Date.now()
+				console.log('done')
+			`, dir)
+			assert.strictEqual(output, 'done')
+
+			// The deepest process should be dead
+			const pid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10)
+			assert.strictEqual(isProcessRunning(pid), false, 'Deepest process should have been killed')
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('exit handler kills deep process tree', () => {
+		const dir = mktempdir()
+		try {
+			const pidFile = `${dir}/deep_exit.pid`
+			// Start a deep process tree then exit immediately.
+			// The exit handler should kill everything.
+			runQx(`
+				const p = $.quiet\`sh -c "sh -c 'echo \\$\\$ > ${pidFile}; sleep 10'"\`
+				await new Promise(r => setTimeout(r, 200))
+				process.exit(0)
+			`, dir)
+
+			const pid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10)
+			assert.strictEqual(isProcessRunning(pid), false, 'Deep child should have been killed on exit')
 		} finally {
 			rmSync(dir, { recursive: true })
 		}

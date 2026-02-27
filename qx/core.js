@@ -23,25 +23,16 @@
  * @see https://github.com/google/zx
  */
 
-import * as os from 'os'
 import process from 'node:process'
 import { writeFileSync, globSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { Buffer } from 'node:buffer'
-
-// Signal constants (some missing from QuickJS os module)
-const signals = {
-	SIGHUP: 1,
-	SIGINT: os.SIGINT ?? 2,
-	SIGQUIT: os.SIGQUIT ?? 3,
-	SIGKILL: 9,
-	SIGTERM: os.SIGTERM ?? 15,
-}
+import { getDescendantPids, killTree } from 'qn:process'
 
 /**
  * @typedef {Object} ShellConfig
  * @property {string} shell - Shell executable (default: '/bin/sh')
- * @property {string} prefix - Command prefix (default: 'set -e;')
+ * @property {string[]} shellFlags - Extra flags passed before -c (default: ['-e'])
  * @property {boolean} quiet - Suppress stdout/stderr output
  * @property {boolean} verbose - Print commands before execution
  * @property {boolean} nothrow - Don't throw on non-zero exit codes
@@ -50,28 +41,30 @@ const signals = {
 /** @type {ShellConfig} */
 const defaultConfig = {
 	shell: '/bin/sh',
-	prefix: 'set -e;',
+	shellFlags: ['-e'],
 	quiet: false,
 	verbose: false,
 	nothrow: false,
 }
 
-/** @type {Set<number>} Track active process group leaders for cleanup */
-const activeProcessGroups = new Set()
+/** @type {Set<number>} Track active child PIDs for cleanup */
+const activeChildren = new Set()
 
-// Clean up process groups on exit
+// Clean up children on exit
 process.on('exit', () => {
-	if (activeProcessGroups.size > 0) {
-		console.error(`qx: killing ${activeProcessGroups.size} orphaned process group(s)`)
-		for (const pgid of activeProcessGroups) {
-			try { os.kill(-pgid, signals.SIGTERM) } catch {}
+	if (activeChildren.size > 0) {
+		// Snapshot all PIDs before killing, since killing the root may orphan
+		// descendants (reparented to init), making them invisible to getDescendantPids.
+		const allPids = []
+		for (const pid of activeChildren) {
+			allPids.push(...getDescendantPids(pid), pid)
 		}
-		for (const pgid of activeProcessGroups) {
-			try { os.kill(-pgid, signals.SIGKILL) } catch {}
+		console.error(`qx: killing ${allPids.length} orphaned process(es)`)
+		for (const pid of allPids) {
+			try { process.kill(pid, 15) } catch {} // SIGTERM
 		}
-		// Reap killed children to avoid leaving zombies
-		for (const pgid of activeProcessGroups) {
-			try { os.waitpid(pgid, 0) } catch {}
+		for (const pid of allPids) {
+			try { process.kill(pid, 9) } catch {} // SIGKILL
 		}
 	}
 })
@@ -272,13 +265,11 @@ export class ProcessPromise extends Promise {
 			process.stderr.write(`$ ${this.#cmd} ${this.#args.join(' ')}\n`)
 		}
 
-		// Use detached: true to create a new process group for reliable killing
-		const child = execFile(this.#cmd, this.#args, { detached: true })
+		const child = execFile(this.#cmd, this.#args)
 		this.#child = child
 
-		// Track this process group for cleanup on exit
-		// The child PID is also the PGID since it's a session leader
-		activeProcessGroups.add(child.pid)
+		// Track child PID for cleanup on exit
+		activeChildren.add(child.pid)
 
 		// Don't set encoding - keep data as binary Buffers
 		child.stdout.on('data', (chunk) => {
@@ -313,8 +304,7 @@ export class ProcessPromise extends Promise {
 		}
 
 		child.on('close', (code, signal) => {
-			// Remove from active process groups
-			activeProcessGroups.delete(child.pid)
+			activeChildren.delete(child.pid)
 
 			// Clear timeout if set
 			if (this.#timeoutId) {
@@ -386,6 +376,14 @@ export class ProcessPromise extends Promise {
 	 */
 	get stage() {
 		return this.#stage
+	}
+
+	/**
+	 * Get the child process PID.
+	 * @returns {number|undefined}
+	 */
+	get pid() {
+		return this.#child?.pid
 	}
 
 	/**
@@ -487,8 +485,7 @@ export class ProcessPromise extends Promise {
 	}
 
 	/**
-	 * Kill the process and its entire process group.
-	 * Uses process group kill which reliably kills all descendants.
+	 * Kill the process and all its descendants via tree killing.
 	 * @param {string|{sigkillTimeout?: number}} [signalOrOptions='SIGTERM']
 	 * @param {{sigkillTimeout?: number}} [options={}]
 	 * @returns {boolean}
@@ -507,40 +504,32 @@ export class ProcessPromise extends Promise {
 		}
 		const { sigkillTimeout = null } = opts
 
-		const pgid = this.#child.pid // PGID == PID for session leader
-		const sig = typeof signal === 'string' ? (signals[signal] || signals[`SIG${signal}`] || 15) : signal
-
+		const pid = this.#child.pid
 		const child = this.#child
 
-		// Kill the entire process group with a single call
-		try {
-			os.kill(-pgid, sig)
-		} catch {
-			// Process group already dead — force-close streams in case orphaned
-			// descendant processes (in different process groups) keep pipes open
-			if (sigkillTimeout != null) {
-				if (child.stdout) child.stdout.destroy()
-				if (child.stderr) child.stderr.destroy()
-			}
-			return false
-		}
+		// Snapshot all PIDs before sending the signal, since the root process
+		// may die and its children become orphans (reparented to init),
+		// making them invisible to getDescendantPids afterwards.
+		const allPids = [...getDescendantPids(pid), pid]
+
+		killTree(pid, signal)
 
 		// Poll and escalate to SIGKILL if processes don't exit in time
-		if (sigkillTimeout != null && sig !== signals.SIGKILL) {
+		if (sigkillTimeout != null && signal !== 'SIGKILL') {
 			const sleep = ms => new Promise(r => setTimeout(r, ms))
-			const groupAlive = () => { try { os.kill(-pgid, 0); return true } catch { return false } }
+			const isAlive = p => { try { process.kill(p, 0); return true } catch { return false } }
 
 			;(async () => {
 				const startTime = Date.now()
 				while (Date.now() - startTime < sigkillTimeout) {
-					if (!groupAlive()) break
+					if (!allPids.some(isAlive)) return
 					await sleep(50)
 				}
-				if (groupAlive()) {
-					try { os.kill(-pgid, signals.SIGKILL) } catch {}
+				// Some processes survived the initial signal, escalate to SIGKILL
+				for (const p of allPids) {
+					try { process.kill(p, 9) } catch {}
 				}
-				// Force-close streams in case orphaned descendant processes
-				// (in different process groups) keep pipes open indefinitely
+				// Force-close streams in case orphaned processes keep pipes open
 				await sleep(200)
 				if (child.stdout && !child.stdout.destroyed) child.stdout.destroy()
 				if (child.stderr && !child.stderr.destroyed) child.stderr.destroy()
@@ -683,9 +672,8 @@ function createShell(config) {
 		cmdString = cmdString.trim()
 
 		// Always use shell to ensure proper variable expansion, globbing, etc.
-		const prefix = config.prefix ? config.prefix + ' ' : ''
 		const cmd = config.shell
-		const shellArgs = ['-c', prefix + cmdString]
+		const shellArgs = [...(config.shellFlags || []), '-c', cmdString]
 
 		const promise = new ProcessPromise(config)
 		promise._configure(cmd, shellArgs)
@@ -701,7 +689,7 @@ function createShell(config) {
 		return promise
 	}
 
-	const configOptions = new Set(['quiet', 'verbose', 'nothrow', 'shell', 'prefix'])
+	const configOptions = new Set(['quiet', 'verbose', 'nothrow', 'shell', 'shellFlags', 'prefix'])
 
 	return new Proxy(shell, {
 		get(target, prop) {
@@ -715,20 +703,24 @@ function createShell(config) {
 			if (prop === 'nothrow') {
 				return createShell({ ...config, nothrow: true })
 			}
-			// Allow reading shell and prefix
+			// Allow reading shell and shellFlags
 			if (prop === 'shell') {
 				return config.shell
 			}
+			if (prop === 'shellFlags') {
+				return config.shellFlags
+			}
+			// Legacy prefix getter (deprecated)
 			if (prop === 'prefix') {
-				return config.prefix
+				return config.shellFlags?.includes('-e') ? 'set -e;' : ''
 			}
 			return Reflect.get(target, prop)
 		},
 		set(target, prop, value) {
 			// Prevent setting config options directly
 			if (configOptions.has(prop)) {
-				const suggestion = (prop === 'shell' || prop === 'prefix')
-					? `Use $({ ${prop}: '...' })\`cmd\` instead.`
+				const suggestion = (prop === 'shell' || prop === 'shellFlags')
+					? `Use $({ ${prop}: ... })\`cmd\` instead.`
 					: `Use $.${prop}\`cmd\` instead.`
 				throw new Error(`Cannot set $.${prop}. ${suggestion}`)
 			}
@@ -775,7 +767,7 @@ export const $ = createShell({ ...defaultConfig })
  * @property {Shell} verbose - Returns a shell that prints commands before execution
  * @property {Shell} nothrow - Returns a shell that doesn't throw on non-zero exit
  * @property {string} shell - The shell executable (default: '/bin/sh')
- * @property {string} prefix - Command prefix (default: 'set -e;')
+ * @property {string[]} shellFlags - Extra flags passed before -c (default: ['-e'])
  */
 
 export default $

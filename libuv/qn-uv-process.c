@@ -9,6 +9,11 @@
 #include "qn-uv-stream.h"
 #include "qn-vm.h"
 #include <string.h>
+#include <dirent.h>
+
+#ifdef __APPLE__
+#include <libproc.h>
+#endif
 
 /* ---- Process handle struct ---- */
 
@@ -117,6 +122,7 @@ enum {
 	PROC_CLOSE,
 	PROC_SPAWN_SYNC,
 	PROC_KILL_PID,
+	PROC_GET_CHILD_PIDS,
 };
 
 /* ---- Shared argument parsing for spawn/spawnSync ---- */
@@ -495,6 +501,68 @@ static JSValue js_spawn_sync(JSContext *ctx, int nargs, JSValueConst *args) {
 	return result;
 }
 
+/* ---- Get direct child PIDs of a process ---- */
+
+static JSValue js_get_child_pids(JSContext *ctx, int pid) {
+	JSValue arr;
+	uint32_t idx = 0;
+#ifdef __APPLE__
+	int n, n2, count, i;
+	int *pids;
+#else
+	DIR *d;
+	struct dirent *ent;
+#endif
+
+	arr = JS_NewArray(ctx);
+	if (JS_IsException(arr)) return arr;
+
+#ifdef __APPLE__
+	n = proc_listchildpids(pid, NULL, 0);
+	if (n > 0) {
+		count = n / (int)sizeof(int);
+		pids = js_malloc(ctx, n);
+		if (!pids) { JS_FreeValue(ctx, arr); return JS_EXCEPTION; }
+		n2 = proc_listchildpids(pid, pids, n);
+		count = n2 / (int)sizeof(int);
+		for (i = 0; i < count; i++)
+			JS_SetPropertyUint32(ctx, arr, idx++, JS_NewInt32(ctx, pids[i]));
+		js_free(ctx, pids);
+	}
+#else
+	d = opendir("/proc");
+	if (!d) return arr;
+	while ((ent = readdir(d)) != NULL) {
+		char *name = ent->d_name;
+		char path[64];
+		FILE *f;
+		char buf[512];
+		size_t nread;
+		char *p;
+		int ppid;
+		char state;
+
+		if (name[0] < '0' || name[0] > '9') continue;
+		snprintf(path, sizeof(path), "/proc/%s/stat", name);
+		f = fopen(path, "r");
+		if (!f) continue;
+		nread = fread(buf, 1, sizeof(buf) - 1, f);
+		fclose(f);
+		if (nread == 0) continue;
+		buf[nread] = '\0';
+		/* Parse ppid: skip past "(comm)" then read state and ppid */
+		p = strrchr(buf, ')');
+		if (!p) continue;
+		p++;
+		if (sscanf(p, " %c %d", &state, &ppid) != 2) continue;
+		if (ppid == pid)
+			JS_SetPropertyUint32(ctx, arr, idx++, JS_NewInt32(ctx, atoi(name)));
+	}
+	closedir(d);
+#endif
+	return arr;
+}
+
 /* ---- Single dispatch ---- */
 
 static JSValue js_uv_process_op(JSContext *ctx, JSValueConst this_val,
@@ -629,6 +697,13 @@ static JSValue js_uv_process_op(JSContext *ctx, JSValueConst this_val,
 		return JS_UNDEFINED;
 	}
 
+	case PROC_GET_CHILD_PIDS: {
+		/* getChildPids(pid) — returns array of direct child PIDs */
+		int32_t pid;
+		if (JS_ToInt32(ctx, &pid, args[0])) return JS_EXCEPTION;
+		return js_get_child_pids(ctx, pid);
+	}
+
 	default:
 		return JS_ThrowRangeError(ctx, "unknown process opcode: %d", op);
 	}
@@ -645,6 +720,7 @@ static const JSCFunctionListEntry js_uv_process_funcs[] = {
 	QN_CONST2("CLOSE", PROC_CLOSE),
 	QN_CONST2("SPAWN_SYNC", PROC_SPAWN_SYNC),
 	QN_CONST2("KILL_PID", PROC_KILL_PID),
+	QN_CONST2("GET_CHILD_PIDS", PROC_GET_CHILD_PIDS),
 };
 
 static int js_uv_process_init(JSContext *ctx, JSModuleDef *m) {
