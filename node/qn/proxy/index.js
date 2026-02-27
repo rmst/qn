@@ -25,6 +25,7 @@ const HOP_BY_HOP = new Set([
 ])
 
 const WS_HIGH_WATER = 64 * 1024
+const DEFAULT_TIMEOUT = 120_000
 
 /**
  * Create a reverse proxy server.
@@ -32,12 +33,13 @@ const WS_HIGH_WATER = 64 * 1024
  * @param {Object} options
  * @param {number} [options.port=0] - Port to listen on (0 = random)
  * @param {string} [options.hostname='127.0.0.1'] - Address to bind
+ * @param {number} [options.timeout=120000] - Backend timeout in ms (0 = no timeout)
  * @param {(req: http.IncomingMessage) => string|null} options.route
  *   Routing function: receives the incoming request, returns a backend
  *   origin URL (e.g. 'http://localhost:3000') or null for 404.
  * @returns {Promise<{ address(): object, close(): Promise<void> }>}
  */
-export async function createProxy({ port = 0, hostname = '127.0.0.1', route } = {}) {
+export async function createProxy({ port = 0, hostname = '127.0.0.1', timeout = DEFAULT_TIMEOUT, route } = {}) {
 	if (typeof route !== 'function')
 		throw new TypeError('createProxy: route must be a function')
 
@@ -51,10 +53,16 @@ export async function createProxy({ port = 0, hostname = '127.0.0.1', route } = 
 			return
 		}
 		try {
-			await forwardHTTP(req, res, target)
-		} catch {
-			if (!res.headersSent) res.writeHead(502)
-			res.end('Bad Gateway')
+			await forwardHTTP(req, res, target, timeout)
+		} catch (err) {
+			if (res.headersSent) return
+			if (err && err.name === 'TimeoutError') {
+				res.writeHead(504)
+				res.end('Gateway Timeout')
+			} else {
+				res.writeHead(502)
+				res.end('Bad Gateway')
+			}
 		}
 	})
 
@@ -81,7 +89,7 @@ export async function createProxy({ port = 0, hostname = '127.0.0.1', route } = 
 	}
 }
 
-async function forwardHTTP(req, res, target) {
+async function forwardHTTP(req, res, target, timeout) {
 	const url = new URL(req.url, target)
 
 	const headers = filterHeaders(req.headers)
@@ -90,21 +98,27 @@ async function forwardHTTP(req, res, target) {
 	headers['x-forwarded-proto'] = 'http'
 	headers['x-forwarded-host'] = req.headers.host || ''
 
-	// Abort backend fetch if client disconnects
+	// Abort backend fetch if client disconnects or timeout expires
 	const abort = new AbortController()
 	req.socket.on('close', () => abort.abort())
+	const timer = timeout > 0 ? setTimeout(() => abort.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), timeout) : null
 
 	let body = undefined
 	if (req.method !== 'GET' && req.method !== 'HEAD') {
 		body = incomingBodyStream(req)
 	}
 
-	const response = await fetch(url.href, {
-		method: req.method,
-		headers,
-		body,
-		signal: abort.signal,
-	})
+	let response
+	try {
+		response = await fetch(url.href, {
+			method: req.method,
+			headers,
+			body,
+			signal: abort.signal,
+		})
+	} finally {
+		if (timer) clearTimeout(timer)
+	}
 
 	// Forward response headers, skipping hop-by-hop
 	const resHeaders = {}

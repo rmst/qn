@@ -24,7 +24,7 @@ import { readFileSync, statSync } from 'node:fs'
 const args = process.argv.slice(2)
 let configPath = null
 let port = 80
-let hostname = '0.0.0.0'
+let hostname = '127.0.0.1'
 
 for (let i = 0; i < args.length; i++) {
 	const arg = args[i]
