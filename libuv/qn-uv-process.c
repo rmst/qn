@@ -9,6 +9,7 @@
 #include "qn-uv-stream.h"
 #include "qn-vm.h"
 #include <string.h>
+#include <stdio.h>
 #include <dirent.h>
 
 #ifdef __APPLE__
@@ -332,6 +333,27 @@ static void sync_write_cb(uv_write_t *req, int status) {
 	uv_close((uv_handle_t *)&ss->stdin_pipe, sync_close_cb);
 }
 
+/* Clean up the temp loop's child_watcher and close the loop.
+ * uv_spawn starts a SIGCHLD watcher on the loop's child_watcher (inserting
+ * it into libuv's process-global signal tree) but never cleans it up — not
+ * on error, and not on success. Since the loop is stack-allocated, any
+ * handle left registered in the global tree becomes a dangling pointer. */
+static void sync_loop_cleanup(uv_loop_t *loop) {
+	/* child_watcher is only a real uv_signal_t on SIGCHLD platforms (Linux).
+	 * On kqueue platforms (macOS), it's just zeroed memory and must not be
+	 * closed. Check the type field to distinguish. */
+	uv_handle_t *cw = (uv_handle_t *)&loop->child_watcher;
+	if (cw->type == UV_SIGNAL && !uv_is_closing(cw))
+		uv_close(cw, NULL);
+	uv_run(loop, UV_RUN_DEFAULT);
+	int r = uv_loop_close(loop);
+	if (r != 0) {
+		fprintf(stderr, "qn: sync_loop_cleanup: uv_loop_close failed (%d), "
+			"handles leaked on stack-allocated loop\n", r);
+		abort();
+	}
+}
+
 static JSValue js_spawn_sync(JSContext *ctx, int nargs, JSValueConst *args) {
 	SpawnArgs sa;
 	if (spawn_args_parse(ctx, nargs, args, &sa) < 0)
@@ -431,8 +453,9 @@ static JSValue js_spawn_sync(JSContext *ctx, int nargs, JSValueConst *args) {
 		if (ss.has_stdin)  uv_close((uv_handle_t *)&ss.stdin_pipe, sync_close_cb);
 		if (ss.has_stdout) uv_close((uv_handle_t *)&ss.stdout_pipe, sync_close_cb);
 		if (ss.has_stderr) uv_close((uv_handle_t *)&ss.stderr_pipe, sync_close_cb);
-		uv_run(&loop, UV_RUN_DEFAULT);
-		uv_loop_close(&loop);
+		/* uv_spawn inits a process handle but doesn't close it on error */
+		uv_close((uv_handle_t *)&ss.process, NULL);
+		sync_loop_cleanup(&loop);
 
 		JSValue result = JS_NewObject(ctx);
 		JS_SetPropertyStr(ctx, result, "pid", JS_NewInt32(ctx, 0));
@@ -470,7 +493,7 @@ static JSValue js_spawn_sync(JSContext *ctx, int nargs, JSValueConst *args) {
 	}
 
 	uv_run(&loop, UV_RUN_DEFAULT);
-	uv_loop_close(&loop);
+	sync_loop_cleanup(&loop);
 
 	/* Build result */
 	JSValue result = JS_NewObject(ctx);
