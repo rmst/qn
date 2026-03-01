@@ -110,8 +110,11 @@ export function serve(optionsOrHandler, handlerOrOptions) {
 	const keepAliveTimeout = options.keepAliveTimeout ?? DEFAULT_KEEP_ALIVE_TIMEOUT
 
 	const tcpServer = createTcpServer()
+	const activeSockets = new Set()
 
 	tcpServer.on('connection', (socket) => {
+		activeSockets.add(socket)
+		socket.on('close', () => activeSockets.delete(socket))
 		socket.on('error', () => {})
 		handleConnection(socket, handler, onError, headerTimeout, keepAliveTimeout)
 	})
@@ -120,16 +123,18 @@ export function serve(optionsOrHandler, handlerOrOptions) {
 		tcpServer.on('error', reject)
 		tcpServer.listen(port, hostname, undefined, () => {
 			tcpServer.removeListener('error', reject)
-			resolve(new HttpServer(tcpServer))
+			resolve(new HttpServer(tcpServer, activeSockets))
 		})
 	})
 }
 
 class HttpServer {
 	#server
+	#sockets
 
-	constructor(server) {
+	constructor(server, sockets) {
 		this.#server = server
+		this.#sockets = sockets
 	}
 
 	address() {
@@ -138,5 +143,8 @@ class HttpServer {
 
 	close() {
 		this.#server.close()
+		for (const socket of this.#sockets) {
+			socket.destroy()
+		}
 	}
 }
