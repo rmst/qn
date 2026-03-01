@@ -252,13 +252,22 @@ async function sendRequest(handle, host, isHttps, reqBytes, bodyBytes, bodyIter,
 /**
  * Fetch a resource from the network
  *
- * @param {string|URL} input - The URL to fetch
- * @param {Object} [init] - Optional configuration
+ * @param {string|URL|Request} input - The URL or Request to fetch
+ * @param {Object} [init] - Optional configuration (overrides Request properties)
  * @returns {Promise<Response>}
  */
 export async function fetch(input, init = {}) {
 	let url
-	if (input instanceof URL) {
+
+	if (input instanceof Request) {
+		if (input.bodyUsed) throw new TypeError('Request body has already been consumed')
+		try {
+			url = new URL(input.url)
+		} catch {
+			throw new TypeError(`Invalid URL: ${input.url}`)
+		}
+		init = { method: input.method, headers: input.headers, body: input.body, signal: input.signal, ...init }
+	} else if (input instanceof URL) {
 		url = input
 	} else if (typeof input === 'string') {
 		try {
@@ -267,7 +276,7 @@ export async function fetch(input, init = {}) {
 			throw new TypeError(`Invalid URL: ${input}`)
 		}
 	} else {
-		throw new TypeError('Input must be a string or URL')
+		throw new TypeError('Input must be a string, URL, or Request')
 	}
 
 	const signal = init.signal || null
