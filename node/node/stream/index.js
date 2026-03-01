@@ -374,6 +374,8 @@ export class Readable extends EventEmitter {
 						r({ value: buf, done: false })
 					} else {
 						chunks.push(buf)
+						// Backpressure: pause source when consumer isn't keeping up
+						if (streamReadable.pause) streamReadable.pause()
 					}
 				})
 				streamReadable.on('end', () => {
@@ -399,6 +401,8 @@ export class Readable extends EventEmitter {
 						if (error) throw error
 						if (chunks.length > 0) {
 							yield chunks.shift()
+							// Resume source once buffer is drained
+							if (chunks.length === 0 && streamReadable.resume) streamReadable.resume()
 							continue
 						}
 						if (done) return
