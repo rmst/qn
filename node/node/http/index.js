@@ -6,7 +6,7 @@
 import { EventEmitter } from 'node:events'
 import { Buffer } from 'node:buffer'
 import { createServer as createTcpServer, Socket } from 'node:net'
-import { socketReader, readRequestHead, requestBodyStream, chunkedRequestBodyStream } from 'node:http/parse'
+import { handleHttpConnection } from 'node:http/parse'
 
 const CRLF = '\r\n'
 
@@ -255,6 +255,7 @@ const DEFAULT_MAX_HEADER_COUNT = 128
 
 export class HTTPServer extends EventEmitter {
 	#server
+	#sockets = new Set()
 	#maxHeaderSize
 	#maxHeaderCount
 	#headerTimeout
@@ -278,6 +279,8 @@ export class HTTPServer extends EventEmitter {
 		this.#server.on('close', () => this.emit('close'))
 
 		this.#server.on('connection', (socket) => {
+			this.#sockets.add(socket)
+			socket.on('close', () => this.#sockets.delete(socket))
 			socket.on('error', () => {})
 			this.#handleConnection(socket)
 		})
@@ -288,46 +291,47 @@ export class HTTPServer extends EventEmitter {
 	get keepAliveTimeout() { return this.#keepAliveTimeout }
 	set keepAliveTimeout(ms) { this.#keepAliveTimeout = ms }
 
-	async #handleConnection(socket) {
-		const reader = socketReader(socket)
-		let firstRequest = true
+	#handleConnection(socket) {
+		handleHttpConnection(
+			socket,
+			{
+				headerTimeout: this.#headerTimeout,
+				keepAliveTimeout: this.#keepAliveTimeout,
+				maxHeaderSize: this.#maxHeaderSize,
+				maxHeaderCount: this.#maxHeaderCount,
+			},
+			async ({ head, socket, keepAlive, bodyIter }) => {
+				const req = new IncomingMessage(socket)
+				req.method = head.method
+				req.url = head.url
+				req.httpVersion = head.httpVersion
+				req.headers = head.headers
+				req.rawHeaders = head.rawHeaders
 
-		while (!socket.destroyed) {
-			const timeout = firstRequest ? this.#headerTimeout : this.#keepAliveTimeout
-			const timer = setTimeout(() => socket.destroy(), timeout)
-
-			let head
-			try {
-				head = await readRequestHead(reader, this.#maxHeaderSize)
-			} catch (err) {
-				clearTimeout(timer)
-				if (err.code === 'ERR_HTTP_HEADER_TOO_LARGE') {
-					const res = new ServerResponse(socket, false)
-					res.writeHead(431, { 'Connection': 'close' })
-					res.end('Request Header Fields Too Large')
+				const res = new ServerResponse(socket, keepAlive)
+				if (!keepAlive) {
+					res.setHeader('connection', 'close')
 				}
-				socket.destroy()
-				return
-			}
-			clearTimeout(timer)
 
-			if (!head) { socket.destroy(); return }
-			firstRequest = false
+				if (bodyIter) {
+					req._setBody(bodyIter)
+				} else {
+					req.complete = true
+					queueMicrotask(() => req.emit('end'))
+				}
 
-			if (head.rawHeaders.length > this.#maxHeaderCount * 2) {
-				const res = new ServerResponse(socket, false)
-				res.writeHead(431, { 'Connection': 'close' })
-				res.end('Too Many Headers')
-				socket.destroy()
-				return
-			}
+				this.emit('request', req, res)
 
-			const connectionHeader = (head.headers['connection'] || '').toLowerCase()
-			const isHttp11 = head.httpVersion === '1.1'
+				await res._awaitFinish()
 
-			// HTTP Upgrade (WebSocket, etc.)
-			const connectionParts = connectionHeader.split(/\s*,\s*/)
-			if (connectionParts.includes('upgrade') && head.headers['upgrade']) {
+				// Drain unconsumed body so the socket is clean for the next request
+				if (bodyIter) {
+					await req._drain()
+					return { bodyDrained: true }
+				}
+			},
+			// onUpgrade
+			({ head, socket, headBuf }) => {
 				const req = new IncomingMessage(socket)
 				req.method = head.method
 				req.url = head.url
@@ -336,80 +340,21 @@ export class HTTPServer extends EventEmitter {
 				req.rawHeaders = head.rawHeaders
 				req.complete = true
 
-				// leftover bytes from the header read become the "head" buffer
-				const headBuf = head.leftover && head.leftover.length > 0
-					? Buffer.from(head.leftover)
-					: Buffer.alloc(0)
+				const buf = headBuf.length > 0 ? Buffer.from(headBuf) : Buffer.alloc(0)
 
 				if (this.listenerCount('upgrade') > 0) {
-					this.emit('upgrade', req, socket, headBuf)
+					this.emit('upgrade', req, socket, buf)
 				} else {
-					// No upgrade handler — destroy socket
 					socket.destroy()
 				}
-				return
-			}
-
-			const keepAlive = connectionHeader === 'close' ? false :
-				connectionHeader === 'keep-alive' ? true : isHttp11
-
-			const req = new IncomingMessage(socket)
-			req.method = head.method
-			req.url = head.url
-			req.httpVersion = head.httpVersion
-			req.headers = head.headers
-			req.rawHeaders = head.rawHeaders
-
-			const res = new ServerResponse(socket, keepAlive)
-			if (!keepAlive) {
-				res.setHeader('connection', 'close')
-			}
-
-			const hasContentLength = 'content-length' in head.headers
-			const hasTransferEncoding = 'transfer-encoding' in head.headers
-			const isChunked = hasTransferEncoding &&
-				head.headers['transfer-encoding'].toLowerCase().includes('chunked')
-
-			if (hasContentLength && hasTransferEncoding) {
-				res.writeHead(400, { 'Connection': 'close' })
-				res.end('Bad Request')
-				socket.destroy()
-				return
-			}
-
-			let contentLength = 0
-			if (hasContentLength) {
-				const clValue = head.headers['content-length'].trim()
-				if (!/^\d+$/.test(clValue)) {
-					res.writeHead(400, { 'Connection': 'close' })
-					res.end('Bad Request')
-					socket.destroy()
-					return
-				}
-				contentLength = parseInt(clValue, 10)
-			}
-
-			const hasBody = isChunked || contentLength > 0
-
-			if (hasBody) {
-				const bodyIter = isChunked
-					? chunkedRequestBodyStream(reader, head.leftover)
-					: requestBodyStream(reader, head.leftover, contentLength)
-				req._setBody(bodyIter)
-			} else {
-				req.complete = true
-				queueMicrotask(() => req.emit('end'))
-			}
-
-			this.emit('request', req, res)
-
-			await res._awaitFinish()
-
-			// Drain unconsumed body so the socket is clean for the next request
-			if (hasBody) await req._drain()
-
-			if (!keepAlive) return
-		}
+			},
+			// onError
+			(statusCode, statusText) => {
+				const res = new ServerResponse(socket, false)
+				res.writeHead(statusCode, { 'Connection': 'close' })
+				res.end(statusText)
+			},
+		)
 	}
 
 	listen(port, host, backlog, callback) {
@@ -427,6 +372,12 @@ export class HTTPServer extends EventEmitter {
 	close(callback) {
 		this.#server.close(callback)
 		return this
+	}
+
+	closeAllConnections() {
+		for (const socket of this.#sockets) {
+			socket.destroy()
+		}
 	}
 
 	ref() { return this }
@@ -448,6 +399,7 @@ const STATUS_CODES = {
 	404: 'Not Found', 405: 'Method Not Allowed', 408: 'Request Timeout',
 	409: 'Conflict', 410: 'Gone', 413: 'Payload Too Large',
 	415: 'Unsupported Media Type', 426: 'Upgrade Required', 429: 'Too Many Requests',
+	431: 'Request Header Fields Too Large',
 	500: 'Internal Server Error', 502: 'Bad Gateway',
 	503: 'Service Unavailable', 504: 'Gateway Timeout',
 }

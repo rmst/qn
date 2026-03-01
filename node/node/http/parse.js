@@ -442,26 +442,194 @@ export async function* bodyStream(reader, leftover, contentLength, isChunked) {
 }
 
 /**
- * Read an HTTP request from a reader and return a Web standard Request object.
- * Returns null if the connection closed before headers were complete.
- *
- * @param {{ read(buf, off, len): Promise<number> }} reader
- * @returns {Promise<Request|null>}
+ * Determine keep-alive from Connection header and HTTP version.
  */
+function detectKeepAlive(headers, httpVersion) {
+	const conn = (headers['connection'] || '').toLowerCase()
+	return conn === 'close' ? false :
+		conn === 'keep-alive' ? true : httpVersion === '1.1'
+}
+
+/**
+ * Detect upgrade request from Connection header.
+ */
+function detectUpgrade(headers) {
+	const conn = (headers['connection'] || '').toLowerCase()
+	return conn.split(/\s*,\s*/).includes('upgrade') && !!headers['upgrade']
+}
+
+/**
+ * Validate request body framing. Returns { contentLength, isChunked } or
+ * throws with an error object containing a `statusCode` property for the
+ * appropriate HTTP error response.
+ */
+function validateBodyFraming(headers) {
+	const hasContentLength = 'content-length' in headers
+	const hasTransferEncoding = 'transfer-encoding' in headers
+	const isChunked = hasTransferEncoding &&
+		headers['transfer-encoding'].toLowerCase().includes('chunked')
+
+	if (hasContentLength && hasTransferEncoding) {
+		const err = new Error('Bad Request')
+		err.statusCode = 400
+		throw err
+	}
+
+	let contentLength = 0
+	if (hasContentLength) {
+		const clValue = headers['content-length'].trim()
+		if (!/^\d+$/.test(clValue)) {
+			const err = new Error('Bad Request')
+			err.statusCode = 400
+			throw err
+		}
+		contentLength = parseInt(clValue, 10)
+	}
+
+	return { contentLength, isChunked, hasBody: isChunked || contentLength > 0 }
+}
+
+/**
+ * Create a body iterator for the request based on framing.
+ */
+function createBodyIter(reader, leftover, contentLength, isChunked) {
+	if (isChunked) return chunkedRequestBodyStream(reader, leftover)
+	if (contentLength > 0) return requestBodyStream(reader, leftover, contentLength)
+	return null
+}
+
+/**
+ * Drain an async iterable body (consume and discard all chunks).
+ */
+async function drainBody(bodyIter) {
+	if (!bodyIter) return
+	try { for await (const _ of bodyIter) {} } catch {}
+}
+
+/**
+ * Shared HTTP/1.1 server connection handler.
+ * Manages the request loop with keep-alive, timeouts, security validation,
+ * and upgrade detection. Calls onRequest for each request.
+ *
+ * @param {object} socket - node:net Socket
+ * @param {object} options
+ * @param {number} options.headerTimeout - Timeout for first request headers (ms)
+ * @param {number} options.keepAliveTimeout - Timeout for subsequent requests (ms)
+ * @param {number} [options.maxHeaderSize] - Max header size in bytes
+ * @param {number} [options.maxHeaderCount] - Max number of headers
+ * @param {function} onRequest - Called per request with:
+ *   { head, reader, socket, keepAlive, bodyIter, bodyFraming }
+ *   Must return a Promise that resolves when the response is fully written.
+ *   The returned object may have { bodyDrained: true } to skip automatic draining.
+ * @param {function} [onUpgrade] - Called for upgrade requests with:
+ *   { head, socket, headBuf }
+ *   If null, upgrade requests destroy the socket.
+ * @param {function} [onError] - Called with (statusCode, statusText) to write error responses.
+ *   If null, errors destroy the socket silently.
+ */
+export async function handleHttpConnection(socket, options, onRequest, onUpgrade, onError) {
+	const reader = socketReader(socket)
+	const abort = new AbortController()
+	socket.on('close', () => abort.abort())
+
+	const {
+		headerTimeout,
+		keepAliveTimeout,
+		maxHeaderSize = DEFAULT_MAX_HEADER_SIZE,
+		maxHeaderCount = Infinity,
+	} = options
+
+	let firstRequest = true
+
+	while (!socket.destroyed) {
+		const timeout = firstRequest ? headerTimeout : keepAliveTimeout
+		const timer = setTimeout(() => socket.destroy(), timeout)
+
+		let head
+		try {
+			head = await readRequestHead(reader, maxHeaderSize)
+		} catch (err) {
+			clearTimeout(timer)
+			if (err.code === 'ERR_HTTP_HEADER_TOO_LARGE' && onError) {
+				onError(431, 'Request Header Fields Too Large')
+			}
+			socket.destroy()
+			return
+		}
+		clearTimeout(timer)
+
+		if (!head) { socket.destroy(); return }
+		firstRequest = false
+
+		// Header count check
+		if (head.rawHeaders.length > maxHeaderCount * 2) {
+			if (onError) onError(431, 'Too Many Headers')
+			socket.destroy()
+			return
+		}
+
+		// Upgrade detection
+		if (detectUpgrade(head.headers)) {
+			if (onUpgrade) {
+				const headBuf = head.leftover && head.leftover.length > 0
+					? head.leftover : new Uint8Array(0)
+				onUpgrade({ head, socket, headBuf })
+			} else {
+				socket.destroy()
+			}
+			return
+		}
+
+		const keepAlive = detectKeepAlive(head.headers, head.httpVersion)
+
+		// Body framing validation (CL+TE conflict, invalid CL)
+		let bodyFraming
+		try {
+			bodyFraming = validateBodyFraming(head.headers)
+		} catch (err) {
+			if (onError) onError(err.statusCode, err.message)
+			socket.destroy()
+			return
+		}
+
+		const bodyIter = bodyFraming.hasBody
+			? createBodyIter(reader, head.leftover, bodyFraming.contentLength, bodyFraming.isChunked)
+			: null
+
+		let result
+		try {
+			result = await onRequest({
+				head, reader, socket, keepAlive, bodyIter, bodyFraming,
+				signal: abort.signal,
+			})
+		} catch (err) {
+			if (err?.name === 'AbortError' || err?.message === 'socket closed') return
+			socket.end()
+			return
+		}
+
+		// Drain unconsumed body unless the callback already did it
+		if (bodyIter && !result?.bodyDrained) {
+			await drainBody(bodyIter)
+		}
+
+		if (!keepAlive) {
+			socket.end()
+			return
+		}
+	}
+}
+
 /**
  * Read an HTTP request from a reader and return a Web standard Request object.
  * Returns null if the connection closed before headers were complete.
- *
- * When options.returnKeepAlive is true, returns { request, keepAlive } instead
- * of just the Request, so callers can decide whether to reuse the connection.
+ * Used by fetch (client-side) — does not do server-side security validation.
  *
  * @param {{ read(buf, off, len): Promise<number> }} reader
  * @param {object} [extraInit] - Extra properties for Request constructor
- * @param {object} [options]
- * @param {boolean} [options.returnKeepAlive] - Return keep-alive info
- * @returns {Promise<Request|{request: Request, keepAlive: boolean}|null>}
+ * @returns {Promise<Request|null>}
  */
-export async function readRequest(reader, extraInit, options) {
+export async function readRequest(reader, extraInit) {
 	const head = await readRequestHead(reader)
 	if (!head) return null
 
@@ -480,22 +648,12 @@ export async function readRequest(reader, extraInit, options) {
 		}
 	}
 
-	const request = new Request(url, {
+	return new Request(url, {
 		method: head.method,
 		headers: head.headers,
 		body,
 		...extraInit,
 	})
-
-	if (options?.returnKeepAlive) {
-		const conn = (head.headers['connection'] || '').toLowerCase()
-		const isHttp11 = head.httpVersion === '1.1'
-		const keepAlive = conn === 'close' ? false :
-			conn === 'keep-alive' ? true : isHttp11
-		return { request, keepAlive }
-	}
-
-	return request
 }
 
 /**
