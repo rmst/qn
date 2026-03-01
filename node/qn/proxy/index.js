@@ -151,6 +151,7 @@ function incomingBodyStream(req) {
 	const queue = []
 	let done = false
 	let waiting = null
+	let paused = false
 
 	req.on('data', (chunk) => {
 		if (waiting) {
@@ -159,6 +160,7 @@ function incomingBodyStream(req) {
 			resolve({ value: chunk, done: false })
 		} else {
 			queue.push(chunk)
+			if (!paused) { req.pause(); paused = true }
 		}
 	})
 	req.on('end', () => {
@@ -182,10 +184,14 @@ function incomingBodyStream(req) {
 		[Symbol.asyncIterator]() {
 			return {
 				next() {
-					if (queue.length > 0)
-						return Promise.resolve({ value: queue.shift(), done: false })
+					if (queue.length > 0) {
+						const value = queue.shift()
+						if (queue.length === 0 && paused) { req.resume(); paused = false }
+						return Promise.resolve({ value, done: false })
+					}
 					if (done)
 						return Promise.resolve({ value: undefined, done: true })
+					if (paused) { req.resume(); paused = false }
 					return new Promise(resolve => { waiting = resolve })
 				}
 			}
