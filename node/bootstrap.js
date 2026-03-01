@@ -240,7 +240,7 @@ if (scriptArgs[1] === '-e' || scriptArgs[1] === '--eval') {
 
 // If no script provided, start the REPL
 if (scriptArgs.length < 2) {
-	await import("repl")
+	await import("qn:repl")
 } else if (scriptArgs[1] === '--test') {
 	// Run test files with glob expansion (like Node.js)
 

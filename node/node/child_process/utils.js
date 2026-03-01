@@ -1,3 +1,5 @@
+import { NodeCompatibilityError } from '../errors.js'
+
 /**
  * Parse stdio option into array of 3 values.
  * @param {string|string[]|undefined} stdio
@@ -51,15 +53,7 @@ export function signalName(num) {
 	return _signalNames[num] || `SIG${num}`
 }
 
-/**
- * Error for unsupported Node.js compatibility features.
- */
-export class NodeCompatibilityError extends Error {
-	constructor(message) {
-		super(message)
-		this.name = 'NodeCompatibilityError'
-	}
-}
+export { NodeCompatibilityError }
 
 /**
  * Check for unsupported options and throw NodeCompatibilityError.

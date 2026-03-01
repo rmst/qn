@@ -71,7 +71,7 @@ const CJS_SUFFIX = '\n});\nexport default __cjs_module.exports;\n'
 
 /* Default modules included in every qnc build unless --no-default-modules */
 const DEFAULT_MODULES = [
-	"node-globals", "repl",
+	"node-globals", "qn:repl",
 	"node:fs", "node:fs/promises", "node:process", "node:child_process",
 	"node:crypto", "node:path", "node:events",
 	"node:stream", "node:stream/promises",
@@ -79,7 +79,13 @@ const DEFAULT_MODULES = [
 	"node:fetch", "node:fetch/Headers", "node:fetch/Response",
 	"node:dgram", "node:net", "node:http", "node:http/parse",
 	"node:sqlite", "node:util", "node:assert", "node:test",
-	"node:os", "node:module",
+	"node:os", "node:module", "node:timers",
+	// Stubs for unimplemented node:* modules (throw NodeCompatibilityError on import)
+	"node:async_hooks", "node:cluster", "node:diagnostics_channel", "node:dns",
+	"node:domain", "node:http2", "node:https", "node:inspector",
+	"node:perf_hooks", "node:punycode", "node:querystring", "node:readline",
+	"node:repl", "node:string_decoder", "node:tty",
+	"node:v8", "node:vm", "node:wasi", "node:worker_threads", "node:zlib",
 	"qn:crypto", "qn:tls", "qn:introspect", "qn:http", "qn:pty",
 	"qn:version-info", "qn:sucrase", "qn:worker", "qn:cjs", "qn:process", "qn:proxy",
 	"qx", "ws",

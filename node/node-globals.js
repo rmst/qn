@@ -33,71 +33,16 @@ if (!Error.captureStackTrace) {
 }
 
 // Node.js compatibility error for unsupported features
-export class NodeCompatibilityError extends Error {
-	constructor(message) {
-		super(message)
-		this.name = 'NodeCompatibilityError'
-	}
-}
+export { NodeCompatibilityError } from "./node/errors.js"
 
-// Timer handle wrapper — matches Node.js Timeout interface (ref/unref/Symbol.toPrimitive)
-class TimerHandle {
-	#id
-	constructor(id) { this.#id = id }
-	ref() { _timerRef(this.#id); return this }
-	unref() { _timerUnref(this.#id); return this }
-	[Symbol.toPrimitive]() { return this.#id }
-}
-
-// Timer globals (backed by libuv uv_timer_t via qn_vm)
-globalThis.setTimeout = (fn, delay, ...args) => {
-	if (args.length > 0) {
-		throw new NodeCompatibilityError('setTimeout does not support passing arguments to callback. Use an arrow function instead.')
-	}
-	return new TimerHandle(_setTimeout(fn, delay))
-}
-
-globalThis.clearTimeout = (handle) => _clearTimeout(+handle)
-
-globalThis.setImmediate = (fn, ...args) => {
-	return new TimerHandle(_setTimeout(() => fn(...args), 0))
-}
-globalThis.clearImmediate = (handle) => _clearTimeout(+handle)
-
-const _intervals = new Map()
-let _intervalId = 1
-
-globalThis.setInterval = (fn, delay, ...args) => {
-	if (args.length > 0)
-		throw new NodeCompatibilityError('setInterval does not support passing arguments to callback. Use an arrow function instead.')
-	const id = _intervalId++
-	let unrefd = false
-	const tick = () => {
-		if (!_intervals.has(id)) return
-		try { fn() } catch (e) { console.error(e) }
-		if (_intervals.has(id)) {
-			const timerId = _setTimeout(tick, delay)
-			if (unrefd) _timerUnref(timerId)
-			_intervals.set(id, timerId)
-		}
-	}
-	const timerId = _setTimeout(tick, delay)
-	_intervals.set(id, timerId)
-	return {
-		ref() { unrefd = false; _timerRef(_intervals.get(id)); return this },
-		unref() { unrefd = true; _timerUnref(_intervals.get(id)); return this },
-		[Symbol.toPrimitive]() { return id },
-	}
-}
-
-globalThis.clearInterval = (handle) => {
-	const id = typeof handle === 'object' ? +handle : handle
-	const timer = _intervals.get(id)
-	if (timer !== undefined) {
-		_clearTimeout(timer)
-		_intervals.delete(id)
-	}
-}
+// Timer globals — implementation lives in node:timers, globalized here
+import * as timers from "node:timers"
+globalThis.setTimeout = timers.setTimeout
+globalThis.clearTimeout = timers.clearTimeout
+globalThis.setInterval = timers.setInterval
+globalThis.clearInterval = timers.clearInterval
+globalThis.setImmediate = timers.setImmediate
+globalThis.clearImmediate = timers.clearImmediate
 
 // ReadableStream (WHATWG Streams API subset)
 globalThis.ReadableStream = class ReadableStream {

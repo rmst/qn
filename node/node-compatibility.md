@@ -24,9 +24,9 @@ CommonJS modules are partially supported. ESM files can import `.cjs` files and 
 
 | Global | Status | Notes |
 |--------|--------|-------|
-| `setTimeout` / `clearTimeout` | ✅ | No extra args to callback (throws) |
-| `setInterval` / `clearInterval` | ✅ | No extra args to callback (throws) |
-| `setImmediate` / `clearImmediate` | ✅ | |
+| `setTimeout` / `clearTimeout` | ✅ | No extra args to callback (throws). Re-exported from `node:timers`. |
+| `setInterval` / `clearInterval` | ✅ | No extra args to callback (throws). Re-exported from `node:timers`. |
+| `setImmediate` / `clearImmediate` | ✅ | Re-exported from `node:timers`. |
 | `queueMicrotask` | ✅ | |
 
 ### URL
@@ -341,6 +341,15 @@ Notes: Minimal fd-backed streams, not the full Node.js stream infrastructure.
 | `t.plan` / `t.diagnostic` | ❌ | |
 | TAP/custom reporters | ❌ | |
 
+### node:timers
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `setTimeout` / `clearTimeout` | ✅ | No extra args to callback (throws `NodeCompatibilityError`) |
+| `setInterval` / `clearInterval` | ✅ | No extra args to callback (throws `NodeCompatibilityError`) |
+| `setImmediate` / `clearImmediate` | ✅ | |
+| `node:timers/promises` | ❌ | |
+
 ### node:process
 
 | API | Status | Notes |
@@ -397,7 +406,9 @@ BLOBs returned as `Uint8Array`. Transactions via `exec('BEGIN')`/`exec('COMMIT')
 
 ## Unavailable `node:*` Modules
 
-`node:async_hooks`, `node:cluster`, `node:diagnostics_channel`, `node:dns`, `node:domain`, `node:http2`, `node:https`, `node:inspector`, `node:perf_hooks`, `node:punycode`, `node:querystring`, `node:readline`, `node:repl`, `node:string_decoder`, `node:timers`, `node:tty`, `node:v8`, `node:vm`, `node:wasi`, `node:worker_threads`, `node:zlib`
+The following modules are not implemented. Importing them throws a `NodeCompatibilityError` with a descriptive message.
+
+`node:async_hooks`, `node:cluster`, `node:diagnostics_channel`, `node:dns`, `node:domain`, `node:http2`, `node:https`, `node:inspector`, `node:perf_hooks`, `node:punycode`, `node:querystring`, `node:readline`, `node:repl`, `node:string_decoder`, `node:tty`, `node:v8`, `node:vm`, `node:wasi`, `node:worker_threads`, `node:zlib`
 
 ---
 
