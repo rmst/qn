@@ -139,7 +139,9 @@ async function forwardHTTP(req, res, target, timeout) {
 
 	if (response.body) {
 		for await (const chunk of response.body) {
-			res.write(chunk)
+			if (!res.write(chunk)) {
+				await new Promise(resolve => res.once('drain', resolve))
+			}
 		}
 	}
 	res.end()

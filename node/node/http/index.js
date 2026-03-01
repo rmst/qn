@@ -92,6 +92,7 @@ export class ServerResponse extends EventEmitter {
 		super()
 		this.#socket = socket
 		this.#keepAlive = keepAlive
+		socket.on('drain', () => this.emit('drain'))
 	}
 
 	get headersSent() { return this.#headersSent }
@@ -192,12 +193,10 @@ export class ServerResponse extends EventEmitter {
 			const hex = chunk.byteLength.toString(16)
 			this.#socket.write(`${hex}${CRLF}`)
 			this.#socket.write(chunk)
-			this.#socket.write(CRLF, undefined, callback)
+			return this.#socket.write(CRLF, undefined, callback)
 		} else {
-			this.#socket.write(chunk, undefined, callback)
+			return this.#socket.write(chunk, undefined, callback)
 		}
-
-		return true
 	}
 
 	end(data, encoding, callback) {
