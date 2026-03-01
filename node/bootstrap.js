@@ -222,24 +222,30 @@ if (scriptArgs[1] === '--version' || scriptArgs[1] === '-V') {
 	std.exit(0)
 }
 
-// Handle -e flag (evaluate string as script)
+// Handle -e flag (evaluate expression — supports await import(...))
 if (scriptArgs[1] === '-e' || scriptArgs[1] === '--eval') {
 	if (scriptArgs.length < 3) {
 		std.err.puts('Error: -e requires an argument\n')
 		std.exit(1)
 	}
+	// Adjust argv so imported scripts see args after -e code (strip --)
+	const evalCode = scriptArgs[2]
+	let rest = scriptArgs.slice(3)
+	if (rest[0] === '--') rest = rest.slice(1)
+	scriptArgs.length = 0
+	scriptArgs.push('qn', '<eval>', ...rest)
+	// process.argv was already copied from scriptArgs at import time — update it too
+	globalThis.process.argv = [...scriptArgs]
 	try {
-		std.evalScript(scriptArgs[2])
+		const result = std.evalScript(evalCode)
+		if (result && typeof result.then === 'function') await result
 	} catch (e) {
-		std.err.puts("Error: " + e.message + "\n")
+		std.err.puts("Error: " + (e.message || e) + "\n")
 		if (e.stack) std.err.puts(e.stack + "\n")
 		std.exit(1)
 	}
-	std.exit(0)
-}
-
-// If no script provided, start the REPL
-if (scriptArgs.length < 2) {
+} else if (scriptArgs.length < 2) {
+// No script provided — start the REPL
 	await import("qn:repl")
 } else if (scriptArgs[1] === '--test') {
 	// Run test files with glob expansion (like Node.js)

@@ -60,12 +60,12 @@ export function execFileSync(file, args = [], options = {}) {
 	const outputStr = useUtf8 ? result.stdout : _bytesToString(result.stdout)
 	const errorOutputStr = useUtf8 ? result.stderr : _bytesToString(result.stderr)
 
-	// Handle timeout
+	// Handle spawn errors (ENOENT, ETIMEDOUT, etc.)
 	if (result.error) {
-		const error = new Error(`Command timed out: ${file}`)
-		error.signal = result.signal
+		const error = result.error
 		error.stdout = result.stdout
 		error.stderr = result.stderr
+		if (result.signal) error.signal = result.signal
 		throw error
 	}
 

@@ -25,6 +25,7 @@ const HOP_BY_HOP = new Set([
 ])
 
 const WS_HIGH_WATER = 64 * 1024
+const DEFAULT_TIMEOUT = 120_000
 
 /**
  * Create a reverse proxy server.
@@ -32,12 +33,13 @@ const WS_HIGH_WATER = 64 * 1024
  * @param {Object} options
  * @param {number} [options.port=0] - Port to listen on (0 = random)
  * @param {string} [options.hostname='127.0.0.1'] - Address to bind
+ * @param {number} [options.timeout=120000] - Backend timeout in ms (0 = no timeout)
  * @param {(req: http.IncomingMessage) => string|null} options.route
  *   Routing function: receives the incoming request, returns a backend
  *   origin URL (e.g. 'http://localhost:3000') or null for 404.
  * @returns {Promise<{ address(): object, close(): Promise<void> }>}
  */
-export async function createProxy({ port = 0, hostname = '127.0.0.1', route } = {}) {
+export async function createProxy({ port = 0, hostname = '127.0.0.1', timeout = DEFAULT_TIMEOUT, route } = {}) {
 	if (typeof route !== 'function')
 		throw new TypeError('createProxy: route must be a function')
 
@@ -51,10 +53,16 @@ export async function createProxy({ port = 0, hostname = '127.0.0.1', route } = 
 			return
 		}
 		try {
-			await forwardHTTP(req, res, target)
-		} catch {
-			if (!res.headersSent) res.writeHead(502)
-			res.end('Bad Gateway')
+			await forwardHTTP(req, res, target, timeout)
+		} catch (err) {
+			if (res.headersSent) return
+			if (err && err.name === 'TimeoutError') {
+				res.writeHead(504)
+				res.end('Gateway Timeout')
+			} else {
+				res.writeHead(502)
+				res.end('Bad Gateway')
+			}
 		}
 	})
 
@@ -81,30 +89,45 @@ export async function createProxy({ port = 0, hostname = '127.0.0.1', route } = 
 	}
 }
 
-async function forwardHTTP(req, res, target) {
+async function forwardHTTP(req, res, target, timeout) {
 	const url = new URL(req.url, target)
 
 	const headers = filterHeaders(req.headers)
-	delete headers['content-length'] // let fetch determine from actual body
 	headers['x-forwarded-for'] = req.socket.remoteAddress
 	headers['x-forwarded-proto'] = 'http'
 	headers['x-forwarded-host'] = req.headers.host || ''
 
-	// Abort backend fetch if client disconnects
+	// Abort backend fetch if client disconnects or timeout expires
 	const abort = new AbortController()
 	req.socket.on('close', () => abort.abort())
+	const timer = timeout > 0 ? setTimeout(() => abort.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), timeout) : null
 
+	// If the client sent Content-Length, buffer the body so fetch preserves it.
+	// Otherwise stream through (fetch will use chunked transfer-encoding).
 	let body = undefined
 	if (req.method !== 'GET' && req.method !== 'HEAD') {
-		body = incomingBodyStream(req)
+		if (req.headers['content-length']) {
+			const chunks = []
+			req.on('data', c => chunks.push(c))
+			await new Promise(r => req.on('end', r))
+			if (chunks.length > 0) body = Buffer.concat(chunks)
+		} else {
+			delete headers['content-length']
+			body = incomingBodyStream(req)
+		}
 	}
 
-	const response = await fetch(url.href, {
-		method: req.method,
-		headers,
-		body,
-		signal: abort.signal,
-	})
+	let response
+	try {
+		response = await fetch(url.href, {
+			method: req.method,
+			headers,
+			body,
+			signal: abort.signal,
+		})
+	} finally {
+		if (timer) clearTimeout(timer)
+	}
 
 	// Forward response headers, skipping hop-by-hop
 	const resHeaders = {}
@@ -120,45 +143,6 @@ async function forwardHTTP(req, res, target) {
 		}
 	}
 	res.end()
-}
-
-function forwardWS(wss, req, socket, head, target) {
-	const wsUrl = target.replace(/^http/, 'ws') + req.url
-
-	const backend = new WebSocket(wsUrl)
-	backend.on('error', () => socket.destroy())
-
-	backend.on('open', () => {
-		wss.handleUpgrade(req, socket, head, (client) => {
-			pipeWS(client, backend)
-			pipeWS(backend, client)
-			client.on('close', (code, reason) => backend.close(code, reason))
-			backend.on('close', (code, reason) => client.close(code, reason))
-			client.on('error', () => backend.terminate())
-			backend.on('error', () => client.terminate())
-		})
-	})
-}
-
-/** Pipe messages from src to dst with backpressure */
-function pipeWS(src, dst) {
-	src.on('message', (data, isBinary) => {
-		if (dst.readyState !== WebSocket.OPEN) return
-		dst.send(data, { binary: isBinary }, () => {
-			// Resume src once the send has been flushed
-			if (src.isPaused) src.resume()
-		})
-		if (dst.bufferedAmount > WS_HIGH_WATER) src.pause()
-	})
-}
-
-function filterHeaders(headers) {
-	const out = {}
-	for (const [k, v] of Object.entries(headers)) {
-		if (!HOP_BY_HOP.has(k.toLowerCase()))
-			out[k] = Array.isArray(v) ? v.join(', ') : v
-	}
-	return out
 }
 
 function incomingBodyStream(req) {
@@ -206,3 +190,44 @@ function incomingBodyStream(req) {
 		}
 	}
 }
+
+function forwardWS(wss, req, socket, head, target) {
+	const wsUrl = target.replace(/^http/, 'ws') + req.url
+
+	const backend = new WebSocket(wsUrl)
+	backend.on('error', () => socket.destroy())
+
+	backend.on('open', () => {
+		wss.handleUpgrade(req, socket, head, (client) => {
+			pipeWS(client, backend)
+			pipeWS(backend, client)
+			client.on('close', (code, reason) => backend.close(code, reason))
+			backend.on('close', (code, reason) => client.close(code, reason))
+			client.on('error', () => backend.terminate())
+			backend.on('error', () => client.terminate())
+		})
+	})
+}
+
+/** Pipe messages from src to dst with backpressure */
+function pipeWS(src, dst) {
+	src.on('message', (data, isBinary) => {
+		if (dst.readyState !== WebSocket.OPEN) return
+		dst.send(data, { binary: isBinary }, () => {
+			// Resume src once the send has been flushed
+			if (src.isPaused) src.resume()
+		})
+		if (dst.bufferedAmount > WS_HIGH_WATER) src.pause()
+	})
+}
+
+function filterHeaders(headers) {
+	const out = {}
+	for (const [k, v] of Object.entries(headers)) {
+		if (!HOP_BY_HOP.has(k.toLowerCase()))
+			out[k] = Array.isArray(v) ? v.join(', ') : v
+	}
+	return out
+}
+
+

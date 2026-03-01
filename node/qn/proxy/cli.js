@@ -20,11 +20,12 @@
 
 import { createProxy } from 'qn:proxy'
 import { readFileSync, statSync } from 'node:fs'
+import { getUserInfo } from 'qn_vm'
 
 const args = process.argv.slice(2)
 let configPath = null
 let port = 80
-let hostname = '0.0.0.0'
+let hostname = '127.0.0.1'
 
 for (let i = 0; i < args.length; i++) {
 	const arg = args[i]
@@ -84,10 +85,11 @@ console.log(`[proxy] listening on ${addr.address}:${addr.port}`)
 if (process.getuid() === 0) {
 	const user = process.env.PROXY_USER
 	if (user) {
+		const info = getUserInfo(user)
 		process.setgroups([])
-		process.setgid(user)
-		process.setuid(user)
-		console.log(`[proxy] dropped privileges to ${user}`)
+		process.setgid(info.gid)
+		process.setuid(info.uid)
+		console.log(`[proxy] dropped privileges to ${info.username} (uid=${info.uid}, gid=${info.gid})`)
 	} else {
 		console.error('[proxy] WARNING: running as root without PROXY_USER set')
 	}

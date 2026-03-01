@@ -87,7 +87,7 @@ const DEFAULT_MODULES = [
 	"node:repl", "node:string_decoder", "node:tty",
 	"node:v8", "node:vm", "node:wasi", "node:worker_threads", "node:zlib",
 	"qn:crypto", "qn:tls", "qn:introspect", "qn:http", "qn:pty",
-	"qn:version-info", "qn:sucrase", "qn:worker", "qn:cjs", "qn:process", "qn:proxy",
+	"qn:version-info", "qn:sucrase", "qn:worker", "qn:cjs", "qn:process", "qn:proxy", "qn:proxy/cli",
 	"qx", "ws",
 ]
 
