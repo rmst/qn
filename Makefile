@@ -68,7 +68,7 @@ QNC_EMBED_SOURCES := $(shell find node/ qx/ vendor/ws/ -name '*.js' -o -name '*.
 
 # Build vanilla qjs from upstream QuickJS (for bootstrapping qnc.js)
 $(QJS_PROG): $(BIN_DIR)/quickjs/.patched
-	@$(MAKE) -s -C $(BIN_DIR)/quickjs qjs
+	$(MAKE) -C $(BIN_DIR)/quickjs qjs
 
 # Build qnc-engine.so native module (bytecode compilation API for JS)
 QNC_ENGINE_LDFLAGS = -shared
