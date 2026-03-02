@@ -417,6 +417,66 @@ describe('Headers', () => {
 	})
 })
 
+describe('fetch body cleanup', () => {
+	test('body.getReader().cancel() closes the connection', async ({ bin, dir }) => {
+		const { port, close } = await startServer()
+		try {
+			writeFileSync(`${dir}/test.js`, `
+				const res = await fetch('http://127.0.0.1:${port}/get?foo=bar')
+				const reader = res.body.getReader()
+				await reader.cancel()
+				console.log('ok')
+			`)
+			const output = await execAsync(bin, [`${dir}/test.js`])
+			assert.strictEqual(output, 'ok')
+		} finally {
+			close()
+		}
+	})
+
+	test('body.cancel() closes the connection', async ({ bin, dir }) => {
+		const { port, close } = await startServer()
+		try {
+			writeFileSync(`${dir}/test.js`, `
+				const res = await fetch('http://127.0.0.1:${port}/get?foo=bar')
+				await res.body.cancel()
+				console.log('ok')
+			`)
+			const output = await execAsync(bin, [`${dir}/test.js`])
+			assert.strictEqual(output, 'ok')
+		} finally {
+			close()
+		}
+	})
+
+	testQnOnly('unconsumed responses do not leak sockets', async ({ bin, dir }) => {
+		const { port, close } = await startServer()
+		try {
+			writeFileSync(`${dir}/test.js`, `
+				import { readdirSync } from 'node:fs'
+				const countFds = () => {
+					try { return readdirSync('/proc/self/fd').length }
+					catch { return -1 }
+				}
+				const before = countFds()
+				for (let i = 0; i < 50; i++) {
+					const res = await fetch('http://127.0.0.1:${port}/get?i=' + i)
+					// intentionally don't consume body
+				}
+				const after = countFds()
+				// With background body draining, sockets are closed as soon as
+				// the HTTP message is fully received — no fds should leak.
+				const leaked = after - before
+				console.log(leaked <= 10 ? 'ok' : 'leaked:' + leaked)
+			`)
+			const output = await execAsync(bin, [`${dir}/test.js`])
+			assert.strictEqual(output, 'ok')
+		} finally {
+			close()
+		}
+	})
+})
+
 describe('Response', () => {
 	test('Response.json() creates JSON response', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `

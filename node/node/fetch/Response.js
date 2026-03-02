@@ -45,22 +45,36 @@ export class Response {
 		if (this._bodyObj !== undefined) return this._bodyObj
 		const self = this
 		if (this._bodyStream) {
+			let iter = null
+			const queue = this._bodyStream._pipe || null
 			this._bodyObj = {
 				[Symbol.asyncIterator]() {
 					if (self._bodyUsed) throw new TypeError('Body has already been consumed')
 					self._bodyUsed = true
-					return self._bodyStream[Symbol.asyncIterator]()
+					iter = self._bodyStream[Symbol.asyncIterator]()
+					return iter
 				},
 				getReader() {
-					const iter = this[Symbol.asyncIterator]()
+					const it = iter ?? this[Symbol.asyncIterator]()
 					return {
 						async read() {
-							const { value, done } = await iter.next()
+							const { value, done } = await it.next()
 							return { value: done ? undefined : value, done }
 						},
 						releaseLock() {},
-						cancel() {},
+						async cancel() {
+							if (queue) queue.abort()
+							else await it.return?.()
+						},
 					}
+				},
+				async cancel() {
+					if (queue) { queue.abort(); return }
+					if (iter) { await iter.return?.(); return }
+					if (self._bodyUsed) return
+					self._bodyUsed = true
+					const it = self._bodyStream[Symbol.asyncIterator]()
+					await it.return?.()
 				},
 			}
 		} else if (this._body) {
@@ -78,9 +92,10 @@ export class Response {
 							return { value: done ? undefined : value, done }
 						},
 						releaseLock() {},
-						cancel() {},
+						async cancel() { await iter.return?.() },
 					}
 				},
+				cancel() {},
 			}
 		} else {
 			this._bodyObj = null

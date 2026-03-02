@@ -23,6 +23,154 @@ import {
 
 export { Headers, Request, Response }
 
+/**
+ * Async queue with backpressure that decouples socket reads from body
+ * consumption.
+ *
+ * A background task reads from the socket (via bodyStream) and pushes
+ * chunks into a bounded buffer. When the buffer is full, reading pauses
+ * until the consumer pulls. This gives us:
+ *
+ * - Deterministic socket cleanup: the drain task runs to completion
+ *   when the server finishes sending, closing the socket in the
+ *   bodyStream finally block. No GC dependency.
+ * - Backpressure: buffer is capped at HIGH_WATER bytes. When full,
+ *   the drain pauses (stops reading from the socket) until the
+ *   consumer pulls enough data below LOW_WATER.
+ * - Cancellation: abort() stops the drain and closes the socket.
+ * - Streaming: data flows through chunk-by-chunk for large responses.
+ */
+const HIGH_WATER = 64 * 1024
+const LOW_WATER = 16 * 1024
+const BODY_TIMEOUT = 300_000  // 5 minutes — abort abandoned streams
+
+class BodyQueue {
+	constructor() {
+		this._chunks = []
+		this._size = 0
+		this._pullWait = null   // consumer waiting for data
+		this._drainWait = null  // producer waiting for buffer space
+		this._done = false
+		this._error = null
+		this._aborted = false
+		this._timeout = null
+	}
+
+	push(chunk) {
+		if (this._aborted) return false
+		if (this._pullWait) {
+			// Consumer is waiting — deliver directly, no buffering
+			const resolve = this._pullWait
+			this._pullWait = null
+			resolve(chunk)
+			return true
+		}
+		this._chunks.push(chunk)
+		this._size += chunk.byteLength
+		return this._size < HIGH_WATER
+	}
+
+	waitForDrain() {
+		// Start body timeout — if nobody pulls within BODY_TIMEOUT,
+		// the response was abandoned. Abort to free the socket.
+		this._timeout = setTimeout(() => this.abort(), BODY_TIMEOUT)
+		return new Promise(r => { this._drainWait = r })
+	}
+
+	_clearTimeout() {
+		if (this._timeout) {
+			clearTimeout(this._timeout)
+			this._timeout = null
+		}
+	}
+
+	end(error) {
+		this._done = true
+		this._error = error || null
+		this._clearTimeout()
+		if (this._pullWait) {
+			const resolve = this._pullWait
+			this._pullWait = null
+			resolve(null)
+		}
+	}
+
+	pull() {
+		if (this._chunks.length > 0) {
+			const chunk = this._chunks.shift()
+			this._size -= chunk.byteLength
+			// Resume drain if buffer dropped below low water
+			if (this._drainWait && this._size < LOW_WATER) {
+				this._clearTimeout()
+				const resolve = this._drainWait
+				this._drainWait = null
+				resolve()
+			}
+			return Promise.resolve(chunk)
+		}
+		if (this._done) {
+			if (this._error) return Promise.reject(this._error)
+			return Promise.resolve(null)
+		}
+		return new Promise(r => { this._pullWait = r })
+	}
+
+	abort() {
+		this._aborted = true
+		this._done = true
+		this._clearTimeout()
+		// Unblock drain so it can exit
+		if (this._drainWait) {
+			const resolve = this._drainWait
+			this._drainWait = null
+			resolve()
+		}
+		// Unblock consumer
+		if (this._pullWait) {
+			const resolve = this._pullWait
+			this._pullWait = null
+			resolve(null)
+		}
+	}
+}
+
+/**
+ * Start a background drain that reads from bodyStream into a
+ * backpressure-controlled BodyQueue. Returns an async generator
+ * that the Response body reads from.
+ */
+function pipedBody(reader, leftover, contentLength, isChunked) {
+	const queue = new BodyQueue()
+
+	// Background drain — reads the socket, pushes to queue
+	;(async () => {
+		try {
+			const stream = bodyStream(reader, leftover, contentLength, isChunked)
+			for await (const chunk of stream) {
+				if (queue._aborted) break
+				const ok = queue.push(chunk)
+				if (!ok && !queue._aborted) {
+					await queue.waitForDrain()
+				}
+			}
+			queue.end()
+		} catch (e) {
+			queue.end(e)
+		}
+	})()
+
+	const body = async function* () {
+		for (;;) {
+			const chunk = await queue.pull()
+			if (chunk === null) return
+			yield chunk
+		}
+	}()
+
+	body._pipe = queue
+	return body
+}
+
 const SYSTEM_CA_PATHS = [
 	'/etc/ssl/certs/ca-certificates.crt',
 	'/etc/pki/tls/certs/ca-bundle.crt',
@@ -394,8 +542,8 @@ export async function fetch(input, init = {}) {
 			const contentLength = cl !== null ? parseInt(cl, 10) : null
 			if (isChunked) head.headers.delete('transfer-encoding')
 
-			const body = bodyStream(reader, head.leftover, contentLength, isChunked)
-			reader = null
+			const body = pipedBody(reader, head.leftover, contentLength, isChunked)
+			reader = null  // pipedBody owns the reader now
 
 			return new Response(body, {
 				status: head.status,
