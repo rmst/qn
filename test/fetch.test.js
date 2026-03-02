@@ -449,6 +449,32 @@ describe('fetch body cleanup', () => {
 		}
 	})
 
+	testQnOnly('connection pooling reuses TCP connections', async ({ bin, dir }) => {
+		// Use a keep-alive server that counts unique connections
+		writeFileSync(`${dir}/test.js`, `
+			import { createServer } from 'node:http'
+			let connCount = 0
+			const server = createServer((req, res) => {
+				res.writeHead(200, { 'Content-Type': 'text/plain' })
+				res.end('ok')
+			})
+			server.on('connection', () => { connCount++ })
+			server.listen(0, '127.0.0.1', async () => {
+				const port = server.address().port
+				const N = 10
+				for (let i = 0; i < N; i++) {
+					const res = await fetch('http://127.0.0.1:' + port + '/get?i=' + i)
+					await res.text()
+				}
+				// With connection pooling, all requests should reuse 1 connection
+				console.log(connCount <= 2 ? 'ok' : 'connections:' + connCount)
+				server.close()
+			})
+		`)
+		const output = await execAsync(bin, [`${dir}/test.js`])
+		assert.strictEqual(output, 'ok')
+	})
+
 	testQnOnly('unconsumed responses do not leak sockets', async ({ bin, dir }) => {
 		const { port, close } = await startServer()
 		try {

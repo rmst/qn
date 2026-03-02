@@ -60,7 +60,7 @@ class BodyQueue {
 		if (this._aborted) return false
 		if (this._pullWait) {
 			// Consumer is waiting — deliver directly, no buffering
-			const resolve = this._pullWait
+			const { resolve } = this._pullWait
 			this._pullWait = null
 			resolve(chunk)
 			return true
@@ -89,9 +89,10 @@ class BodyQueue {
 		this._error = error || null
 		this._clearTimeout()
 		if (this._pullWait) {
-			const resolve = this._pullWait
+			const { resolve, reject } = this._pullWait
 			this._pullWait = null
-			resolve(null)
+			if (this._error) reject(this._error)
+			else resolve(null)
 		}
 	}
 
@@ -112,7 +113,7 @@ class BodyQueue {
 			if (this._error) return Promise.reject(this._error)
 			return Promise.resolve(null)
 		}
-		return new Promise(r => { this._pullWait = r })
+		return new Promise((resolve, reject) => { this._pullWait = { resolve, reject } })
 	}
 
 	abort() {
@@ -127,7 +128,7 @@ class BodyQueue {
 		}
 		// Unblock consumer
 		if (this._pullWait) {
-			const resolve = this._pullWait
+			const { resolve } = this._pullWait
 			this._pullWait = null
 			resolve(null)
 		}
@@ -138,25 +139,32 @@ class BodyQueue {
  * Start a background drain that reads from bodyStream into a
  * backpressure-controlled BodyQueue. Returns an async generator
  * that the Response body reads from.
+ *
+ * onComplete(drained) is called when the drain finishes:
+ *   drained=true  → body fully read, connection can be reused
+ *   drained=false → error or abort, connection should be destroyed
  */
-function pipedBody(reader, leftover, contentLength, isChunked) {
+function pipedBody(reader, leftover, contentLength, isChunked, onComplete) {
 	const queue = new BodyQueue()
 
 	// Background drain — reads the socket, pushes to queue
 	;(async () => {
+		let drained = false
 		try {
 			const stream = bodyStream(reader, leftover, contentLength, isChunked)
 			for await (const chunk of stream) {
 				if (queue._aborted) break
-				const ok = queue.push(chunk)
-				if (!ok && !queue._aborted) {
+				const below = queue.push(chunk)
+				if (!below && !queue._aborted) {
 					await queue.waitForDrain()
 				}
 			}
+			drained = !queue._aborted
 			queue.end()
 		} catch (e) {
 			queue.end(e)
 		}
+		if (onComplete) onComplete(drained)
 	})()
 
 	const body = async function* () {
@@ -204,9 +212,55 @@ function ensureCACerts() {
 }
 
 const MAX_REDIRECTS = 20
+const POOL_IDLE_TIMEOUT = 30_000  // close idle connections after 30s
+const MAX_CONNS_PER_ORIGIN = 6    // match browser limits
 
 function isRedirectStatus(status) {
 	return [301, 302, 303, 307, 308].includes(status)
+}
+
+/**
+ * Connection pool — reuses TCP connections for the same origin.
+ * Each idle entry holds a connection object that can send new requests
+ * without a fresh TCP handshake (or TLS handshake for HTTPS).
+ */
+const _pool = new Map()  // origin → [{conn, timer}]
+
+function poolKey(protocol, host, port) {
+	return `${protocol}//${host}:${port}`
+}
+
+function poolGet(key) {
+	const entries = _pool.get(key)
+	if (!entries) return null
+	while (entries.length > 0) {
+		const entry = entries.pop()
+		clearTimeout(entry.timer)
+		if (entries.length === 0) _pool.delete(key)
+		return entry.conn
+	}
+	_pool.delete(key)
+	return null
+}
+
+function poolPut(key, conn) {
+	let entries = _pool.get(key)
+	if (!entries) {
+		entries = []
+		_pool.set(key, entries)
+	}
+	if (entries.length >= MAX_CONNS_PER_ORIGIN) {
+		conn.destroy()
+		return
+	}
+	const timer = setTimeout(() => {
+		const idx = entries.findIndex(e => e.conn === conn)
+		if (idx !== -1) entries.splice(idx, 1)
+		if (entries.length === 0) _pool.delete(key)
+		conn.destroy()
+	}, POOL_IDLE_TIMEOUT)
+	if (timer.unref) timer.unref()  // don't keep event loop alive for idle connections
+	entries.push({ conn, timer })
 }
 
 /**
@@ -329,73 +383,102 @@ function buildRequest(method, path, host, port, headers, isDefaultPort) {
 }
 
 /**
- * Send an HTTP request over an established TCP stream and return
- * a reader { read(buf, off, len), close() } for the response.
- * Handles TLS handshake if isHttps.
+ * Create a reusable connection object for an origin.
+ * Returns { send(reqBytes, bodyBytes, bodyIter, signal) → reader, destroy() }
  */
-async function sendRequest(handle, host, isHttps, reqBytes, bodyBytes, bodyIter, signal) {
+async function createConnection(handle, host, isHttps, signal) {
 	const transport = isHttps ? tls.streamTransport(handle) : plainTransport(handle)
+	let tlsConn = null
 
 	if (isHttps) {
 		ensureCACerts()
-		const conn = tls.connect(host)
+		tlsConn = tls.connect(host)
 		try {
-			await tls.handshake(conn, transport, signal)
-			await tls.writeAll(conn, transport, reqBytes, signal)
-			if (bodyBytes) await tls.writeAll(conn, transport, bodyBytes, signal)
-			else if (bodyIter) await writeChunkedBody(data => tls.writeAll(conn, transport, data, signal), bodyIter)
+			await tls.handshake(tlsConn, transport, signal)
 		} catch (e) {
-			try { await tls.close(conn, transport) } catch {}
+			try { await tls.close(tlsConn, transport) } catch {}
 			try { _streamClose(handle) } catch {}
 			throw e
 		}
-		let closed = false
-		return {
-			read(buf, off, len) {
-				return tls.read(conn, transport, buf, off, len, signal)
-			},
-			async close() {
-				if (closed) return
-				closed = true
-				try { await tls.close(conn, transport) } catch {}
-				try { _streamClose(handle) } catch {}
-			},
-		}
 	}
 
-	/* Plain HTTP */
-	try {
-		await transport.write(reqBytes, { signal })
-		if (bodyBytes) await transport.write(bodyBytes, { signal })
-		else if (bodyIter) await writeChunkedBody(data => transport.write(data, { signal }), bodyIter)
-	} catch (e) {
-		_streamClose(handle)
-		throw e
-	}
-	let closed = false
-	let leftover = null
+	let destroyed = false
+	// Leftover bytes from a previous read that belong to the next
+	// HTTP message on this connection (plain HTTP only).
+	let connLeftover = null
+
 	return {
-		async read(buf, off, len) {
-			/* Convert chunk-based transport.read() to positional read(buf, off, len) */
-			let chunk = leftover
-			leftover = null
-			if (!chunk) {
-				chunk = await transport.read({ signal })
-				if (!chunk) return 0
+		async send(reqBytes, bodyBytes, bodyIter, signal) {
+			if (tlsConn) {
+				try {
+					await tls.writeAll(tlsConn, transport, reqBytes, signal)
+					if (bodyBytes) await tls.writeAll(tlsConn, transport, bodyBytes, signal)
+					else if (bodyIter) await writeChunkedBody(data => tls.writeAll(tlsConn, transport, data, signal), bodyIter)
+				} catch (e) {
+					this.destroy()
+					throw e
+				}
+				return {
+					read(buf, off, len) {
+						return tls.read(tlsConn, transport, buf, off, len, signal)
+					},
+					close() {}, // no-op — connection lifecycle managed by pool
+				}
 			}
-			const n = Math.min(chunk.byteLength, len)
-			new Uint8Array(buf, off, n).set(chunk.subarray(0, n))
-			if (n < chunk.byteLength) leftover = chunk.subarray(n)
-			return n
+
+			/* Plain HTTP */
+			try {
+				await transport.write(reqBytes, { signal })
+				if (bodyBytes) await transport.write(bodyBytes, { signal })
+				else if (bodyIter) await writeChunkedBody(data => transport.write(data, { signal }), bodyIter)
+			} catch (e) {
+				this.destroy()
+				throw e
+			}
+			return {
+				async read(buf, off, len) {
+					let chunk = connLeftover
+					connLeftover = null
+					if (!chunk) {
+						chunk = await transport.read({ signal })
+						if (!chunk) return 0
+					}
+					const n = Math.min(chunk.byteLength, len)
+					new Uint8Array(buf, off, n).set(chunk.subarray(0, n))
+					if (n < chunk.byteLength) connLeftover = chunk.subarray(n)
+					return n
+				},
+				close() {}, // no-op — connection lifecycle managed by pool
+			}
 		},
-		close() {
-			if (closed) return
-			closed = true
-			_streamClose(handle)
+
+		destroy() {
+			if (destroyed) return
+			destroyed = true
+			if (tlsConn) {
+				try { tls.close(tlsConn, transport) } catch {}
+			}
+			try { _streamClose(handle) } catch {}
 		},
 	}
 }
 
+
+async function newConnection(host, port, isHttps, signal) {
+	let handle
+	try {
+		handle = await tcpConnect(host, port, signal)
+	} catch (e) {
+		if (signal?.aborted) throw signal.reason
+		throw new TypeError(`fetch failed: ${e.message}`)
+	}
+	try {
+		return await createConnection(handle, host, isHttps, signal)
+	} catch (e) {
+		if (signal?.aborted) throw signal.reason
+		throw e instanceof TypeError ? e : new TypeError(`fetch failed: ${e.message}`)
+	}
+}
 
 /**
  * Fetch a resource from the network
@@ -477,38 +560,70 @@ export async function fetch(input, init = {}) {
 		const port = url.port ? parseInt(url.port, 10) : defaultPort
 		const path = (url.pathname || '/') + (url.search || '')
 		const isDefaultPort = port === defaultPort
-
-		let handle
-		try {
-			handle = await tcpConnect(host, port, signal)
-		} catch (e) {
-			if (signal?.aborted) throw signal.reason
-			throw new TypeError(`fetch failed: ${e.message}`)
-		}
+		const key = poolKey(url.protocol, host, port)
 
 		const reqStr = buildRequest(method, path, host, port, headers, isDefaultPort)
 		const reqBytes = new TextEncoder().encode(reqStr)
 
+		// Try to reuse a pooled connection, fall back to new one.
+		// If a pooled connection is stale, retry with a fresh one.
+		let conn = poolGet(key)
+		let fromPool = !!conn
+		if (!conn) {
+			conn = await newConnection(host, port, isHttps, signal)
+		}
+
 		let reader
 		try {
-			reader = await sendRequest(handle, host, isHttps, reqBytes, bodyBytes, bodyIter, signal)
+			reader = await conn.send(reqBytes, bodyBytes, bodyIter, signal)
 		} catch (e) {
-			if (signal?.aborted) throw signal.reason
-			throw e instanceof TypeError ? e : new TypeError(`fetch failed: ${e.message}`)
+			if (fromPool && !signal?.aborted) {
+				// Pooled connection was stale — retry with fresh connection
+				conn = await newConnection(host, port, isHttps, signal)
+				reader = await conn.send(reqBytes, bodyBytes, bodyIter, signal)
+			} else {
+				conn.destroy()
+				if (signal?.aborted) throw signal.reason
+				throw e instanceof TypeError ? e : new TypeError(`fetch failed: ${e.message}`)
+			}
 		}
 
 		try {
-			const head = await readResponseHead(reader, 64 * 1024)
-			if (!head) throw new TypeError('fetch failed: invalid HTTP response')
+			let head = await readResponseHead(reader, 64 * 1024)
+			if (!head && fromPool) {
+				// Pooled connection died — retry with a fresh one
+				conn.destroy()
+				conn = await newConnection(host, port, isHttps, signal)
+				fromPool = false
+				reader = await conn.send(reqBytes, bodyBytes, bodyIter, signal)
+				head = await readResponseHead(reader, 64 * 1024)
+			}
+			if (!head) {
+				conn.destroy()
+				throw new TypeError('fetch failed: invalid HTTP response')
+			}
+
+			// Determine if connection can be reused:
+			// - Server must not send Connection: close
+			// - Response must be framed (content-length or chunked),
+			//   not read-until-close, which consumes the TCP stream
+			const connHeader = (head.headers.get('connection') || '').toLowerCase()
+			const te = head.headers.get('transfer-encoding')
+			const cl = head.headers.get('content-length')
+			const isChunked = te && te.toLowerCase().includes('chunked')
+			const contentLength = cl !== null ? parseInt(cl, 10) : null
+			const isFramed = isChunked || contentLength !== null
+			const keepAlive = connHeader !== 'close' && isFramed
 
 			if (isRedirectStatus(head.status)) {
-				await reader.close()
 				reader = null
-
+				// Check for redirect errors before pooling
 				if (redirectMode === 'error') {
+					conn.destroy()
 					throw new TypeError('fetch failed: redirect encountered')
 				}
 				if (redirectMode === 'manual') {
+					conn.destroy()
 					return new Response(null, {
 						status: head.status,
 						statusText: head.statusText,
@@ -519,12 +634,24 @@ export async function fetch(input, init = {}) {
 				}
 				redirectCount++
 				if (redirectCount > MAX_REDIRECTS) {
+					conn.destroy()
 					throw new TypeError('fetch failed: too many redirects')
 				}
 				const location = head.headers.get('location')
 				if (!location) {
+					conn.destroy()
 					throw new TypeError('fetch failed: redirect without Location header')
 				}
+
+				// Drain redirect body and pool (or destroy) the connection
+				if (keepAlive) {
+					const stream = bodyStream(reader, head.leftover, contentLength, isChunked)
+					for await (const _ of stream) {}
+					poolPut(key, conn)
+				} else {
+					conn.destroy()
+				}
+
 				const prevOrigin = url.origin
 				url = new URL(location, url)
 				if (url.origin !== prevOrigin) {
@@ -536,13 +663,14 @@ export async function fetch(input, init = {}) {
 				continue
 			}
 
-			const te = head.headers.get('transfer-encoding')
-			const cl = head.headers.get('content-length')
-			const isChunked = te && te.toLowerCase().includes('chunked')
-			const contentLength = cl !== null ? parseInt(cl, 10) : null
 			if (isChunked) head.headers.delete('transfer-encoding')
 
-			const body = pipedBody(reader, head.leftover, contentLength, isChunked)
+			const onComplete = (drained) => {
+				if (drained && keepAlive) poolPut(key, conn)
+				else conn.destroy()
+			}
+
+			const body = pipedBody(reader, head.leftover, contentLength, isChunked, onComplete)
 			reader = null  // pipedBody owns the reader now
 
 			return new Response(body, {
@@ -553,12 +681,9 @@ export async function fetch(input, init = {}) {
 				redirected,
 			})
 		} catch (e) {
+			conn.destroy()
 			if (signal?.aborted) throw signal.reason
 			throw e instanceof TypeError ? e : new TypeError(`fetch failed: ${e.message}`)
-		} finally {
-			if (reader) {
-				try { await reader.close() } catch {}
-			}
 		}
 	}
 }
