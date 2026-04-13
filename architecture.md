@@ -8,7 +8,7 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 
 **Bootstrap and REPL** (`node/bootstrap.js`, `node/node-globals.js`, `node/repl.js`) — ~1.9K LOC JS. Startup, global setup, interactive shell.
 
-**qn modules** (`node/qn/`) — ~0.5K LOC JS + crypto native module. Higher-level APIs: crypto primitives (`qn:crypto`, BearSSL-backed), async TLS I/O (`qn:tls`), HTTP server (`qn:http`), reverse proxy (`qn:proxy`), pseudo-terminal (`qn:pty`), TypeScript transform (`qn:sucrase`), libuv JS wrappers.
+**qn modules** (`node/qn/`) — ~0.5K LOC JS + crypto native module. Higher-level APIs: crypto primitives (`qn:crypto`, BearSSL-backed), async TLS I/O (`qn:tls`), HTTP server (`qn:http`), reverse proxy (`qn:proxy`), pseudo-terminal (`qn:pty`), TypeScript transform (`qn:sucrase`), package installer (`qn install`), libuv JS wrappers.
 
 **qx** (`qx/`) — ~1K LOC JS. Shell scripting with `$` function (similar to zx).
 
