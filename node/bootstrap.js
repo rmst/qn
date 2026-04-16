@@ -222,10 +222,13 @@ if (scriptArgs[1] === '--version' || scriptArgs[1] === '-V') {
 	std.exit(0)
 }
 
-// Handle install subcommand
+// Handle subcommands
 if (scriptArgs[1] === 'install') {
-	const { cli } = await import("./qn/install.js")
+	const { cli } = await import("qn:install")
 	cli(scriptArgs.slice(2))
+} else if (scriptArgs[1] === 'run') {
+	const { cli } = await import("qn:run")
+	await cli(scriptArgs.slice(2))
 } else if (scriptArgs[1] === '-e' || scriptArgs[1] === '--eval') {
 	if (scriptArgs.length < 3) {
 		std.err.puts('Error: -e requires an argument\n')
