@@ -64,10 +64,16 @@ function isClassModifierType(type) {
  */
 export function stripTypeScriptTypes(code, options) {
 	const mode = options?.mode ?? "strip"
+	const { tokens } = parse(code, false, true, false)
+	// Neither strip nor Sucrase's transform can faithfully emit a TS value
+	// namespace (strip blanks it, transform drops it). Reject before either
+	// path runs so callers get a clear error instead of code that fails at
+	// runtime with a mysterious "X is not defined".
+	requireNoValueNamespace(tokens)
 	if (mode === "transform") {
 		return transform(code, { transforms: ["typescript"], disableESTransforms: true }).code
 	}
-	const blanked = blankTypeScriptTypes(code)
+	const blanked = blankTypeScriptTypes(code, tokens)
 	// Blanking can silently produce invalid JS when newlines inside a type region
 	// violate a no-LineTerminator restriction in the surrounding JS — most notably
 	// a multi-line return type on an arrow function, where the LineTerminator
@@ -86,14 +92,30 @@ export function stripTypeScriptTypes(code, options) {
 }
 
 /**
+ * Reject value namespaces. `declare namespace` is type-only per TS spec and
+ * safely erasable; anything else may emit runtime values that we cannot preserve.
+ */
+function requireNoValueNamespace(tokens) {
+	for (let i = 0; i < tokens.length; i++) {
+		const t = tokens[i]
+		if (t.contextualKeyword !== CK_NAMESPACE) continue
+		let j = i - 1
+		while (j >= 0 && tokens[j].start === tokens[j].end) j--
+		if (j < 0 || tokens[j].type !== TT_DECLARE) {
+			throw new SyntaxError(
+				"TypeScript namespace with runtime values is not supported. " +
+				"Use `declare namespace` for type-only declarations or ES modules.",
+			)
+		}
+	}
+}
+
+/**
  * Replace TypeScript type-only syntax with whitespace, preserving source positions.
  * Uses Sucrase's parser to identify type regions via the isType token flag, then blanks
  * them in the original source (similar to Bloomberg's ts-blank-space approach).
  */
-function blankTypeScriptTypes(code) {
-	const file = parse(code, false, true, false)
-	const tokens = file.tokens
-
+function blankTypeScriptTypes(code, tokens) {
 	// Collect ranges to blank: [start, end, start, end, ...]
 	const ranges = []
 
@@ -104,9 +126,6 @@ function blankTypeScriptTypes(code) {
 		// Reject constructs that require runtime code generation
 		if (t.type === TT_ENUM) {
 			throw new SyntaxError("TypeScript enum is not supported in strip-only mode")
-		}
-		if (t.contextualKeyword === CK_NAMESPACE && !t.isType) {
-			throw new SyntaxError("TypeScript namespace is not supported in strip-only mode")
 		}
 
 		// Non-null assertion `x!`: Sucrase retypes the `!` token to

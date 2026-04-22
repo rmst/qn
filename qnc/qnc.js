@@ -351,6 +351,24 @@ function stripTypeScript(source, filename) {
 	if (!filename.endsWith(".ts")) return source
 	if (!sucraseTransform) return source // TS not available, pass through
 
+	// Reject value namespaces before either mode runs — neither strip nor
+	// transform can faithfully emit them, so we throw with a clear error
+	// instead of producing code that fails at runtime.
+	const TT_DECLARE = 103952, CK_NAMESPACE = 23
+	const detectTokens = sucraseParse(source, false, true, false).tokens
+	for (let i = 0; i < detectTokens.length; i++) {
+		const t = detectTokens[i]
+		if (t.contextualKeyword !== CK_NAMESPACE) continue
+		let j = i - 1
+		while (j >= 0 && detectTokens[j].start === detectTokens[j].end) j--
+		if (j < 0 || detectTokens[j].type !== TT_DECLARE) {
+			throw new SyntaxError(
+				"TypeScript namespace with runtime values is not supported. " +
+				"Use `declare namespace` for type-only declarations or ES modules."
+			)
+		}
+	}
+
 	// Try strip mode first (preserves source positions). Blanking can silently
 	// produce invalid JS when newlines inside a type region violate a
 	// no-LineTerminator restriction (e.g. multi-line arrow return type —
