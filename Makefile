@@ -175,29 +175,19 @@ install: $(QN_PROG) $(QX_PROG) $(QNC_PROG)
 	install -m755 $(QX_PROG) "$(DESTDIR)$(PREFIX)/bin"
 	install -m755 $(QNC_PROG) "$(DESTDIR)$(PREFIX)/bin"
 
-# Test target
-test:
-	jix run -f test
-
-test2:
-	jix run -f test containerized
-
-
 # Help target
 help:
 	@echo "Qn Makefile targets:"
 	@echo "  all         - Build qn, qx, and qnc executables"
 	@echo "  build       - Build QuickJS dependencies and all programs"
-	@echo "  test        - Build and run tests"
 	@echo "  clean       - Clean build artifacts"
 	@echo "  clean-all   - Clean everything including QuickJS"
 	@echo "  install     - Install all programs to \$$(PREFIX)/bin"
 	@echo ""
 	@echo "Usage examples:"
 	@echo "  make build"
-	@echo "  make test"
 	@echo "  ./bin/qn script.js     # Node.js-compatible runtime"
 	@echo "  ./bin/qx script.js     # zx-compatible shell scripting"
 	@echo "  NODE_PATH=./my_modules ./bin/qnc -o app.c app.js"
 
-.PHONY: all build clean clean-all install help quickjs-deps convenience-links test
+.PHONY: all build clean clean-all install help quickjs-deps convenience-links

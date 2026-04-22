@@ -9,3 +9,8 @@ Thumbs.db
 
 # Private developer dir (separate local-only repo with tests etc.)
 /dev/
+
+# Symlinks created by dev/Makefile (pointing into dev/)
+/AGENTS.md
+/CLAUDE.md
+/__jix__.js

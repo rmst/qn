@@ -8,7 +8,7 @@ Features:
 2. **Node.js compatibility** — `node:fs`, `node:net`, `node:dgram`, `node:http`, `node:child_process`, `node:stream`, `node:crypto`, `node:path`, `node:events`, `node:url`, `node:os`, `node:buffer`, `node:assert`, `node:test`, `node:sqlite`, `node:module`
 2. **WebSocket support** — `ws` (client + server, RFC 6455) vendored and importable as `"ws"`
 3. **TypeScript support** — `.ts` files run directly (`qn script.ts`), with source-position-preserving type stripping (falls back to full transform for enums/namespaces). Extension probing resolves `./foo` to `./foo.ts` when no `.js` exists.
-4. **Module resolution** with two modes (see [docs](module_resolution/Readme.md), [tests](test/module-resolution/)):
+4. **Module resolution** with two modes (see [docs](module_resolution/Readme.md)):
    - **Bundler mode** (default): `NODE_PATH` for bare imports, `node_modules` walking, `.js` and `/index.js` fallbacks
    - **Node mode** (`QJSX_MODULE_RESOLUTION=node`): matches Node.js ESM exactly
 5. `import.meta.dirname` and `import.meta.filename`
@@ -47,11 +47,6 @@ NODE_PATH=./my_modules:./lib ./bin/qn script.js
 ```
 
 `NODE_PATH` enables bare module imports (e.g., `import foo from "foo"`) by specifying search directories. Standard `node_modules` walking with `package.json` resolution is also supported.
-
-**Run tests**
-```bash
-./bin/qn --test test/
-```
 
 **Shell scripting (qx)**
 ```bash
