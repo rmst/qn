@@ -156,7 +156,9 @@ CommonJS modules are partially supported. ESM files can import `.cjs` files and 
 | `createReadStream` | ✅ | `start`/`end` options |
 | `createWriteStream` | ✅ | `flags` ('a' for append), `mode` |
 | `Dirent` / `constants` | ✅ | |
-| `watch` / `watchFile` | ❌ | |
+| `watch` | ✅ | Returns `FSWatcher` (EventEmitter). Options: `persistent`, `recursive`, `encoding`, `signal`. On Linux, `recursive` is emulated via one `uv_fs_event_t` per subdirectory (same as Node). |
+| `watchFile` / `unwatchFile` | ❌ | |
+| `FSWatcher` | ✅ | `.close()`, `.ref()`, `.unref()`, events: `'change'`, `'error'`, `'close'`. |
 | `readSync` / `writeSync` (public) | ❌ | Internal only |
 | `opendir` | ❌ | |
 

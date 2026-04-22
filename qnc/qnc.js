@@ -1119,7 +1119,7 @@ function buildExecutable(outFile, cfile, nativeModules, extraLinkFiles,
 		"libuv/qn-vm.c", "libuv/qn-worker.c", "libuv/qn-uv-utils.c",
 		"libuv/qn-uv-fs.c", "libuv/qn-uv-stream.c", "libuv/qn-uv-dgram.c",
 		"libuv/qn-uv-process.c", "libuv/qn-uv-dns.c", "libuv/qn-uv-signals.c",
-		"libuv/qn-uv-pty.c",
+		"libuv/qn-uv-pty.c", "libuv/qn-uv-fs-event.c",
 	]
 	const uvIncDir = srcDir + "/vendor/libuv/include"
 	for (let i = 0; i < embeddedNativeSrcs.length; i++) {
