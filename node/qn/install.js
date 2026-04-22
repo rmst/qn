@@ -134,22 +134,35 @@ function installPackage(name, srcDir, nodeModulesDir) {
 }
 
 /**
- * Run the prepare script if present in the installed package.
- * @param {string} pkgDir - installed package directory
+ * Run a lifecycle script if present in the package.
+ * @param {string} pkgDir - package directory
+ * @param {string} name - script name (e.g. "prepare", "postinstall")
+ * @param {object} [opts]
+ * @param {object} [opts.pkg] - pre-parsed package.json
+ * @param {string} [opts.binDir] - node_modules/.bin dir to prepend to PATH
  */
-function runPrepare(pkgDir) {
-	let pkgJsonPath = join(pkgDir, "package.json")
-	if (!existsSync(pkgJsonPath)) return
+function runScript(pkgDir, name, opts = {}) {
+	let pkg = opts.pkg
+	if (!pkg) {
+		let pkgJsonPath = join(pkgDir, "package.json")
+		if (!existsSync(pkgJsonPath)) return
+		pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8"))
+	}
+	let script = pkg.scripts?.[name]
+	if (!script) return
 
-	let pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8"))
-	let prepare = pkg.scripts?.prepare
-	if (!prepare) return
+	let env = { ...process.env }
+	if (opts.binDir) {
+		env.PATH = opts.binDir + ":" + (env.PATH || "")
+	}
+	env.npm_package_name = pkg.name || ""
+	env.npm_lifecycle_event = name
 
-	console.log(`  running prepare script...`)
+	console.log(`  running ${name} script...`)
 	try {
-		execFileSync("sh", ["-c", prepare], { cwd: pkgDir, timeout: 60000 })
+		execFileSync("sh", ["-c", script], { cwd: pkgDir, env, stdio: "inherit" })
 	} catch (e) {
-		console.error(`  prepare script failed: ${e.message}`)
+		console.error(`  ${name} script failed: ${e.message}`)
 		throw e
 	}
 }
@@ -182,59 +195,66 @@ export function install(projectDir, options = {}) {
 		Object.assign(deps, pkg.devDependencies)
 	}
 
-	let names = Object.keys(deps)
-	if (names.length === 0) {
-		console.log("No dependencies to install.")
-		return
-	}
-
 	let nodeModulesDir = join(projectDir, "node_modules")
-	mkdirSync(nodeModulesDir, { recursive: true })
+	let binDir = join(nodeModulesDir, ".bin")
 
-	let cacheDir = getCacheDir()
-	mkdirSync(cacheDir, { recursive: true })
+	runScript(projectDir, "preinstall", { pkg, binDir })
 
+	let names = Object.keys(deps)
 	let unsupported = []
 
-	for (let name of names) {
-		let spec = parseSpec(name, deps[name])
-		let srcDir
+	if (names.length === 0) {
+		console.log("No dependencies to install.")
+	} else {
+		mkdirSync(nodeModulesDir, { recursive: true })
 
-		switch (spec.type) {
-			case "file":
-				srcDir = resolveFile(spec.value, projectDir)
-				if (!existsSync(srcDir)) {
-					console.error(`  file path not found: ${srcDir}`)
-					process.exit(1)
-				}
-				console.log(`${name} <- ${spec.value}`)
-				break
+		let cacheDir = getCacheDir()
+		mkdirSync(cacheDir, { recursive: true })
 
-			case "github":
-				console.log(`${name} <- github:${spec.value}`)
-				srcDir = resolveGithub(spec.value, cacheDir)
-				break
+		for (let name of names) {
+			let spec = parseSpec(name, deps[name])
+			let srcDir
 
-			case "git":
-				console.log(`${name} <- ${spec.value}`)
-				srcDir = gitClone(spec.value, cacheDir)
-				break
+			switch (spec.type) {
+				case "file":
+					srcDir = resolveFile(spec.value, projectDir)
+					if (!existsSync(srcDir)) {
+						console.error(`  file path not found: ${srcDir}`)
+						process.exit(1)
+					}
+					console.log(`${name} <- ${spec.value}`)
+					break
 
-			case "npm":
-				unsupported.push(name)
-				continue
-		}
+				case "github":
+					console.log(`${name} <- github:${spec.value}`)
+					srcDir = resolveGithub(spec.value, cacheDir)
+					break
 
-		installPackage(name, srcDir, nodeModulesDir)
-		// Only run prepare for git-sourced packages (they may need a build step)
-		if (spec.type === "github" || spec.type === "git") {
-			runPrepare(join(nodeModulesDir, name))
+				case "git":
+					console.log(`${name} <- ${spec.value}`)
+					srcDir = gitClone(spec.value, cacheDir)
+					break
+
+				case "npm":
+					unsupported.push(name)
+					continue
+			}
+
+			installPackage(name, srcDir, nodeModulesDir)
+			// Only run prepare for git-sourced packages (they may need a build step)
+			if (spec.type === "github" || spec.type === "git") {
+				runScript(join(nodeModulesDir, name), "prepare", { binDir })
+			}
 		}
 	}
 
 	if (unsupported.length > 0) {
 		console.log(`\nSkipped (npm registry not yet supported): ${unsupported.join(", ")}`)
 	}
+
+	runScript(projectDir, "install", { pkg, binDir })
+	runScript(projectDir, "postinstall", { pkg, binDir })
+	runScript(projectDir, "prepare", { pkg, binDir })
 }
 
 /**
