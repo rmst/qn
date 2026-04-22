@@ -6,6 +6,8 @@ bin/
 Thumbs.db
 
 .claude/settings.local.json
+.jix/
+.vscode/
 
 # Private developer dir (separate local-only repo with tests etc.)
 /dev/
