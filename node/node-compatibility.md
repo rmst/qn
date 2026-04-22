@@ -231,18 +231,6 @@ Notes: `utf8` is the only supported text encoding (no latin1, hex, base64, etc.)
 | `http.request` / `http.get` (client) | ❌ | Use `fetch` |
 | `http.Agent` | ❌ | |
 
-### node:tls
-
-| API | Status | Notes |
-|-----|--------|-------|
-| `connect` / `accept` / `handshake` / `read` / `writeAll` | ✅ | Low-level BearSSL transport API |
-| System CA certificate loading | ✅ | |
-| `TLSSocket` class | ❌ | No Node.js-style socket API |
-| `tls.createServer` / `tls.connect` | ❌ | |
-| SNI / ALPN / client certs | ❌ | |
-
-Notes: Low-level transport API, not the Node.js socket API. Used internally by `fetch` for HTTPS.
-
 ### node:child_process
 
 | Function | Status | Notes |
@@ -410,7 +398,7 @@ BLOBs returned as `Uint8Array`. Transactions via `exec('BEGIN')`/`exec('COMMIT')
 
 The following modules are not implemented. Importing them throws a `NodeCompatibilityError` with a descriptive message.
 
-`node:async_hooks`, `node:cluster`, `node:diagnostics_channel`, `node:dns`, `node:domain`, `node:http2`, `node:https`, `node:inspector`, `node:perf_hooks`, `node:punycode`, `node:querystring`, `node:readline`, `node:repl`, `node:string_decoder`, `node:tty`, `node:v8`, `node:vm`, `node:wasi`, `node:worker_threads`, `node:zlib`
+`node:async_hooks`, `node:cluster`, `node:diagnostics_channel`, `node:dns`, `node:domain`, `node:http2`, `node:https`, `node:inspector`, `node:perf_hooks`, `node:punycode`, `node:querystring`, `node:readline`, `node:repl`, `node:string_decoder`, `node:tls`, `node:tty`, `node:v8`, `node:vm`, `node:wasi`, `node:worker_threads`, `node:zlib`
 
 ---
 
@@ -432,8 +420,20 @@ Available as `import WebSocket from "ws"` (vendored ws v8.19.0), not as a global
 | Module | Description |
 |--------|-------------|
 | `qn:crypto` | BearSSL-backed crypto primitives (used by `node:crypto`) |
-| `qn:tls` | Low-level TLS I/O (qn-specific API, not Node.js compatible) |
+| `qn:tls` | Low-level TLS I/O (see below) |
 | `qn:http` | High-level HTTP server (`serve()` API) |
 | `qn:worker` | Worker class (re-exported as global `Worker`) |
 | `qn:introspect` | Closure introspection and function serialization |
 | `qn:sucrase` | TypeScript transform engine |
+
+### qn:tls
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `connect` / `accept` / `handshake` / `read` / `writeAll` | ✅ | Low-level BearSSL transport API |
+| System CA certificate loading | ✅ | |
+| `TLSSocket` class | ❌ | No Node.js-style socket API |
+| `tls.createServer` / `tls.connect` | ❌ | |
+| SNI / ALPN / client certs | ❌ | |
+
+Notes: Low-level transport API, not the Node.js socket API. Used internally by `fetch` for HTTPS.
