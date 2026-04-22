@@ -139,6 +139,46 @@ describe('TypeScript execution', () => {
 		assert.strictEqual(result, '42')
 	})
 
+	testQnOnly('strips class modifiers (override/public/private/readonly/abstract/declare)', ({ bin, dir }) => {
+		writeFileSync(`${dir}/main.ts`, [
+			'class Base { name = "base" }',
+			'abstract class Mid extends Base {',
+			'	public pub = 1',
+			'	private priv = 2',
+			'	protected prot = 3',
+			'	readonly ro = 4',
+			'	declare maybe: number',
+			'	override name = "mid"',
+			'}',
+			'class Leaf extends Mid {}',
+			'const x = new Leaf()',
+			'console.log(x.name, x.pub, x.priv, x.prot, x.ro)',
+		].join('\n'))
+		const result = $`${bin} ${dir}/main.ts`
+		assert.strictEqual(result, 'mid 1 2 3 4')
+	})
+
+	testQnOnly('strips non-null assertion', ({ bin, dir }) => {
+		writeFileSync(`${dir}/main.ts`, [
+			'let a: number | null = 7',
+			'console.log(a! + 1)',
+		].join('\n'))
+		const result = $`${bin} ${dir}/main.ts`
+		assert.strictEqual(result, '8')
+	})
+
+	testQnOnly('parameter property falls back to transform', ({ bin, dir }) => {
+		writeFileSync(`${dir}/main.ts`, [
+			'class A {',
+			'	constructor(private x: number, public y: number) {}',
+			'	sum(): number { return this.x + this.y }',
+			'}',
+			'console.log(new A(10, 32).sum())',
+		].join('\n'))
+		const result = $`${bin} ${dir}/main.ts`
+		assert.strictEqual(result, '42')
+	})
+
 	testQnOnly('.ts with NODE_PATH bare import', ({ bin, dir }) => {
 		const libDir = `${dir}/libs`
 		mkdirSync(libDir)
