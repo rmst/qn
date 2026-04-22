@@ -26,6 +26,16 @@ const CK_FROM = 13 // ContextualKeyword._from
 
 const IMPORT_META_RE = /\bimport\.meta\.(url|dirname|filename)\b/g
 
+// Match `@jsxImportSource <name>` inside a block comment near the top of file.
+// Matches what Bun, esbuild, and tsc accept.
+const JSX_IMPORT_SOURCE_RE = /\/\*[^]*?@jsxImportSource\s+(\S+)[^]*?\*\//
+
+function detectJsxImportSource(source) {
+	const head = source.slice(0, 1024)
+	const m = JSX_IMPORT_SOURCE_RE.exec(head)
+	return m ? m[1] : null
+}
+
 /* ------------------------------------------------------------------ *
  * Filesystem helpers                                                  *
  * ------------------------------------------------------------------ */
@@ -370,10 +380,10 @@ function bundleEntry(entry, opts) {
 
 	// Only used for the JSX-runtime import that Sucrase auto-injects during
 	// transform (it isn't part of the original source tokens we parsed).
-	const jsxRuntimeSpec = (ext) => {
+	const jsxRuntimeSpec = (ext, importSource) => {
 		if (ext !== ".tsx" && ext !== ".jsx") return null
 		if (opts.jsxRuntime !== "automatic") return null
-		return `${opts.jsxImportSource}/${opts.production ? "jsx-runtime" : "jsx-dev-runtime"}`
+		return `${importSource}/${opts.production ? "jsx-runtime" : "jsx-dev-runtime"}`
 	}
 
 	while (stack.length) {
@@ -405,12 +415,15 @@ function bundleEntry(entry, opts) {
 			rewritten = source
 		} else {
 			const preRewritten = applyRewrites(source, imports, replacements)
-			rewritten = runTransform(preRewritten, ext, { ...opts, filePath })
+			// Per-file `@jsxImportSource` pragma overrides the bundle default.
+			const pragmaSource = (ext === ".tsx" || ext === ".jsx") ? detectJsxImportSource(source) : null
+			const fileJsxImportSource = pragmaSource || opts.jsxImportSource
+			rewritten = runTransform(preRewritten, ext, { ...opts, jsxImportSource: fileJsxImportSource, filePath })
 
 			// Sucrase auto-injects the JSX runtime import during transform, so
 			// its specifier never appeared in the source we parsed. Resolve it
 			// separately and patch the emitted require() call.
-			const runtime = jsxRuntimeSpec(ext)
+			const runtime = jsxRuntimeSpec(ext, fileJsxImportSource)
 			if (runtime && rewritten.includes(runtime)) {
 				const depId = resolveDep(runtime, filePath, fromDir)
 				if (depId !== null) {

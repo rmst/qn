@@ -152,6 +152,28 @@ describe('qn bundle', () => {
 		}
 	})
 
+	test('@jsxImportSource pragma overrides the bundle default', async () => {
+		const dir = mktempdir()
+		try {
+			const rt = join(dir, 'node_modules', 'myjsx', 'jsx-runtime')
+			mkdirSync(rt, { recursive: true })
+			writeFileSync(join(dir, 'node_modules/myjsx/package.json'),
+				JSON.stringify({ name: 'myjsx', exports: { './jsx-runtime': './jsx-runtime/index.js' } }))
+			writeFileSync(join(rt, 'index.js'),
+				'export const jsx = (t, p) => ({ t, p })\n' +
+				'export const jsxs = jsx\n' +
+				'export const Fragment = "F"\n')
+			// No --jsx-import-source; the pragma alone must steer resolution.
+			writeFileSync(join(dir, 'main.tsx'),
+				'/** @jsxImportSource myjsx */\n' +
+				'const el = <div className="x">hi</div>\nconsole.log(JSON.stringify(el))\n')
+			await build({ entrypoints: [join(dir, 'main.tsx')], outdir: join(dir, 'dist') })
+			assert.strictEqual(runBundle(join(dir, 'dist/main.js')), '{"t":"div","p":{"className":"x","children":"hi"}}')
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
 	test('leaves external specifiers in place', async () => {
 		const dir = mktempdir()
 		try {
