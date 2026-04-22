@@ -65,6 +65,13 @@ NODE_PATH=./my_modules:./lib ./bin/qn script.js
 
 Walks static imports from an entry point, transforms TS/JSX via Sucrase, resolves `node_modules` with `package.json` exports, and emits a single self-contained JS file. No tree shaking or minification — a roughly Bun.build-compatible API for simple cases.
 
+**Watch mode** (re-run on file change)
+```bash
+./bin/qn --watch script.js
+```
+
+Runs the script, then restarts it whenever any file in its import graph changes. The graph is traced statically via `qn:bundle`'s `traceModuleGraph`, so `.js`, `.ts`, `.json`, and literal-dynamic `import()` are all tracked. Computed dynamic imports aren't.
+
 
 ### Building Standalone Applications
 

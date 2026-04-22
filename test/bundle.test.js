@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { mktempdir, QN } from './util.js'
-import { build } from '../node/qn/bundle.js'
+import { build, traceModuleGraph } from '../node/qn/bundle.js'
 
 // Run the bundle through qn and collect stdout.
 function runBundle(path, extraEnv = {}) {
@@ -405,4 +405,110 @@ describe('qn bundle', () => {
 			rmSync(dir, { recursive: true })
 		}
 	})
+})
+
+describe('traceModuleGraph', () => {
+	const withTemp = (fn) => async () => {
+		const dir = mktempdir()
+		try { return await fn(dir) } finally { rmSync(dir, { recursive: true }) }
+	}
+
+	test('returns just the entry for a leaf file', withTemp(async (dir) => {
+		writeFileSync(join(dir, 'main.js'), 'console.log(1)\n')
+		const g = traceModuleGraph(join(dir, 'main.js'))
+		assert.deepStrictEqual([...g], [join(dir, 'main.js')])
+	}))
+
+	test('follows static imports and re-exports', withTemp(async (dir) => {
+		writeFileSync(join(dir, 'main.js'), 'import { a } from "./a.js"\nexport * from "./b.js"\nconsole.log(a)\n')
+		writeFileSync(join(dir, 'a.js'), 'export const a = 1\n')
+		writeFileSync(join(dir, 'b.js'), 'export const b = 2\n')
+		const g = traceModuleGraph(join(dir, 'main.js'))
+		assert.strictEqual(g.size, 3)
+		assert.ok(g.has(join(dir, 'main.js')))
+		assert.ok(g.has(join(dir, 'a.js')))
+		assert.ok(g.has(join(dir, 'b.js')))
+	}))
+
+	test('follows transitive imports', withTemp(async (dir) => {
+		writeFileSync(join(dir, 'main.js'), 'import "./a.js"\n')
+		writeFileSync(join(dir, 'a.js'), 'import "./b.js"\n')
+		writeFileSync(join(dir, 'b.js'), 'export const x = 1\n')
+		const g = traceModuleGraph(join(dir, 'main.js'))
+		assert.strictEqual(g.size, 3)
+	}))
+
+	test('tracks literal dynamic import', withTemp(async (dir) => {
+		writeFileSync(join(dir, 'main.js'), 'const m = await import("./lazy.js")\n')
+		writeFileSync(join(dir, 'lazy.js'), 'export const hi = 1\n')
+		const g = traceModuleGraph(join(dir, 'main.js'))
+		assert.ok(g.has(join(dir, 'lazy.js')))
+	}))
+
+	test('does not track variable dynamic import', withTemp(async (dir) => {
+		writeFileSync(join(dir, 'main.js'), 'const name = "./lazy.js"\nimport(name)\n')
+		writeFileSync(join(dir, 'lazy.js'), 'export const hi = 1\n')
+		const g = traceModuleGraph(join(dir, 'main.js'))
+		assert.ok(!g.has(join(dir, 'lazy.js')), 'variable dynamic import must not be tracked')
+		assert.strictEqual(g.size, 1)
+	}))
+
+	test('skips node: specifiers', withTemp(async (dir) => {
+		writeFileSync(join(dir, 'main.js'), 'import { readFileSync } from "node:fs"\nconsole.log(readFileSync)\n')
+		const g = traceModuleGraph(join(dir, 'main.js'))
+		assert.strictEqual(g.size, 1)
+	}))
+
+	test('tracks .json imports', withTemp(async (dir) => {
+		writeFileSync(join(dir, 'main.js'), 'import cfg from "./data.json" with { type: "json" }\nconsole.log(cfg)\n')
+		writeFileSync(join(dir, 'data.json'), '{"v":1}')
+		const g = traceModuleGraph(join(dir, 'main.js'))
+		assert.ok(g.has(join(dir, 'data.json')))
+	}))
+
+	test('tracks .ts imports', withTemp(async (dir) => {
+		writeFileSync(join(dir, 'main.js'), 'import { v } from "./data.ts"\nconsole.log(v)\n')
+		writeFileSync(join(dir, 'data.ts'), 'export const v: number = 1\n')
+		const g = traceModuleGraph(join(dir, 'main.js'))
+		assert.ok(g.has(join(dir, 'data.ts')))
+	}))
+
+	test('silently skips unresolvable bare specifiers', withTemp(async (dir) => {
+		writeFileSync(join(dir, 'main.js'), 'import "nonexistent-pkg"\nconsole.log(1)\n')
+		const g = traceModuleGraph(join(dir, 'main.js'))
+		/* Should not throw; just doesn't add the unresolved dep */
+		assert.strictEqual(g.size, 1)
+	}))
+
+	test('silently skips files with parse errors', withTemp(async (dir) => {
+		writeFileSync(join(dir, 'main.js'), 'import "./broken.js"\nimport "./ok.js"\n')
+		writeFileSync(join(dir, 'broken.js'), 'this is { not ) valid javascript\n')
+		writeFileSync(join(dir, 'ok.js'), 'export const x = 1\n')
+		const g = traceModuleGraph(join(dir, 'main.js'))
+		/* main + broken (reachable but un-parseable) + ok (still traced) */
+		assert.ok(g.has(join(dir, 'main.js')))
+		assert.ok(g.has(join(dir, 'broken.js')))
+		assert.ok(g.has(join(dir, 'ok.js')))
+	}))
+
+	test('throws on missing entry', () => {
+		assert.throws(() => traceModuleGraph('/nonexistent/path/entry.js'), /entry point not found/)
+	})
+
+	test('terminates on circular imports', withTemp(async (dir) => {
+		writeFileSync(join(dir, 'a.js'), 'import "./b.js"\nexport const a = 1\n')
+		writeFileSync(join(dir, 'b.js'), 'import "./a.js"\nexport const b = 2\n')
+		const g = traceModuleGraph(join(dir, 'a.js'))
+		assert.strictEqual(g.size, 2)
+	}))
+
+	test('walks node_modules', withTemp(async (dir) => {
+		const pkgDir = join(dir, 'node_modules', 'tinylib')
+		mkdirSync(pkgDir, { recursive: true })
+		writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: 'tinylib', main: 'index.js' }))
+		writeFileSync(join(pkgDir, 'index.js'), 'export const v = 1\n')
+		writeFileSync(join(dir, 'main.js'), 'import { v } from "tinylib"\nconsole.log(v)\n')
+		const g = traceModuleGraph(join(dir, 'main.js'))
+		assert.ok(g.has(join(pkgDir, 'index.js')))
+	}))
 })

@@ -504,6 +504,46 @@ function emitBundle({ entryId, modules, externals, format }) {
  * Public API                                                          *
  * ------------------------------------------------------------------ */
 
+/**
+ * Walk the static import graph from `entry`, return a Set of absolute file
+ * paths reachable via ESM imports (static and literal-dynamic). No transform,
+ * no emit — just resolution. Non-disk specifiers (`node:*`, `qn:*`, bare names
+ * with no on-disk match) are skipped silently; they're either embedded or
+ * genuinely missing, and in either case we cannot watch them.
+ *
+ * Used by `qn:watch` to know which files to stat; exposed because any tool
+ * that wants to reason about "what does this script depend on" benefits.
+ */
+export function traceModuleGraph(entry, options = {}) {
+	const target = options.target || "node"
+	const production = options.production !== false
+	const conditions = makeConditions(target, production)
+	const entryAbs = resolve(entry)
+	if (!isFile(entryAbs)) throw new Error(`entry point not found: ${entry}`)
+
+	const files = new Set([entryAbs])
+	const stack = [entryAbs]
+
+	while (stack.length) {
+		const filePath = stack.pop()
+		let analysis
+		try { analysis = loadAndAnalyse(filePath) } catch { continue }
+		const fromDir = dirname(filePath)
+		for (const imp of analysis.imports) {
+			const spec = imp.specifier
+			if (spec.startsWith("node:")) continue
+			const resolved = resolveSpecifier(spec, fromDir, conditions)
+			if (!resolved) continue
+			if (!files.has(resolved)) {
+				files.add(resolved)
+				stack.push(resolved)
+			}
+		}
+	}
+
+	return files
+}
+
 export async function build(options) {
 	const entrypoints = options.entrypoints || options.entryPoints
 	if (!Array.isArray(entrypoints) || entrypoints.length === 0) {

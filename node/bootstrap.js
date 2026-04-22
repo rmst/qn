@@ -256,6 +256,13 @@ if (scriptArgs[1] === 'install') {
 } else if (scriptArgs.length < 2) {
 // No script provided — start the REPL
 	await import("qn:repl")
+} else if (scriptArgs[1] === '--watch') {
+	if (scriptArgs.length < 3) {
+		std.err.puts('Error: --watch requires a script path\n')
+		std.exit(1)
+	}
+	const { runWatch } = await import("qn:watch")
+	await runWatch(scriptArgs[2], scriptArgs.slice(3))
 } else if (scriptArgs[1] === '--test') {
 	// Run test files with glob expansion (like Node.js)
 
