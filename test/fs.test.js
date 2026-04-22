@@ -229,6 +229,24 @@ describe('node:fs shim', () => {
 		assert.deepStrictEqual(JSON.parse(output), { aExists: true, bExists: true, cExists: true })
 	})
 
+	test('mkdirSync recursive with relative path', ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { mkdirSync, existsSync } from 'node:fs'
+			import { chdir } from 'node:process'
+			chdir('${dir}')
+			mkdirSync('rel/a/b', { recursive: true })
+			console.log(JSON.stringify({
+				relExists: existsSync('${dir}/rel'),
+				aExists: existsSync('${dir}/rel/a'),
+				bExists: existsSync('${dir}/rel/a/b'),
+				notAbsolute: !existsSync('/rel')
+			}))
+		`)
+
+		const output = $`${bin} ${dir}/test.js`
+		assert.deepStrictEqual(JSON.parse(output), { relExists: true, aExists: true, bExists: true, notAbsolute: true })
+	})
+
 	test('mkdirSync recursive with existing parent', ({ bin, dir }) => {
 		mkdirSync(`${dir}/parent`)
 		writeFileSync(`${dir}/test.js`, `

@@ -209,11 +209,12 @@ export const mkdirSync = (path, { mode = 0o777, recursive = false } = {}) => {
 		return
 	}
 
+	const absolute = path.startsWith('/')
 	const parts = path.split('/').filter(p => p.length > 0)
-	let currentPath = path.startsWith('/') ? '/' : ''
+	let currentPath = ''
 
 	for (const part of parts) {
-		currentPath = currentPath === '/' ? `/${part}` : `${currentPath}/${part}`
+		currentPath = currentPath ? `${currentPath}/${part}` : (absolute ? `/${part}` : part)
 
 		try {
 			const st = native_stat(currentPath)
@@ -228,15 +229,14 @@ export const mkdirSync = (path, { mode = 0o777, recursive = false } = {}) => {
 		try {
 			native_mkdir(currentPath, mode)
 		} catch (e) {
-			// Re-check: another process may have created it concurrently (EEXIST race)
+			// Tolerate EEXIST race: another process may have created it concurrently,
+			// but only if the result is actually a directory. Otherwise re-throw the
+			// original error so callers see errno/code.
 			try {
 				const st = native_stat(currentPath)
-				if ((st.mode & S_IFMT) !== S_IFDIR) {
-					throw new Error(`Failed to create directory: ${currentPath}`)
-				}
-			} catch {
-				throw new Error(`Failed to create directory: ${currentPath}`)
-			}
+				if ((st.mode & S_IFMT) === S_IFDIR) continue
+			} catch {}
+			throw e
 		}
 	}
 }
