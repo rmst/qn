@@ -23,6 +23,7 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 - `qn-uv-utils.c` (540) — shared promise plumbing, error handling, string array helpers
 - `qn-uv-signals.c` (181) — signal handling via `uv_signal_t`
 - `qn-uv-dns.c` (163) — async DNS resolution via `uv_getaddrinfo`
+- `qn-uv-fs-event.c` (218) — filesystem watching via `uv_fs_event_t` (powers `fs.watch`)
 
 **Other C modules** — ~3.5K LOC C:
 - `qnc/` — standalone compiler for building executables. Self-contained: embeds JS sources, C sources, headers, and static libs so it needs only a C compiler to produce binaries. Includes all default modules (node:\*, qn:\*, qx, ws) automatically. Native module auto-embedding via `package.json` `"qnc"` field.

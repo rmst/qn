@@ -18,6 +18,9 @@ import {
 // Re-export glob functions from separate module
 export { globSync, glob } from './glob.js'
 
+// Re-export watch / FSWatcher
+export { watch, FSWatcher } from './watch.js'
+
 /**
  * Dirent class for directory entries (used by readdirSync with withFileTypes)
  */
