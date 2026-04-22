@@ -26,16 +26,33 @@ const TT_EXPORT = 89104
 const TT_STRING = 4608
 const TT_ENUM = 113168
 const TT_BRACE_R = 11264
+const TT_PAREN_L = 13824
+const TT_COMMA = 15360
+const TT_NON_NULL_ASSERTION = 61440
+const TT_DECLARE = 103952
+const TT_READONLY = 104976
+const TT_ABSTRACT = 106000
+const TT_PUBLIC = 107536
+const TT_PRIVATE = 108560
+const TT_PROTECTED = 109584
+const TT_OVERRIDE = 110608
 const CK_TYPE = 38
 const CK_NAMESPACE = 23
 const CK_FROM = 13
+
+function isClassModifierType(type) {
+	return type === TT_PUBLIC || type === TT_PRIVATE || type === TT_PROTECTED
+		|| type === TT_READONLY || type === TT_ABSTRACT || type === TT_OVERRIDE
+		|| type === TT_DECLARE
+}
 
 /**
  * Strips TypeScript type annotations from source code, returning plain JavaScript.
  *
  * In 'strip' mode (default), type-only syntax is replaced with whitespace to preserve
  * source positions (inspired by ts-blank-space). Throws on constructs that require
- * runtime code generation (enums, namespaces with values).
+ * runtime code generation (enums, namespaces with values, constructor parameter
+ * properties).
  *
  * In 'transform' mode, Sucrase's full transform is used. Handles all TypeScript
  * constructs including enums, but does not preserve source positions.
@@ -50,7 +67,22 @@ export function stripTypeScriptTypes(code, options) {
 	if (mode === "transform") {
 		return transform(code, { transforms: ["typescript"], disableESTransforms: true }).code
 	}
-	return blankTypeScriptTypes(code)
+	const blanked = blankTypeScriptTypes(code)
+	// Blanking can silently produce invalid JS when newlines inside a type region
+	// violate a no-LineTerminator restriction in the surrounding JS — most notably
+	// a multi-line return type on an arrow function, where the LineTerminator
+	// between `)` and `=>` is a parse error. Re-parse the blanked output to catch
+	// this and throw so callers can fall back to transform mode.
+	try {
+		parse(blanked, false, false, false)
+	} catch {
+		throw new SyntaxError(
+			"TypeScript type spans lines in a position where the surrounding JavaScript " +
+			"forbids line terminators (e.g. multi-line arrow return type). " +
+			"Use { mode: 'transform' } instead.",
+		)
+	}
+	return blanked
 }
 
 /**
@@ -75,6 +107,36 @@ function blankTypeScriptTypes(code) {
 		}
 		if (t.contextualKeyword === CK_NAMESPACE && !t.isType) {
 			throw new SyntaxError("TypeScript namespace is not supported in strip-only mode")
+		}
+
+		// Non-null assertion `x!`: Sucrase retypes the `!` token to
+		// nonNullAssertion but does not mark isType — blank it.
+		if (t.type === TT_NON_NULL_ASSERTION) {
+			ranges.push(t.start, t.end)
+			continue
+		}
+
+		// TS-only class modifiers (public/private/protected/readonly/abstract/
+		// override/declare) keep isType=false even though they are pure type
+		// syntax on class members. Blank them so the emitted JS parses. For
+		// constructor parameter properties the same keywords imply a runtime
+		// assignment — detect that by looking back past preceding modifier
+		// tokens for a `(` or `,` and fall back to transform mode.
+		if (!t.isType && isClassModifierType(t.type)) {
+			let j = i - 1
+			while (j >= 0) {
+				const p = tokens[j]
+				if (p.start === p.end || isClassModifierType(p.type)) {
+					j--
+					continue
+				}
+				break
+			}
+			if (j >= 0 && (tokens[j].type === TT_PAREN_L || tokens[j].type === TT_COMMA)) {
+				throw new SyntaxError("TypeScript parameter property is not supported in strip-only mode")
+			}
+			ranges.push(t.start, t.end)
+			continue
 		}
 
 		// Handle `import type ...` and `export type ...` statements.

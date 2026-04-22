@@ -219,6 +219,34 @@ describe('node:module shim', () => {
 		assert.strictEqual(lenMatch, true)
 	})
 
+	testQnOnly('stripTypeScriptTypes throws on multi-line arrow return type (cannot blank)', ({ bin, dir }) => {
+		// Blanking would leave a LineTerminator between `)` and `=>`, which the
+		// JS grammar forbids. Strip mode cannot preserve positions here — it
+		// must throw so the caller can fall back to transform mode.
+		writeFileSync(`${dir}/test.js`, `
+			import { stripTypeScriptTypes } from 'node:module'
+			const input = 'const f = (x: number): Foo<\\n  Bar\\n> => x'
+			try {
+				stripTypeScriptTypes(input)
+				console.log(JSON.stringify({ threw: false }))
+			} catch (e) {
+				console.log(JSON.stringify({ threw: true, isSyntax: e instanceof SyntaxError }))
+			}
+		`)
+
+		const result = $`${bin} ${dir}/test.js`
+		const { threw, isSyntax } = JSON.parse(result)
+		assert.strictEqual(threw, true)
+		assert.strictEqual(isSyntax, true)
+	})
+
+	testQnOnly('loads .ts file with multi-line arrow return type via transform fallback', ({ bin, dir }) => {
+		// Bootstrap catches the strip-mode throw and retries with transform mode.
+		writeFileSync(`${dir}/script.ts`, 'type Foo<T> = T\nconst f = (x: number): Foo<\n\tnumber\n> => x * 2\nconsole.log(f(21))\n')
+		const out = $`${bin} ${dir}/script.ts`.trim()
+		assert.strictEqual(out, '42')
+	})
+
 	test('stripTypeScriptTypes strips declare statement', ({ bin, dir }) => {
 		writeFileSync(`${dir}/test.js`, `
 			import { stripTypeScriptTypes } from 'node:module'

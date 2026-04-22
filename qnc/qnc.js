@@ -351,9 +351,14 @@ function stripTypeScript(source, filename) {
 	if (!filename.endsWith(".ts")) return source
 	if (!sucraseTransform) return source // TS not available, pass through
 
-	// Try strip mode first (preserves source positions)
+	// Try strip mode first (preserves source positions). Blanking can silently
+	// produce invalid JS when newlines inside a type region violate a
+	// no-LineTerminator restriction (e.g. multi-line arrow return type —
+	// LT between `)` and `=>` is a parse error), so re-parse to validate.
 	try {
-		return blankTypeScriptTypes(source)
+		const blanked = blankTypeScriptTypes(source)
+		sucraseParse(blanked, false, false, false)
+		return blanked
 	} catch {
 		// Fall back to full transform
 		return sucraseTransform(source, {
