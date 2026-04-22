@@ -6,8 +6,6 @@ bin/
 Thumbs.db
 
 .claude/settings.local.json
-.jix/
-.vscode/
 
 # Private developer dir (separate local-only repo with tests etc.)
 /dev/
@@ -15,4 +13,3 @@ Thumbs.db
 # Symlinks created by dev/Makefile (pointing into dev/)
 /AGENTS.md
 /CLAUDE.md
-/__jix__.js
