@@ -1,0 +1,628 @@
+/**
+ * qn:bundle — minimal bundler
+ *
+ * Traces static imports + literal dynamic imports from entry points,
+ * transforms each file with Sucrase (typescript + jsx + imports),
+ * concatenates reachable modules into a single file wrapped in a tiny
+ * CJS-style runtime. Signature loosely mirrors `Bun.build()`.
+ *
+ * Non-features: tree shaking, minification, source maps, code splitting,
+ * top-level await (module wrappers are sync).
+ */
+
+import { readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs"
+import { dirname, join, resolve, extname, basename, isAbsolute } from "node:path"
+import { transform, parse } from "qn:sucrase"
+
+const PROBE_EXTS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs", ".json"]
+const FORMATS = ["esm", "iife"]
+const TARGETS = ["browser", "node"]
+
+// Sucrase token type constants we care about (from
+// vendor/sucrase-js/sucrase/src/parser/tokenizer/types.js). Hard-coded rather
+// than imported to keep the bundler's dependency surface narrow.
+const TT = { eof: 6144, string: 4608, name: 5632, parenL: 13824, parenR: 14336, semi: 16384, _export: 89104, _import: 90640 }
+const CK_FROM = 13 // ContextualKeyword._from
+
+const IMPORT_META_RE = /\bimport\.meta\.(url|dirname|filename)\b/g
+
+/* ------------------------------------------------------------------ *
+ * Filesystem helpers                                                  *
+ * ------------------------------------------------------------------ */
+
+function statOr(p) {
+	try { return statSync(p) } catch { return null }
+}
+
+function isFile(p) {
+	const st = statOr(p)
+	return st != null && st.isFile()
+}
+
+function readJson(p) {
+	try { return JSON.parse(readFileSync(p, "utf8")) } catch { return null }
+}
+
+/* ------------------------------------------------------------------ *
+ * Module resolution                                                   *
+ * ------------------------------------------------------------------ */
+
+function probe(base) {
+	const st = statOr(base)
+	if (st && st.isFile()) return base
+	for (const ext of PROBE_EXTS) {
+		if (isFile(base + ext)) return base + ext
+	}
+	if (st && st.isDirectory()) {
+		const pkg = readJson(join(base, "package.json"))
+		if (pkg) {
+			const sub = pickPackageEntry(pkg, ".", base, ["browser", "import", "default"])
+			if (sub) return sub
+		}
+		for (const ext of PROBE_EXTS) {
+			const idx = join(base, "index" + ext)
+			if (isFile(idx)) return idx
+		}
+	}
+	return null
+}
+
+function resolvePackageExports(exports, subpath, pkgDir, conditions) {
+	const target = matchExports(exports, subpath, conditions)
+	if (!target || !target.startsWith("./")) return null
+	return probe(join(pkgDir, target))
+}
+
+function matchExports(exports, subpath, conditions) {
+	if (typeof exports === "string") return subpath === "." ? exports : null
+	if (Array.isArray(exports)) {
+		for (const e of exports) {
+			const r = matchExports(e, subpath, conditions)
+			if (r) return r
+		}
+		return null
+	}
+	if (typeof exports !== "object" || exports === null) return null
+
+	const keys = Object.keys(exports)
+	const hasSubpaths = keys.some(k => k.startsWith("."))
+
+	if (hasSubpaths) {
+		if (exports[subpath]) return resolveConditional(exports[subpath], conditions)
+		for (const key of keys) {
+			if (!key.includes("*")) continue
+			const [pre, post] = key.split("*")
+			if (subpath.startsWith(pre) && subpath.endsWith(post) && subpath.length >= pre.length + post.length) {
+				const stem = subpath.slice(pre.length, subpath.length - post.length)
+				const target = resolveConditional(exports[key], conditions)
+				return target ? target.replace("*", stem) : null
+			}
+		}
+		return null
+	}
+
+	// Bare conditional object at the root is equivalent to the "." entry.
+	if (subpath !== ".") return null
+	return resolveConditional(exports, conditions)
+}
+
+function resolveConditional(target, conditions) {
+	if (typeof target === "string") return target
+	if (target === null) return null
+	if (Array.isArray(target)) {
+		for (const t of target) {
+			const r = resolveConditional(t, conditions)
+			if (r) return r
+		}
+		return null
+	}
+	if (typeof target !== "object") return null
+	for (const cond of conditions) {
+		if (cond in target) {
+			const r = resolveConditional(target[cond], conditions)
+			if (r) return r
+		}
+	}
+	if ("default" in target) return resolveConditional(target.default, conditions)
+	return null
+}
+
+function pickPackageEntry(pkg, subpath, pkgDir, conditions) {
+	if (pkg.exports) {
+		const r = resolvePackageExports(pkg.exports, subpath, pkgDir, conditions)
+		if (r) return r
+	}
+	if (subpath !== ".") return probe(join(pkgDir, subpath))
+	if (conditions.includes("browser") && typeof pkg.browser === "string") {
+		const r = probe(join(pkgDir, pkg.browser))
+		if (r) return r
+	}
+	for (const field of ["module", "main"]) {
+		if (pkg[field]) {
+			const r = probe(join(pkgDir, pkg[field]))
+			if (r) return r
+		}
+	}
+	return probe(join(pkgDir, "index"))
+}
+
+function splitBareSpecifier(spec) {
+	if (spec.startsWith("@")) {
+		const parts = spec.split("/")
+		return { name: parts.slice(0, 2).join("/"), subpath: parts.length > 2 ? "./" + parts.slice(2).join("/") : "." }
+	}
+	const i = spec.indexOf("/")
+	return i < 0 ? { name: spec, subpath: "." } : { name: spec.slice(0, i), subpath: "./" + spec.slice(i + 1) }
+}
+
+function resolveBare(specifier, fromDir, conditions) {
+	const { name, subpath } = splitBareSpecifier(specifier)
+	let cur = fromDir
+	for (;;) {
+		const pkgDir = join(cur, "node_modules", name)
+		const pkg = readJson(join(pkgDir, "package.json"))
+		if (pkg) {
+			const r = pickPackageEntry(pkg, subpath, pkgDir, conditions)
+			if (r) return r
+		}
+		const parent = dirname(cur)
+		if (parent === cur) return null
+		cur = parent
+	}
+}
+
+function resolveSpecifier(specifier, fromDir, conditions) {
+	if (specifier.startsWith("./") || specifier.startsWith("../")) return probe(resolve(fromDir, specifier))
+	if (isAbsolute(specifier)) return probe(specifier)
+	return resolveBare(specifier, fromDir, conditions)
+}
+
+/* ------------------------------------------------------------------ *
+ * Token-based import extraction                                       *
+ *                                                                     *
+ * Uses Sucrase's own parser to enumerate ESM import/export specifiers *
+ * and literal dynamic `import(...)` expressions with exact source     *
+ * positions. No regex on source code — zero false positives from      *
+ * comments, strings, template literals, or regex literals.            *
+ * ------------------------------------------------------------------ */
+
+// Parse a string-literal token body ("..." or '...') to its value.
+// Sufficient for import specifiers, which do not contain complex escapes.
+function unquoteSpecifier(raw) {
+	return raw.slice(1, -1).replace(/\\(.)/g, (_, c) => c === "n" ? "\n" : c === "t" ? "\t" : c === "r" ? "\r" : c)
+}
+
+// Returns a list of { kind, start, end, specifier } entries. `start/end`
+// cover the range that should be replaced:
+//   - static: just the string-literal token (so the replacement becomes a
+//     new specifier string, which Sucrase's imports transform then turns
+//     into require(newSpec)).
+//   - dynamic: the whole `import(...)` expression (replaced with a call
+//     into our runtime).
+function extractImports(code, ext) {
+	const isJSX = ext === ".jsx" || ext === ".tsx"
+	const isTS = ext === ".ts" || ext === ".tsx"
+	const tokens = parse(code, isJSX, isTS, false).tokens
+	const out = []
+	for (let i = 0; i < tokens.length; i++) {
+		const t = tokens[i]
+
+		// Dynamic: `import ( "X" )`
+		if (t.type === TT._import && tokens[i + 1]?.type === TT.parenL) {
+			const strTok = tokens[i + 2]
+			const closeTok = tokens[i + 3]
+			if (strTok?.type === TT.string && closeTok?.type === TT.parenR) {
+				out.push({
+					kind: "dynamic",
+					start: t.start,
+					end: closeTok.end,
+					specifier: unquoteSpecifier(code.slice(strTok.start, strTok.end)),
+				})
+				i += 3
+			}
+			continue
+		}
+
+		// Static side-effect: `import "X"`
+		if (t.type === TT._import && tokens[i + 1]?.type === TT.string) {
+			const strTok = tokens[i + 1]
+			out.push({
+				kind: "static",
+				start: strTok.start,
+				end: strTok.end,
+				specifier: unquoteSpecifier(code.slice(strTok.start, strTok.end)),
+			})
+			i += 1
+			continue
+		}
+
+		// Static with from-clause: `import ... from "X"` or `export ... from "X"`
+		if (t.type === TT._import || t.type === TT._export) {
+			for (let j = i + 1; j < tokens.length; j++) {
+				const u = tokens[j]
+				if (u.type === TT.semi || u.type === TT.eof) break
+				if (u.type === TT._import || u.type === TT._export) break
+				if (u.type === TT.name && u.contextualKeyword === CK_FROM) {
+					const strTok = tokens[j + 1]
+					if (strTok?.type === TT.string) {
+						out.push({
+							kind: "static",
+							start: strTok.start,
+							end: strTok.end,
+							specifier: unquoteSpecifier(code.slice(strTok.start, strTok.end)),
+						})
+					}
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
+// Replace each import's source range with `replacements.get(idx)`, preserving
+// everything else verbatim. Input list must be in source order.
+function applyRewrites(code, imports, replacements) {
+	const chunks = []
+	let cursor = 0
+	for (let i = 0; i < imports.length; i++) {
+		const imp = imports[i]
+		const repl = replacements.get(i)
+		if (repl === undefined) continue
+		chunks.push(code.slice(cursor, imp.start), repl)
+		cursor = imp.end
+	}
+	chunks.push(code.slice(cursor))
+	return chunks.join("")
+}
+
+/* ------------------------------------------------------------------ *
+ * Per-module load + transform                                         *
+ * ------------------------------------------------------------------ */
+
+// Substitute `import.meta.url/dirname/filename` with bundle-time constants.
+// Module wrappers are plain functions — `import.meta` would be invalid there.
+// Runs on already-transformed output, where `import.meta` only appears inside
+// expression positions Sucrase has preserved verbatim.
+function substituteImportMeta(code, filePath) {
+	if (!code.includes("import.meta")) return code
+	return code.replace(IMPORT_META_RE, (_full, field) => {
+		if (field === "url") return JSON.stringify("file://" + filePath)
+		if (field === "dirname") return JSON.stringify(dirname(filePath))
+		return JSON.stringify(filePath)
+	})
+}
+
+// Surface TLA as a clear build-time error rather than a cryptic runtime
+// syntax error inside the generated bundle.
+function checkModuleSyntax(code, filePath) {
+	if (!/\bawait\b/.test(code)) return
+	try {
+		new Function("exports", "require", "module", code)
+	} catch (e) {
+		throw new Error(`top-level await is not supported by qn bundle (in ${filePath}): ${e.message}`)
+	}
+}
+
+// Load a source file, enumerate its imports, and return both the raw text
+// and the import list. Returns null sections for non-ESM inputs.
+function loadAndAnalyse(filePath) {
+	const source = readFileSync(filePath, "utf8")
+	const ext = extname(filePath)
+	if (ext === ".json") return { kind: "json", source, ext, imports: [] }
+	if (ext === ".cjs") return { kind: "cjs", source, ext, imports: [] }
+	let imports
+	try {
+		imports = extractImports(source, ext)
+	} catch (e) {
+		throw new Error(`failed to parse ${filePath}: ${e.message}`)
+	}
+	return { kind: "esm", source, ext, imports }
+}
+
+// Run Sucrase on the specifier-rewritten source. Sucrase's "imports"
+// transform then emits `require('<modId>')` for each static import and any
+// JSX-runtime auto-injected import.
+function runTransform(source, ext, opts) {
+	const transforms = ["imports"]
+	if (ext === ".ts" || ext === ".tsx") transforms.push("typescript")
+	if (ext === ".tsx" || ext === ".jsx") transforms.push("jsx")
+	return transform(source, {
+		transforms,
+		jsxRuntime: opts.jsxRuntime,
+		jsxImportSource: opts.jsxImportSource,
+		production: opts.production,
+		filePath: opts.filePath,
+	}).code
+}
+
+/* ------------------------------------------------------------------ *
+ * Bundle pipeline                                                     *
+ * ------------------------------------------------------------------ */
+
+function makeConditions(target, production) {
+	const base = ["module", "import", "default"]
+	const envCond = target === "browser" ? ["browser"] : ["node"]
+	const modeCond = production ? ["production"] : ["development"]
+	return [...envCond, ...modeCond, ...base]
+}
+
+function bundleEntry(entry, opts) {
+	const conditions = makeConditions(opts.target, opts.production)
+	const entryAbs = resolve(entry)
+	if (!isFile(entryAbs)) throw new Error(`entry point not found: ${entry}`)
+
+	const ids = new Map()
+	const modules = new Map()
+	const declaredExternals = new Set(opts.external)
+	const usedExternals = new Set()
+	const warnings = []
+	let counter = 0
+	const assignId = p => {
+		if (ids.has(p)) return ids.get(p)
+		const id = "m" + counter++
+		ids.set(p, id)
+		return id
+	}
+
+	const stack = [entryAbs]
+	assignId(entryAbs)
+
+	// Only used for the JSX-runtime import that Sucrase auto-injects during
+	// transform (it isn't part of the original source tokens we parsed).
+	const jsxRuntimeSpec = (ext) => {
+		if (ext !== ".tsx" && ext !== ".jsx") return null
+		if (opts.jsxRuntime !== "automatic") return null
+		return `${opts.jsxImportSource}/${opts.production ? "jsx-runtime" : "jsx-dev-runtime"}`
+	}
+
+	while (stack.length) {
+		const filePath = stack.pop()
+		const id = ids.get(filePath)
+		if (modules.has(id)) continue
+
+		const { kind, source, ext, imports } = loadAndAnalyse(filePath)
+		const fromDir = dirname(filePath)
+
+		// Decide a rewrite for each import.
+		const replacements = new Map()
+		for (let i = 0; i < imports.length; i++) {
+			const imp = imports[i]
+			const depId = resolveDep(imp.specifier, filePath, fromDir)
+			if (depId === null) continue
+			if (imp.kind === "static") {
+				replacements.set(i, JSON.stringify(depId))
+			} else {
+				replacements.set(i, `Promise.resolve(require(${JSON.stringify(depId)}))`)
+			}
+		}
+
+		// Pre-rewrite source specifiers to our module ids.
+		let rewritten
+		if (kind === "json") {
+			rewritten = `module.exports = ${source};`
+		} else if (kind === "cjs") {
+			rewritten = source
+		} else {
+			const preRewritten = applyRewrites(source, imports, replacements)
+			rewritten = runTransform(preRewritten, ext, { ...opts, filePath })
+
+			// Sucrase auto-injects the JSX runtime import during transform, so
+			// its specifier never appeared in the source we parsed. Resolve it
+			// separately and patch the emitted require() call.
+			const runtime = jsxRuntimeSpec(ext)
+			if (runtime && rewritten.includes(runtime)) {
+				const depId = resolveDep(runtime, filePath, fromDir)
+				if (depId !== null) {
+					const pat = new RegExp(`require\\((['"])${runtime.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}\\1\\)`, "g")
+					rewritten = rewritten.replace(pat, `require(${JSON.stringify(depId)})`)
+				}
+			}
+
+			rewritten = substituteImportMeta(rewritten, filePath)
+		}
+
+		checkModuleSyntax(rewritten, filePath)
+		modules.set(id, { filePath, code: rewritten })
+	}
+
+	return { entryId: ids.get(entryAbs), modules, warnings, externals: usedExternals }
+
+	// Returns a bundled module id, or null for externals / unresolved specs.
+	function resolveDep(spec, filePath, fromDir) {
+		if (declaredExternals.has(spec)) {
+			usedExternals.add(spec)
+			return null
+		}
+		if (spec.startsWith("node:")) {
+			if (opts.target === "node") {
+				usedExternals.add(spec)
+				return null
+			}
+			throw new Error(
+				`cannot bundle "${spec}" (from ${filePath}): node builtins are not available ` +
+				`in the "browser" target. Use --target=node, or --external=${spec} to leave it as a runtime require.`)
+		}
+		const resolved = resolveSpecifier(spec, fromDir, conditions)
+		if (!resolved) {
+			warnings.push(`unresolved import "${spec}" from ${filePath}`)
+			return null
+		}
+		const depId = assignId(resolved)
+		if (!modules.has(depId)) stack.push(resolved)
+		return depId
+	}
+}
+
+function emitBundle({ entryId, modules, externals, format }) {
+	const chunks = []
+	const hasExternals = externals.size > 0
+	const canUseEsmImports = format === "esm"
+
+	if (hasExternals && canUseEsmImports) {
+		const entries = []
+		let i = 0
+		for (const spec of externals) {
+			const local = `__qn_ext_${i++}`
+			chunks.push(`import * as ${local} from ${JSON.stringify(spec)};\n`)
+			entries.push(`\t${JSON.stringify(spec)}: ${local}`)
+		}
+		chunks.push(`var __qn_externals = {\n${entries.join(",\n")}\n};\n`)
+	}
+
+	chunks.push(`// Generated by qn bundle\n`)
+	chunks.push(`var __qn_modules = {};\n`)
+	chunks.push(`var __qn_cache = {};\n`)
+	chunks.push(`function __qn_require(id) {\n`)
+	chunks.push(`\tif (id in __qn_cache) return __qn_cache[id].exports;\n`)
+	chunks.push(`\tvar fn = __qn_modules[id];\n`)
+	if (hasExternals && canUseEsmImports) {
+		// `import * as` yields a Module Namespace with a .default property
+		// if the source module had one; plain CJS default handling below is
+		// what Sucrase's require() callers expect.
+		chunks.push(`\tif (!fn) {\n`)
+		chunks.push(`\t\tvar ext = __qn_externals[id];\n`)
+		chunks.push(`\t\tif (ext) return ext;\n`)
+		chunks.push(`\t\tthrow new Error("qn bundle: module not found: " + id);\n`)
+		chunks.push(`\t}\n`)
+	} else {
+		chunks.push(`\tif (!fn) throw new Error("qn bundle: module not found: " + id);\n`)
+	}
+	chunks.push(`\tvar mod = __qn_cache[id] = { exports: {} };\n`)
+	chunks.push(`\tfn.call(mod.exports, mod.exports, __qn_require, mod);\n`)
+	chunks.push(`\treturn mod.exports;\n`)
+	chunks.push(`}\n`)
+
+	for (const [id, { filePath, code }] of modules) {
+		chunks.push(`\n// ${filePath}\n__qn_modules[${JSON.stringify(id)}] = function(exports, require, module) {\n${code}\n};\n`)
+	}
+	chunks.push(`\n__qn_require(${JSON.stringify(entryId)});\n`)
+	return chunks.join("")
+}
+
+/* ------------------------------------------------------------------ *
+ * Public API                                                          *
+ * ------------------------------------------------------------------ */
+
+export async function build(options) {
+	const entrypoints = options.entrypoints || options.entryPoints
+	if (!Array.isArray(entrypoints) || entrypoints.length === 0) {
+		throw new Error("bundle: entrypoints option is required")
+	}
+	const format = options.format || "esm"
+	if (!FORMATS.includes(format)) throw new Error(`bundle: unsupported format "${format}" (expected ${FORMATS.join("|")})`)
+	const target = options.target || "browser"
+	if (!TARGETS.includes(target)) throw new Error(`bundle: unsupported target "${target}" (expected ${TARGETS.join("|")})`)
+
+	const outdir = options.outdir ? resolve(options.outdir) : null
+	const production = options.production !== false
+	const opts = {
+		target,
+		external: options.external || [],
+		jsxRuntime: options.jsxRuntime || "automatic",
+		jsxImportSource: options.jsxImportSource || "react",
+		production,
+	}
+
+	const outputs = []
+	const logs = []
+	const writtenPaths = new Map()
+
+	for (const entry of entrypoints) {
+		const { entryId, modules, warnings, externals: usedExternals } = bundleEntry(entry, opts)
+		for (const message of warnings) logs.push({ level: "warning", message })
+		let body = emitBundle({ entryId, modules, externals: usedExternals, format })
+		if (format === "iife") body = `(function(){\n${body}\n})();\n`
+
+		let outPath = null
+		if (outdir) {
+			const name = basename(entry).replace(/\.(tsx?|jsx?|mjs|cjs)$/, "") + ".js"
+			outPath = join(outdir, name)
+			const prior = writtenPaths.get(outPath)
+			if (prior) {
+				throw new Error(
+					`two entry points map to the same output "${outPath}": ${prior} and ${entry}. ` +
+					`Rename one of the entry points.`)
+			}
+			writtenPaths.set(outPath, entry)
+			mkdirSync(outdir, { recursive: true })
+			writeFileSync(outPath, body)
+		}
+		outputs.push({ path: outPath, text: body, kind: "entry-point" })
+	}
+
+	return { success: true, outputs, logs }
+}
+
+/* ------------------------------------------------------------------ *
+ * CLI                                                                 *
+ * ------------------------------------------------------------------ */
+
+const HELP = `Usage: qn build <entrypoint...> [options]
+
+Bundle JavaScript/TypeScript entry points into single-file outputs.
+
+Options:
+  --outdir DIR              Output directory (default: ./dist)
+  --format esm|iife         Output format (default: esm)
+  --target browser|node     Resolution conditions (default: browser)
+  --external PKG            Leave PKG unresolved (repeatable)
+  --jsx-import-source SRC   Import source for JSX runtime (default: react)
+  --development             Use development mode (conditions + jsx-dev-runtime)
+  --help, -h                Show this help
+`
+
+export async function cli(args) {
+	const entrypoints = []
+	let outdir = "./dist"
+	let format = "esm"
+	let target = "browser"
+	let jsxImportSource = "react"
+	let production = true
+	const external = []
+
+	const valueOf = (i, name) => {
+		const arg = args[i]
+		const eq = arg.indexOf("=")
+		if (eq >= 0) return { value: arg.slice(eq + 1), next: i + 1 }
+		if (i + 1 >= args.length) {
+			console.error(`Missing value for ${name}`)
+			process.exit(1)
+		}
+		return { value: args[i + 1], next: i + 2 }
+	}
+
+	for (let i = 0; i < args.length;) {
+		const arg = args[i]
+		if (arg === "--help" || arg === "-h") { console.log(HELP); return }
+		if (arg === "--development" || arg === "--dev") { production = false; i++; continue }
+		const name = arg.split("=")[0]
+		if (name === "--outdir") { const { value, next } = valueOf(i, name); outdir = value; i = next }
+		else if (name === "--format") { const { value, next } = valueOf(i, name); format = value; i = next }
+		else if (name === "--target") { const { value, next } = valueOf(i, name); target = value; i = next }
+		else if (name === "--external") { const { value, next } = valueOf(i, name); external.push(value); i = next }
+		else if (name === "--jsx-import-source") { const { value, next } = valueOf(i, name); jsxImportSource = value; i = next }
+		else if (arg.startsWith("-")) { console.error(`Unknown option: ${arg}`); process.exit(1) }
+		else { entrypoints.push(arg); i++ }
+	}
+
+	if (entrypoints.length === 0) {
+		console.error("qn build: no entrypoints given")
+		console.error(HELP)
+		process.exit(1)
+	}
+
+	let result
+	try {
+		result = await build({ entrypoints, outdir, format, target, external, jsxImportSource, production })
+	} catch (e) {
+		console.error(`qn build: ${e.message}`)
+		process.exit(1)
+	}
+	for (const log of result.logs) {
+		if (log.level === "warning") console.warn(`warn: ${log.message}`)
+	}
+	for (const out of result.outputs) {
+		if (out.path) console.log(out.path)
+	}
+}

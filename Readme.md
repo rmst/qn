@@ -58,6 +58,13 @@ NODE_PATH=./my_modules:./lib ./bin/qn script.js
 ./bin/qx script.js  # zx-compatible shell scripting with $ function
 ```
 
+**Bundle a web frontend**
+```bash
+./bin/qn build src/main.tsx --outdir=dist --jsx-import-source=preact
+```
+
+Walks static imports from an entry point, transforms TS/JSX via Sucrase, resolves `node_modules` with `package.json` exports, and emits a single self-contained JS file. No tree shaking or minification — a roughly Bun.build-compatible API for simple cases.
+
 
 ### Building Standalone Applications
 

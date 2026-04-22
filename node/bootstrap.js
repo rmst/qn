@@ -229,6 +229,9 @@ if (scriptArgs[1] === 'install') {
 } else if (scriptArgs[1] === 'run') {
 	const { cli } = await import("qn:run")
 	await cli(scriptArgs.slice(2))
+} else if (scriptArgs[1] === 'build') {
+	const { cli } = await import("qn:bundle")
+	await cli(scriptArgs.slice(2))
 } else if (scriptArgs[1] === '-e' || scriptArgs[1] === '--eval') {
 	if (scriptArgs.length < 3) {
 		std.err.puts('Error: -e requires an argument\n')
