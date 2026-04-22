@@ -10,5 +10,5 @@
 	url = https://github.com/libuv/libuv.git
 [submodule "vendor/sucrase-js"]
 	path = vendor/sucrase-js
-	url = /Users/simon/dev/sucrase-js
+	url = https://github.com/rmst/sucrase-js.git
 	ignore = dirty
