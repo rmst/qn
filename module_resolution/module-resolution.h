@@ -574,18 +574,48 @@ static size_t package_name_length(const char *name) {
 /**
  * Resolve a single exports target value. Handles both plain strings
  * ("./dist/index.js") and conditional objects ({"import": "...", "default": "..."}).
+ *
+ * If `capture` is non-NULL, the target is a wildcard pattern target: the
+ * single '*' in the string is replaced with the captured segment (length
+ * `capture_len`). Target strings with zero or multiple '*' are rejected
+ * when `capture` is non-NULL, matching the Node.js ESM spec.
+ *
  * Returns an allocated absolute path, or NULL.
  */
-static char *resolve_export_target(JSContext *ctx, JSValue target, const char *pkg_dir) {
+static char *resolve_export_target(JSContext *ctx, JSValue target, const char *pkg_dir,
+                                   const char *capture, size_t capture_len) {
     if (JS_IsString(target)) {
         const char *str = JS_ToCString(ctx, target);
         if (!str) return NULL;
         /* Skip leading "./" from relative export paths */
         const char *rel = str;
         if (rel[0] == '.' && rel[1] == '/') rel += 2;
-        size_t len = strlen(pkg_dir) + strlen(rel) + 2;
-        char *result = js_malloc(ctx, len);
-        if (result) snprintf(result, len, "%s/%s", pkg_dir, rel);
+
+        char *result = NULL;
+        if (capture) {
+            /* Wildcard target: substitute capture into the single '*' */
+            const char *star = strchr(rel, '*');
+            if (star && !strchr(star + 1, '*')) {
+                size_t pkg_len = strlen(pkg_dir);
+                size_t before_len = star - rel;
+                size_t after_len = strlen(star + 1);
+                size_t total = pkg_len + 1 + before_len + capture_len + after_len + 1;
+                result = js_malloc(ctx, total);
+                if (result) {
+                    char *p = result;
+                    memcpy(p, pkg_dir, pkg_len); p += pkg_len;
+                    *p++ = '/';
+                    memcpy(p, rel, before_len); p += before_len;
+                    memcpy(p, capture, capture_len); p += capture_len;
+                    memcpy(p, star + 1, after_len); p += after_len;
+                    *p = '\0';
+                }
+            }
+        } else {
+            size_t len = strlen(pkg_dir) + strlen(rel) + 2;
+            result = js_malloc(ctx, len);
+            if (result) snprintf(result, len, "%s/%s", pkg_dir, rel);
+        }
         JS_FreeCString(ctx, str);
         return result;
     }
@@ -595,7 +625,7 @@ static char *resolve_export_target(JSContext *ctx, JSValue target, const char *p
         for (int i = 0; conditions[i]; i++) {
             JSValue val = JS_GetPropertyStr(ctx, target, conditions[i]);
             if (!JS_IsUndefined(val) && !JS_IsException(val)) {
-                char *result = resolve_export_target(ctx, val, pkg_dir);
+                char *result = resolve_export_target(ctx, val, pkg_dir, capture, capture_len);
                 JS_FreeValue(ctx, val);
                 if (result) return result;
             } else {
@@ -604,6 +634,71 @@ static char *resolve_export_target(JSContext *ctx, JSValue target, const char *p
         }
     }
     return NULL;
+}
+
+/**
+ * Find the best wildcard exports key matching `subpath_key`.
+ *
+ * Iterates own enumerable string keys of `exports_val`, considers only keys
+ * with exactly one '*', and picks the one whose pre-'*' prefix is longest
+ * (Node.js BEST_MATCH tie-break). On a match, the captured segment points
+ * into `subpath_key` and must remain valid for the caller's use.
+ *
+ * Returns an allocated target path on match, NULL otherwise.
+ */
+static char *resolve_wildcard_export(JSContext *ctx, JSValue exports_val,
+                                     const char *subpath_key, const char *pkg_dir) {
+    JSPropertyEnum *tab;
+    uint32_t tab_len;
+    if (JS_GetOwnPropertyNames(ctx, &tab, &tab_len, exports_val,
+                               JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0) {
+        return NULL;
+    }
+
+    int best_idx = -1;
+    size_t best_prefix_len = 0;
+    size_t best_capture_off = 0;
+    size_t best_capture_len = 0;
+    size_t sp_len = strlen(subpath_key);
+
+    for (uint32_t i = 0; i < tab_len; i++) {
+        const char *key = JS_AtomToCString(ctx, tab[i].atom);
+        if (!key) continue;
+        const char *star = strchr(key, '*');
+        if (star && !strchr(star + 1, '*')) {
+            size_t prefix_len = star - key;
+            const char *suffix = star + 1;
+            size_t suffix_len = strlen(suffix);
+            if (sp_len >= prefix_len + suffix_len &&
+                strncmp(subpath_key, key, prefix_len) == 0 &&
+                strcmp(subpath_key + sp_len - suffix_len, suffix) == 0) {
+                if (best_idx < 0 || prefix_len > best_prefix_len) {
+                    best_idx = (int)i;
+                    best_prefix_len = prefix_len;
+                    best_capture_off = prefix_len;
+                    best_capture_len = sp_len - prefix_len - suffix_len;
+                }
+            }
+        }
+        JS_FreeCString(ctx, key);
+    }
+
+    char *result = NULL;
+    if (best_idx >= 0) {
+        JSValue entry = JS_GetProperty(ctx, exports_val, tab[best_idx].atom);
+        if (!JS_IsUndefined(entry) && !JS_IsException(entry)) {
+            result = resolve_export_target(ctx, entry, pkg_dir,
+                                           subpath_key + best_capture_off,
+                                           best_capture_len);
+        }
+        JS_FreeValue(ctx, entry);
+    }
+
+    for (uint32_t i = 0; i < tab_len; i++) {
+        JS_FreeAtom(ctx, tab[i].atom);
+    }
+    js_free(ctx, tab);
+    return result;
 }
 
 /**
@@ -638,22 +733,36 @@ static char *resolve_package_json(JSContext *ctx, const char *pkg_dir, const cha
         char subpath_key[256];
         if (strcmp(subpath, ".") == 0) {
             strcpy(subpath_key, ".");
+        } else if (strlen(subpath) + 3 > sizeof(subpath_key)) {
+            /* Subpath too long for our fixed buffer: surface rather than
+             * silently truncate, which could cause a spurious exports match. */
+            fprintf(stderr,
+                    "qn: module resolution subpath too long (%zu bytes) in '%s'\n",
+                    strlen(subpath), pkg_dir);
+            JS_FreeValue(ctx, exports_val);
+            JS_FreeValue(ctx, pkg);
+            return NULL;
         } else {
             snprintf(subpath_key, sizeof(subpath_key), "./%s", subpath);
         }
 
         if (JS_IsString(exports_val) && strcmp(subpath, ".") == 0) {
-            result = resolve_export_target(ctx, exports_val, pkg_dir);
+            result = resolve_export_target(ctx, exports_val, pkg_dir, NULL, 0);
         } else if (JS_IsObject(exports_val)) {
             JSValue entry = JS_GetPropertyStr(ctx, exports_val, subpath_key);
             if (!JS_IsUndefined(entry) && !JS_IsException(entry)) {
-                result = resolve_export_target(ctx, entry, pkg_dir);
+                result = resolve_export_target(ctx, entry, pkg_dir, NULL, 0);
             }
             JS_FreeValue(ctx, entry);
 
+            /* No direct match: try wildcard subpath patterns like "./utils/*" */
+            if (!result && strcmp(subpath, ".") != 0) {
+                result = resolve_wildcard_export(ctx, exports_val, subpath_key, pkg_dir);
+            }
+
             /* If root import not found as ".", exports might be conditional directly */
             if (!result && strcmp(subpath, ".") == 0) {
-                result = resolve_export_target(ctx, exports_val, pkg_dir);
+                result = resolve_export_target(ctx, exports_val, pkg_dir, NULL, 0);
             }
         }
     }
@@ -663,7 +772,7 @@ static char *resolve_package_json(JSContext *ctx, const char *pkg_dir, const cha
     if (!result && strcmp(subpath, ".") == 0) {
         JSValue main_val = JS_GetPropertyStr(ctx, pkg, "main");
         if (JS_IsString(main_val)) {
-            result = resolve_export_target(ctx, main_val, pkg_dir);
+            result = resolve_export_target(ctx, main_val, pkg_dir, NULL, 0);
         }
         JS_FreeValue(ctx, main_val);
     }

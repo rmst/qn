@@ -334,6 +334,130 @@ describe('node_modules resolution', () => {
 		assert.strictEqual(output, 'nested')
 	})
 
+	test('resolves wildcard exports pattern', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/wpkg/dist/utils`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/wpkg/package.json`, JSON.stringify({
+			name: "wpkg",
+			exports: { "./utils/*": "./dist/utils/*.js" }
+		}))
+		writeFileSync(`${dir}/node_modules/wpkg/dist/utils/mime.js`, `export const mime = "text/plain";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { mime } from 'wpkg/utils/mime';
+			console.log(mime);
+		`)
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, 'text/plain')
+	})
+
+	test('wildcard exports with conditional target', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/wpkg/dist`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/wpkg/package.json`, JSON.stringify({
+			name: "wpkg",
+			exports: { "./lib/*": { "import": "./dist/*.js", "default": "./dist/*.js" } }
+		}))
+		writeFileSync(`${dir}/node_modules/wpkg/dist/a.js`, `export const v = "A";`)
+		writeFileSync(`${dir}/node_modules/wpkg/dist/b.js`, `export const v = "B";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { v as a } from 'wpkg/lib/a';
+			import { v as b } from 'wpkg/lib/b';
+			console.log(a + b);
+		`)
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, 'AB')
+	})
+
+	test('wildcard captures nested subpath', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/wpkg/dist/a/b`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/wpkg/package.json`, JSON.stringify({
+			name: "wpkg",
+			exports: { "./lib/*": "./dist/*.js" }
+		}))
+		writeFileSync(`${dir}/node_modules/wpkg/dist/a/b/c.js`, `export const v = "nested";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { v } from 'wpkg/lib/a/b/c';
+			console.log(v);
+		`)
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, 'nested')
+	})
+
+	test('wildcard longest-prefix tie-break', ({ dir }) => {
+		// Both "./*" and "./utils/*" match "./utils/mime".
+		// Per Node spec, longest prefix wins → "./utils/*".
+		mkdirSync(`${dir}/node_modules/wpkg/specific`, { recursive: true })
+		mkdirSync(`${dir}/node_modules/wpkg/generic/utils`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/wpkg/package.json`, JSON.stringify({
+			name: "wpkg",
+			exports: {
+				"./*": "./generic/*.js",
+				"./utils/*": "./specific/*.js"
+			}
+		}))
+		writeFileSync(`${dir}/node_modules/wpkg/specific/mime.js`, `export const src = "specific";`)
+		writeFileSync(`${dir}/node_modules/wpkg/generic/utils/mime.js`, `export const src = "generic";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { src } from 'wpkg/utils/mime';
+			console.log(src);
+		`)
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, 'specific')
+	})
+
+	test('direct exports key wins over wildcard pattern', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/wpkg/exact`, { recursive: true })
+		mkdirSync(`${dir}/node_modules/wpkg/wild`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/wpkg/package.json`, JSON.stringify({
+			name: "wpkg",
+			exports: {
+				"./utils/mime": "./exact/mime.js",
+				"./utils/*": "./wild/*.js"
+			}
+		}))
+		writeFileSync(`${dir}/node_modules/wpkg/exact/mime.js`, `export const src = "exact";`)
+		writeFileSync(`${dir}/node_modules/wpkg/wild/mime.js`, `export const src = "wild";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { src } from 'wpkg/utils/mime';
+			console.log(src);
+		`)
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, 'exact')
+	})
+
+	test('root "." does not match "./*" wildcard', ({ dir }) => {
+		// Root import should fall through to "main" field, not match "./*".
+		mkdirSync(`${dir}/node_modules/wpkg`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/wpkg/package.json`, JSON.stringify({
+			name: "wpkg",
+			main: "./main.js",
+			exports: { "./*": "./wild/*.js" }
+		}))
+		writeFileSync(`${dir}/node_modules/wpkg/main.js`, `export const src = "main";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { src } from 'wpkg';
+			console.log(src);
+		`)
+		// With qn's lenient resolver, a root import whose exports has only wildcard
+		// keys falls through to "main". We only assert it does NOT crash or silently
+		// pick a bogus wildcard target.
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, 'main')
+	})
+
+	test('wildcard with non-empty suffix', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/wpkg/dist`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/wpkg/package.json`, JSON.stringify({
+			name: "wpkg",
+			exports: { "./lib/*.js": "./dist/*.js" }
+		}))
+		writeFileSync(`${dir}/node_modules/wpkg/dist/thing.js`, `export const v = "suffix";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { v } from 'wpkg/lib/thing.js';
+			console.log(v);
+		`)
+		const output = $`${QN()} ${dir}/main.js`
+		assert.strictEqual(output, 'suffix')
+	})
+
 })
 
 describe('node_modules resolution with qn', () => {
