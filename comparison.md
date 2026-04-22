@@ -1,6 +1,6 @@
 # Comparison with Node.js and txiki.js
 
-Qn, Node.js, and txiki.js all use QuickJS (or a fork) + libuv but make very different design trade-offs.
+Qn, Node.js, and txiki.js all use libuv but pair it with different JavaScript engines (QuickJS in qn and txiki.js, V8 in Node.js) and make very different design trade-offs.
 
 ## Module-level C comparison (txiki.js)
 
