@@ -13,7 +13,7 @@
 
 import { readFileSync, mkdirSync, rmSync, cpSync, existsSync, readdirSync } from "node:fs"
 import { execFileSync } from "node:child_process"
-import { join, resolve, basename } from "node:path"
+import { join, resolve, basename, dirname } from "node:path"
 
 /**
  * Parse a dependency specifier into a type and value.
@@ -152,8 +152,19 @@ function runScript(pkgDir, name, opts = {}) {
 	if (!script) return
 
 	let env = { ...process.env }
-	if (opts.binDir) {
-		env.PATH = opts.binDir + ":" + (env.PATH || "")
+	let pathParts = []
+	if (opts.binDir) pathParts.push(opts.binDir)
+	// Ensure lifecycle scripts that invoke `qn` see the currently running binary,
+	// not whatever `qn` happens to be on PATH. Only applies when invoked by path —
+	// if invoked via PATH lookup (argv[0] is bare "qn"), PATH already resolves correctly.
+	let qnBin = process.argv[0]
+	if (qnBin.includes("/")) {
+		let qnAbs = resolve(qnBin)
+		pathParts.push(dirname(qnAbs))
+		env.QN_EXECPATH = qnAbs
+	}
+	if (pathParts.length) {
+		env.PATH = pathParts.join(":") + ":" + (env.PATH || "")
 	}
 	env.npm_package_name = pkg.name || ""
 	env.npm_lifecycle_event = name
