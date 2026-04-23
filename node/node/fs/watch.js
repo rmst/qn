@@ -54,7 +54,7 @@ function listDirsSync(path) {
 		return []
 	}
 	const dirs = []
-	for (const name of entries) {
+	for (const { name } of entries) {
 		const child = path + '/' + name
 		if (isDirSync(child)) dirs.push({ name, path: child })
 	}

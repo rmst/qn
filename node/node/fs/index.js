@@ -186,22 +186,31 @@ export const readFileSync = (path, options) => {
 	}
 }
 
+// uv_dirent_type (libuv uv.h): 0=UNKNOWN, 1=FILE, 2=DIR, 3=LINK,
+// 4=FIFO, 5=SOCKET, 6=CHAR, 7=BLOCK. Translate to S_IF* bits; 0 means
+// the filesystem didn't fill d_type so we have to lstat.
+const UV_DIRENT_TO_IFMT = [0, S_IFREG, S_IFDIR, S_IFLNK, S_IFIFO, S_IFSOCK, S_IFCHR, S_IFBLK]
+
 export const readdirSync = (path, options = {}) => {
 	if (options?.recursive) {
 		throw new Error("readdirSync: 'recursive' option is not supported")
 	}
 	const withFileTypes = options?.withFileTypes || false
 
-	const files = native_readdir(path)
+	const entries = native_readdir(path)
 
 	if (!withFileTypes) {
-		return files
+		return entries.map(e => e.name)
 	}
 
-	return files.map(name => {
-		const fullPath = path.endsWith('/') ? `${path}${name}` : `${path}/${name}`
-		const st = native_lstat(fullPath)
-		return new Dirent(name, path, st.mode)
+	return entries.map(({ name, type }) => {
+		let mode = UV_DIRENT_TO_IFMT[type] || 0
+		if (mode === 0) {
+			// DT_UNKNOWN — filesystem didn't fill d_type, fall back to lstat.
+			const fullPath = path.endsWith('/') ? `${path}${name}` : `${path}/${name}`
+			mode = native_lstat(fullPath).mode
+		}
+		return new Dirent(name, path, mode)
 	})
 }
 
@@ -365,8 +374,8 @@ export function cpSync(src, dest, options = {}) {
 
 		const entries = native_readdir(src)
 
-		for (const entry of entries) {
-			cpSync(`${src}/${entry}`, `${dest}/${entry}`, options)
+		for (const { name } of entries) {
+			cpSync(`${src}/${name}`, `${dest}/${name}`, options)
 		}
 	} else {
 		const data = readFileSync(src)

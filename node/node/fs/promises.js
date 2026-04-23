@@ -156,6 +156,9 @@ export function lstat(path) {
 	return uv_fs.lstat(String(path)).then(addStatMethods)
 }
 
+// uv_dirent_type → S_IF* bits; 0 (UNKNOWN) means we have to lstat.
+const UV_DIRENT_TO_IFMT = [0, S_IFREG, S_IFDIR, S_IFLNK, S_IFIFO, S_IFSOCK, S_IFCHR, S_IFBLK]
+
 export async function readdir(path, options) {
 	if (options && options.recursive) {
 		throw new Error("readdir: 'recursive' option is not supported")
@@ -164,13 +167,16 @@ export async function readdir(path, options) {
 	const entries = await uv_fs.readdir(p)
 	if (options && options.withFileTypes) {
 		const results = []
-		for (const name of entries) {
-			const s = await uv_fs.lstat(p + '/' + name)
+		for (const { name, type } of entries) {
+			let mode = UV_DIRENT_TO_IFMT[type] || 0
+			if (mode === 0) {
+				mode = (await uv_fs.lstat(p + '/' + name)).mode
+			}
 			results.push({
 				name,
 				parentPath: p,
 				path: p,
-				_mode: s.mode,
+				_mode: mode,
 				isDirectory() { return (this._mode & S_IFMT) === S_IFDIR },
 				isFile() { return (this._mode & S_IFMT) === S_IFREG },
 				isSymbolicLink() { return (this._mode & S_IFMT) === S_IFLNK },
@@ -182,7 +188,7 @@ export async function readdir(path, options) {
 		}
 		return results
 	}
-	return entries
+	return entries.map(e => e.name)
 }
 
 export async function mkdir(path, options) {

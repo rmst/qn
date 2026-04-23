@@ -225,8 +225,12 @@ static void qn_fs_req_cb(uv_fs_t *req) {
 			uv_dirent_t ent;
 			uint32_t i = 0;
 			while (uv_fs_scandir_next(req, &ent) != UV_EOF) {
-				JS_DefinePropertyValueUint32(ctx, arr, i,
+				JSValue obj = JS_NewObject(ctx);
+				JS_DefinePropertyValueStr(ctx, obj, "name",
 					JS_NewString(ctx, ent.name), JS_PROP_C_W_E);
+				JS_DefinePropertyValueStr(ctx, obj, "type",
+					JS_NewInt32(ctx, ent.type), JS_PROP_C_W_E);
+				JS_DefinePropertyValueUint32(ctx, arr, i, obj, JS_PROP_C_W_E);
 				i++;
 			}
 			arg = arr;
@@ -808,7 +812,7 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 			result = JS_NewString(ctx, req.ptr);
 		break;
 
-	/* -- readdir returning string array -- */
+	/* -- readdir returning [{name, type}] where type is uv_dirent_type -- */
 	case FS_READDIR: {
 		s1 = JS_ToCString(ctx, args[0]);
 		if (!s1) return JS_EXCEPTION;
@@ -819,8 +823,12 @@ static JSValue js_uv_fssync(JSContext *ctx, JSValueConst this_val,
 			uv_dirent_t ent;
 			uint32_t idx = 0;
 			while (uv_fs_scandir_next(&req, &ent) != UV_EOF) {
-				JS_DefinePropertyValueUint32(ctx, arr, idx,
+				JSValue obj = JS_NewObject(ctx);
+				JS_DefinePropertyValueStr(ctx, obj, "name",
 					JS_NewString(ctx, ent.name), JS_PROP_C_W_E);
+				JS_DefinePropertyValueStr(ctx, obj, "type",
+					JS_NewInt32(ctx, ent.type), JS_PROP_C_W_E);
+				JS_DefinePropertyValueUint32(ctx, arr, idx, obj, JS_PROP_C_W_E);
 				idx++;
 			}
 			result = arr;
