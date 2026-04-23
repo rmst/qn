@@ -732,6 +732,17 @@ static JSValue js_vm_getPlatform(JSContext *ctx, JSValueConst this_val,
 	return JS_NewString(ctx, info.sysname);
 }
 
+/* JS: getExecPath() → string (absolute path to the current executable) */
+static JSValue js_vm_getExecPath(JSContext *ctx, JSValueConst this_val,
+                                  int argc, JSValueConst *argv) {
+	char buf[4096];
+	size_t size = sizeof(buf);
+	int r = uv_exepath(buf, &size);
+	if (r != 0)
+		return qn_throw_errno(ctx, r);
+	return JS_NewStringLen(ctx, buf, size);
+}
+
 /* JS: getArch() → string ("x64", "arm64", etc.) */
 static JSValue js_vm_getArch(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv) {
@@ -933,6 +944,7 @@ static const JSCFunctionListEntry vm_funcs[] = {
 	QN_CFUNC_DEF("hrtime", 0, js_vm_hrtime),
 	QN_CFUNC_DEF("getPlatform", 0, js_vm_getPlatform),
 	QN_CFUNC_DEF("getArch", 0, js_vm_getArch),
+	QN_CFUNC_DEF("getExecPath", 0, js_vm_getExecPath),
 	QN_CFUNC_DEF("getUserInfo", 1, js_vm_getUserInfo),
 #if !defined(_WIN32)
 	QN_CFUNC_DEF("getuid", 0, js_vm_getuid),

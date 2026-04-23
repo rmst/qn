@@ -152,20 +152,13 @@ function runScript(pkgDir, name, opts = {}) {
 	if (!script) return
 
 	let env = { ...process.env }
+	// Ensure lifecycle scripts that invoke `qn` see the currently running binary,
+	// not whatever `qn` happens to be on PATH.
 	let pathParts = []
 	if (opts.binDir) pathParts.push(opts.binDir)
-	// Ensure lifecycle scripts that invoke `qn` see the currently running binary,
-	// not whatever `qn` happens to be on PATH. Only applies when invoked by path —
-	// if invoked via PATH lookup (argv[0] is bare "qn"), PATH already resolves correctly.
-	let qnBin = process.argv[0]
-	if (qnBin.includes("/")) {
-		let qnAbs = resolve(qnBin)
-		pathParts.push(dirname(qnAbs))
-		env.QN_EXECPATH = qnAbs
-	}
-	if (pathParts.length) {
-		env.PATH = pathParts.join(":") + ":" + (env.PATH || "")
-	}
+	pathParts.push(dirname(process.execPath))
+	env.PATH = pathParts.join(":") + ":" + (env.PATH || "")
+	env.QN_EXECPATH = process.execPath
 	env.npm_package_name = pkg.name || ""
 	env.npm_lifecycle_event = name
 

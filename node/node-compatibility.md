@@ -353,7 +353,8 @@ Notes: Minimal fd-backed streams, not the full Node.js stream infrastructure.
 | `getuid` / `getgid` | ✅ | |
 | `hrtime` / `memoryUsage` / `cpuUsage` | ❌ | |
 | `arch` | ✅ | |
-| `execPath` / `execArgv` | ❌ | |
+| `execPath` | ✅ | Via `uv_exepath()` — absolute, symlink-resolved |
+| `execArgv` | ❌ | |
 
 ### node:os
 
