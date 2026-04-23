@@ -4,7 +4,7 @@ import {
 	isatty as _isatty, ttyGetWinSize as _ttyGetWinSize,
 	getCwd as _getCwd, chdir as _chdir,
 	kill as _kill, getPid as _getPid, getPlatform as _getPlatform,
-	getArch as _getArch,
+	getArch as _getArch, getExecPath as _getExecPath,
 	getuid as _getuid, getgid as _getgid, getgroups as _getgroups,
 	setuid as _setuid, setgid as _setgid, setgroups as _setgroups,
 } from 'qn_vm';
@@ -63,6 +63,9 @@ const signalHandles = new Map();
 const process = {
   // Command line arguments
   argv: [...scriptArgs],  // TODO: maybe we have to unwrap these
+
+  // Absolute path to the interpreter executable
+  execPath: _getExecPath(),
 
   // Exit code - synced with globalThis.__qn_exitCode for C-level exit handler
   get exitCode() {
@@ -252,5 +255,5 @@ const process = {
 export default process;
 
 // Also export individual properties for named imports
-export const { argv, exit, exitCode, cwd, chdir, kill, pid, getuid, getgid, getgroups, setuid, setgid, setgroups, platform, arch, version, versions, stdin, stdout, stderr } = process;
+export const { argv, execPath, exit, exitCode, cwd, chdir, kill, pid, getuid, getgid, getgroups, setuid, setgid, setgroups, platform, arch, version, versions, stdin, stdout, stderr } = process;
 export const env = process.env;  // Export env separately to preserve the Proxy
