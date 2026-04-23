@@ -87,4 +87,19 @@ uint8_t *qn_apply_source_transform(JSContext *ctx, uint8_t *buf,
 JSValue js_qn_set_source_transform(JSContext *ctx, JSValueConst this_val,
                                     int argc, JSValueConst *argv);
 
+/*
+ * Module resolver fallback hook (per-thread).
+ * Consulted when the runtime fails to resolve a bare import through NODE_PATH
+ * or node_modules. Signature: fn(specifier, baseName) -> absPath | null.
+ * Used to apply TypeScript `compilerOptions.paths` / `baseUrl` at runtime.
+ * Returned string is js_malloc'd and must be js_free'd by the caller.
+ */
+void qn_set_module_resolver_fallback(JSContext *ctx, JSValue fn);
+void qn_free_module_resolver_fallback(JSRuntime *rt);
+char *qn_apply_module_resolver_fallback(JSContext *ctx, const char *specifier,
+                                          const char *base_name);
+/* JS-callable: globalThis.__qn_setModuleResolverFallback(fn) */
+JSValue js_qn_set_module_resolver_fallback(JSContext *ctx, JSValueConst this_val,
+                                             int argc, JSValueConst *argv);
+
 #endif /* QN_VM_H */

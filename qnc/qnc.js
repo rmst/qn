@@ -716,6 +716,8 @@ function generateCFile(entries, importMap, initModules, embeddedNames,
   { JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "__qn_setSourceTransform",
       JS_NewCFunction(ctx, js_qn_set_source_transform, "__qn_setSourceTransform", 1));
+    JS_SetPropertyStr(ctx, g, "__qn_setModuleResolverFallback",
+      JS_NewCFunction(ctx, js_qn_set_module_resolver_fallback, "__qn_setModuleResolverFallback", 1));
     JS_FreeValue(ctx, g); }
   static const char worker_init_src[] =
     "import \\"node-globals\\"\\n"
@@ -767,6 +769,8 @@ function generateCFile(entries, importMap, initModules, embeddedNames,
   { JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "__qn_setSourceTransform",
       JS_NewCFunction(ctx, js_qn_set_source_transform, "__qn_setSourceTransform", 1));
+    JS_SetPropertyStr(ctx, g, "__qn_setModuleResolverFallback",
+      JS_NewCFunction(ctx, js_qn_set_module_resolver_fallback, "__qn_setModuleResolverFallback", 1));
     JS_FreeValue(ctx, g); }\n`
 
 	// Eval entry bytecodes (scripts and entry modules)
@@ -781,6 +785,7 @@ function generateCFile(entries, importMap, initModules, embeddedNames,
   int exit_code = qn_call_exit_handler(ctx);
   qn_vm_free(rt);
   qn_free_source_transform(rt);
+  qn_free_module_resolver_fallback(rt);
   js_std_free_handlers(rt);
   JS_FreeContext(ctx);
   JS_FreeRuntime(rt);

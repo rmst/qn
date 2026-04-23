@@ -81,6 +81,77 @@ JSValue js_qn_set_source_transform(JSContext *ctx, JSValueConst this_val,
 	return JS_UNDEFINED;
 }
 
+/* --------------------------------------------------------------------------
+ * Module resolver fallback hook (per-thread)
+ *
+ * Consulted when the C resolver has exhausted its normal bare-import search
+ * (NODE_PATH, node_modules) and would otherwise return an unresolved name.
+ * Registered from JS via globalThis.__qn_setModuleResolverFallback(fn). Used
+ * to apply TypeScript tsconfig.json `compilerOptions.paths` at runtime.
+ * -------------------------------------------------------------------------- */
+
+static _Thread_local int g_resolver_fallback_set = 0;
+static _Thread_local JSValue g_resolver_fallback_fn;
+static _Thread_local JSContext *g_resolver_fallback_ctx = NULL;
+
+void qn_set_module_resolver_fallback(JSContext *ctx, JSValue fn) {
+	if (g_resolver_fallback_set && g_resolver_fallback_ctx) {
+		JS_FreeValue(g_resolver_fallback_ctx, g_resolver_fallback_fn);
+	}
+	g_resolver_fallback_fn = JS_DupValue(ctx, fn);
+	g_resolver_fallback_ctx = ctx;
+	g_resolver_fallback_set = 1;
+}
+
+void qn_free_module_resolver_fallback(JSRuntime *rt) {
+	if (g_resolver_fallback_set) {
+		JS_FreeValueRT(rt, g_resolver_fallback_fn);
+		g_resolver_fallback_set = 0;
+		g_resolver_fallback_ctx = NULL;
+	}
+}
+
+char *qn_apply_module_resolver_fallback(JSContext *ctx, const char *specifier,
+                                          const char *base_name) {
+	if (!g_resolver_fallback_set)
+		return NULL;
+	JSValue args[2];
+	args[0] = JS_NewString(ctx, specifier ? specifier : "");
+	args[1] = JS_NewString(ctx, base_name ? base_name : "");
+	JSValue result = JS_Call(ctx, g_resolver_fallback_fn, JS_UNDEFINED, 2, args);
+	JS_FreeValue(ctx, args[0]);
+	JS_FreeValue(ctx, args[1]);
+	if (JS_IsException(result)) {
+		JS_FreeValue(ctx, result);
+		return NULL;
+	}
+	if (!JS_IsString(result)) {
+		JS_FreeValue(ctx, result);
+		return NULL;
+	}
+	size_t len;
+	const char *s = JS_ToCStringLen(ctx, &len, result);
+	JS_FreeValue(ctx, result);
+	if (!s || len == 0) {
+		if (s) JS_FreeCString(ctx, s);
+		return NULL;
+	}
+	char *out = js_malloc(ctx, len + 1);
+	if (!out) {
+		JS_FreeCString(ctx, s);
+		return NULL;
+	}
+	memcpy(out, s, len + 1);
+	JS_FreeCString(ctx, s);
+	return out;
+}
+
+JSValue js_qn_set_module_resolver_fallback(JSContext *ctx, JSValueConst this_val,
+                                             int argc, JSValueConst *argv) {
+	qn_set_module_resolver_fallback(ctx, argv[0]);
+	return JS_UNDEFINED;
+}
+
 #include <string.h>
 #if !defined(_WIN32)
 #include <termios.h>

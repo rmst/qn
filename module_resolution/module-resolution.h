@@ -30,6 +30,14 @@
 #include "quickjs/cutils.h"
 #include "quickjs/quickjs-libc.h"
 
+/* Forward declarations for hooks implemented in qn-vm.c. We can't include
+   qn-vm.h here because this header is also used by qnc's compile-time path
+   (which doesn't link the vm). The symbols resolve at link time for the
+   runtime; compile-time callers never reach the hook call site. */
+extern char *qn_apply_module_resolver_fallback(JSContext *ctx,
+                                                 const char *specifier,
+                                                 const char *base_name);
+
 /* ========================================================================
  * DEBUG OUTPUT
  * ======================================================================== */
@@ -1227,6 +1235,21 @@ static char *qn_module_normalizer(JSContext *ctx, const char *base_name,
                 js_free(ctx, resolved);
                 MODULE_DEBUG("result (bare, realpath): '%s'", real);
                 return real;
+            }
+        }
+
+        /* Final fallback: consult the JS-side module resolver hook (tsconfig
+           paths / jsconfig paths). Passes the ORIGINAL specifier, since the
+           resolver matches against the user-written name. */
+        {
+            char *fallback = qn_apply_module_resolver_fallback(ctx, name, base_name);
+            if (fallback) {
+                char *real = resolve_realpath(ctx, fallback);
+                if (real) { js_free(ctx, fallback); fallback = real; }
+                if (real_base) js_free(ctx, real_base);
+                js_free(ctx, resolved);
+                MODULE_DEBUG("result (bare, fallback hook): '%s'", fallback);
+                return fallback;
             }
         }
 
