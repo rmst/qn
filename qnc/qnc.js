@@ -297,6 +297,63 @@ function resolveCompileRealpath(path) {
 	return real
 }
 
+/* ---- POSIX path helpers (for tsconfig paths env) ----
+   qnc.js runs on vanilla qjs without node:path, so we inline minimal
+   helpers sufficient for the tsconfig-paths resolver. */
+
+function normalizePosix(p) {
+	if (!p) return "."
+	const isAbs = p.startsWith("/")
+	const segs = p.split("/").filter(s => s && s !== ".")
+	const out = []
+	for (const s of segs) {
+		if (s === "..") {
+			if (out.length && out[out.length - 1] !== "..") out.pop()
+			else if (!isAbs) out.push("..")
+		} else out.push(s)
+	}
+	const res = out.join("/")
+	return isAbs ? "/" + res : (res || ".")
+}
+
+function joinPosix(...parts) {
+	const joined = parts.filter(Boolean).join("/").replace(/\/+/g, "/")
+	return normalizePosix(joined)
+}
+
+function resolvePosix(...parts) {
+	let acc = ""
+	for (const p of parts) {
+		if (!p) continue
+		if (p.startsWith("/")) acc = p
+		else acc = acc ? acc + "/" + p : p
+	}
+	return normalizePosix(acc || ".")
+}
+
+function isAbsolutePosix(p) { return typeof p === "string" && p.startsWith("/") }
+
+/* ---- tsconfig paths resolver (preloaded at module init; consulted by
+   resolverFn as a last-resort fallback for bare specifiers so source
+   trees using TypeScript `compilerOptions.paths` compile via qnc). */
+
+const _tsconfigPathsModulePath = extractedMode
+	? scriptDir + "/js/node/qn/tsconfig-paths.js"
+	: repoRoot + "/node/qn/tsconfig-paths.js"
+const { createTsconfigPathsResolver: _createTsconfigPathsResolver } =
+	await import(_tsconfigPathsModulePath)
+const tsconfigPathsResolver = _createTsconfigPathsResolver({
+	env: {
+		readFile: p => readFile(p),
+		isFile: p => fileExists(p),
+		isDir: p => dirExists(p),
+		dirname,
+		isAbsolute: isAbsolutePosix,
+		join: joinPosix,
+		resolve: resolvePosix,
+	}
+})
+
 /* ---- Source transforms ---- */
 
 let tsTransform = null
@@ -893,6 +950,21 @@ function compileProject(opts) {
 						const real = resolveCompileRealpath(withExt)
 						resolved = real || withExt
 						foundOnDisk = true
+					} else {
+						// tsconfig.json / jsconfig.json `compilerOptions.paths`
+						// fallback — consulted only when the usual lookups miss,
+						// so catch-all aliases don't shadow real packages.
+						// Walk up from the importing file's real directory.
+						const baseAbs = isAbsolutePosix(effectiveBase)
+							? effectiveBase
+							: resolvePosix(cwd, effectiveBase)
+						const fromDir = dirname(baseAbs)
+						const viaPaths = tsconfigPathsResolver.resolve(specifier, fromDir)
+						if (viaPaths) {
+							const real = resolveCompileRealpath(viaPaths)
+							resolved = real || viaPaths
+							foundOnDisk = true
+						}
 					}
 				}
 			}

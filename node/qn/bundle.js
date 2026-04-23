@@ -10,10 +10,12 @@
  * top-level await (module wrappers are sync).
  */
 
+import * as nodeFs from "node:fs"
+import * as nodePath from "node:path"
 import { readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs"
 import { dirname, join, resolve, extname, basename, isAbsolute } from "node:path"
 import { transform, parse } from "qn:sucrase"
-import { createTsconfigPathsResolver } from "./tsconfig-paths.js"
+import { createTsconfigPathsResolver, nodeEnv } from "./tsconfig-paths.js"
 
 const PROBE_EXTS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs", ".json"]
 const FORMATS = ["esm", "iife"]
@@ -182,7 +184,7 @@ function resolveBare(specifier, fromDir, conditions) {
 	}
 }
 
-const tsconfigPaths = createTsconfigPathsResolver({ probe })
+const tsconfigPaths = createTsconfigPathsResolver({ env: nodeEnv(nodeFs, nodePath), probe })
 
 function resolveSpecifier(specifier, fromDir, conditions) {
 	if (specifier.startsWith("./") || specifier.startsWith("../")) return probe(resolve(fromDir, specifier))

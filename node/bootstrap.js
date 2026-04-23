@@ -13,10 +13,12 @@
 
 import * as std from "std"
 import "node-globals"
+import * as nodeFs from "node:fs"
+import * as nodePath from "node:path"
 import { dirname, resolve } from "node:path"
 import { stripTypeScriptTypes } from "node:module"
 import { isCjs } from "./qn/cjs.js"
-import { createTsconfigPathsResolver } from "./qn/tsconfig-paths.js"
+import { createTsconfigPathsResolver, nodeEnv } from "./qn/tsconfig-paths.js"
 
 // Register source transform for .ts and CJS module loading.
 // Handles TypeScript stripping and CJS-to-ESM wrapping.
@@ -46,7 +48,7 @@ __qn_setSourceTransform((source, filename) => {
 // NODE_PATH / node_modules lookup fails. Invoked from the C resolver only on
 // miss, so pure-JS projects without a tsconfig pay almost nothing (one cached
 // walk to filesystem root on first miss).
-const __qnTsconfigPaths = createTsconfigPathsResolver()
+const __qnTsconfigPaths = createTsconfigPathsResolver({ env: nodeEnv(nodeFs, nodePath) })
 __qn_setModuleResolverFallback((specifier, baseName) => {
 	if (!baseName) return null
 	// Ignore non-disk bases (embedded://, node:, etc.).
