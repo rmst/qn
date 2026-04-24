@@ -468,6 +468,7 @@ cleanup_self:
 	JS_SetContextOpaque(ctx, NULL);
 	qn_vm_free(rt);
 	qn_free_source_transform(rt);
+	qn_free_module_resolver_fallback(rt);
 	js_std_free_handlers(rt);
 	JS_FreeContext(ctx);
 	JS_FreeRuntime(rt);

@@ -6,7 +6,7 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 
 **Node.js compatibility** (`node/node/`) — ~12.6K LOC JS. Shims for `node:fs`, `node:net`, `node:dgram`, `node:http`, `node:child_process`, `node:stream`, `node:crypto`, `node:path`, `node:events`, `node:url`, `node:os`, `node:buffer`, `node:assert`, `node:test`, `node:sqlite`, `node:module`, etc.
 
-**Bootstrap and REPL** (`node/bootstrap.js`, `node/node-globals.js`, `node/repl.js`) — ~1.9K LOC JS. Startup, global setup, interactive shell.
+**Bootstrap and REPL** (`node/bootstrap.js`, `node/node-globals.js`, `node/qn/init.js`, `node/repl.js`) — ~1.9K LOC JS. Startup, global setup, interactive shell. `qn:init` is the shared pre-user-code init (node-globals install, .ts/CJS source transform, tsconfig-paths resolver fallback); imported from `node/bootstrap.js` as well as from the qnc-generated main and worker contexts so all three paths start identical.
 
 **qn modules** (`node/qn/`) — ~0.5K LOC JS + crypto native module. Higher-level APIs: crypto primitives (`qn:crypto`, BearSSL-backed), async TLS I/O (`qn:tls`), HTTP server (`qn:http`), reverse proxy (`qn:proxy`), pseudo-terminal (`qn:pty`), TypeScript transform (`qn:sucrase`), package installer (`qn install`), bundler (`qn build` / `qn:bundle`), watch-mode runner (`qn --watch` / `qn:watch`, reuses `traceModuleGraph` from `qn:bundle`), libuv JS wrappers.
 

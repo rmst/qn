@@ -71,7 +71,7 @@ const CJS_SUFFIX = '\n});\nexport default __cjs_module.exports;\n'
 
 /* Default modules included in every qnc build unless --no-default-modules */
 const DEFAULT_MODULES = [
-	"node-globals", "qn:repl",
+	"qn:init", "qn:repl",
 	"node:fs", "node:fs/promises", "node:process", "node:child_process",
 	"node:crypto", "node:path", "node:events",
 	"node:stream", "node:stream/promises",
@@ -676,7 +676,7 @@ function dumpHex(bytes) {
 }
 
 function generateCFile(entries, importMap, initModules, embeddedNames,
-                       featureBitmap, stackSize, cModules) {
+                       featureBitmap, stackSize, cModules, noDefaultModules) {
 	let out = "/* File generated automatically by the QuickJS compiler. */\n\n"
 
 	out += '#include "quickjs-libc.h"\n'
@@ -793,34 +793,27 @@ function generateCFile(entries, importMap, initModules, embeddedNames,
 		out += `  JS_SetModuleLoaderFunc2(rt, qn_module_normalizer, qn_loader, js_module_check_attributes, &qn_resolver_ctx);\n`
 	out += "}\n\n"
 
-	// Worker context setup
-	out += `static void qn_setup_worker_context(JSContext *ctx) {
-  js_std_add_helpers(ctx, 0, NULL);
-  { JSValue g = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, g, "__qn_setSourceTransform",
-      JS_NewCFunction(ctx, js_qn_set_source_transform, "__qn_setSourceTransform", 1));
-    JS_SetPropertyStr(ctx, g, "__qn_setModuleResolverFallback",
-      JS_NewCFunction(ctx, js_qn_set_module_resolver_fallback, "__qn_setModuleResolverFallback", 1));
-    JS_FreeValue(ctx, g); }
-  static const char worker_init_src[] =
-    "import \\"node-globals\\"\\n"
-    "import { stripTypeScriptTypes } from \\"node:module\\"\\n"
-    "import { isCjs } from \\"qn:cjs\\"\\n"
-    "__qn_setSourceTransform((source, filename) => {\\n"
-    "  if (filename.endsWith(\\".ts\\")) {\\n"
-    "    try { source = stripTypeScriptTypes(source) }\\n"
-    "    catch { source = stripTypeScriptTypes(source, { mode: \\"transform\\" }) }\\n"
-    "  }\\n"
-    "  if (isCjs(filename)) {\\n"
-    "    source = \`import { __cjsLoad } from \\"qn:cjs\\"\\\\n\` +\\n"
-    "      \`const { module: __cjs_module } = __cjsLoad(import.meta.filename, import.meta.dirname, function(exports, require, module, __filename, __dirname) {\\\\n\` +\\n"
-    "      source + \`\\\\n});\\\\n\` +\\n"
-    "      \`export default __cjs_module.exports;\\\\n\`\\n"
-    "  }\\n"
-    "  return source\\n"
-    "})\\n";
-  JSValue val = JS_Eval(ctx, worker_init_src, sizeof(worker_init_src) - 1,
-                        "<worker-init>", JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+	// Bind the __qn_set* C functions on globalThis so JS code (notably qn:init)
+	// can register a source transform and a module resolver fallback.
+	out += `static void qn_install_qn_bindings(JSContext *ctx) {
+  JSValue g = JS_GetGlobalObject(ctx);
+  JS_SetPropertyStr(ctx, g, "__qn_setSourceTransform",
+    JS_NewCFunction(ctx, js_qn_set_source_transform, "__qn_setSourceTransform", 1));
+  JS_SetPropertyStr(ctx, g, "__qn_setModuleResolverFallback",
+    JS_NewCFunction(ctx, js_qn_set_module_resolver_fallback, "__qn_setModuleResolverFallback", 1));
+  JS_FreeValue(ctx, g);
+}\n\n`
+
+	// Run qn:init — the shared pre-user-code init module that installs
+	// node-globals, registers the .ts/CJS source transform, and registers the
+	// tsconfig-paths module resolver fallback. Same module imported by
+	// node/bootstrap.js so qn and qnc-built binaries behave identically.
+	// Only emitted when qn:init is embedded (i.e. default modules are on).
+	if (!noDefaultModules) {
+		out += `static void qn_run_qn_init(JSContext *ctx) {
+  static const char init_src[] = "import \\"qn:init\\"\\n";
+  JSValue val = JS_Eval(ctx, init_src, sizeof(init_src) - 1,
+                        "<qn-init>", JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
   if (JS_IsException(val)) {
     js_std_dump_error(ctx);
   } else {
@@ -830,6 +823,15 @@ function generateCFile(entries, importMap, initModules, embeddedNames,
     JS_FreeValue(ctx, ret);
   }
 }\n\n`
+	}
+
+	// Worker context setup
+	out += `static void qn_setup_worker_context(JSContext *ctx) {
+  js_std_add_helpers(ctx, 0, NULL);
+  qn_install_qn_bindings(ctx);\n`
+	if (!noDefaultModules)
+		out += `  qn_run_qn_init(ctx);\n`
+	out += `}\n\n`
 
 	// main()
 	out += `int main(int argc, char **argv)
@@ -849,12 +851,9 @@ function generateCFile(entries, importMap, initModules, embeddedNames,
   qn_vm_init(ctx);
   qn_worker_set_init(qn_setup_worker_runtime, JS_NewCustomContext, qn_setup_worker_context);
   js_std_add_helpers(ctx, argc, argv);
-  { JSValue g = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, g, "__qn_setSourceTransform",
-      JS_NewCFunction(ctx, js_qn_set_source_transform, "__qn_setSourceTransform", 1));
-    JS_SetPropertyStr(ctx, g, "__qn_setModuleResolverFallback",
-      JS_NewCFunction(ctx, js_qn_set_module_resolver_fallback, "__qn_setModuleResolverFallback", 1));
-    JS_FreeValue(ctx, g); }\n`
+  qn_install_qn_bindings(ctx);\n`
+	if (!noDefaultModules)
+		out += `  qn_run_qn_init(ctx);\n`
 
 	// Eval entry bytecodes (scripts and entry modules)
 	for (const e of entries) {
@@ -1170,7 +1169,7 @@ function compileProject(opts) {
 		// Just write the C file
 		const cContent = outputType === "c_main"
 			? generateCFile(entries, importMap, initModules,
-				[...embeddedNames], featureBitmap, stackSize, cModules)
+				[...embeddedNames], featureBitmap, stackSize, cModules, noDefaultModules)
 			: generateCBytecodeOnly(entries)
 		const f = std.open(outputFile, "w")
 		f.puts(cContent)
@@ -1179,7 +1178,7 @@ function compileProject(opts) {
 		// Generate C, compile to executable
 		const cfile = `/tmp/out${os.getpid ? os.getpid() : Date.now()}.c`
 		const cContent = generateCFile(entries, importMap, initModules,
-			[...embeddedNames], featureBitmap, stackSize, cModules)
+			[...embeddedNames], featureBitmap, stackSize, cModules, noDefaultModules)
 		const f = std.open(cfile, "w")
 		f.puts(cContent)
 		f.close()

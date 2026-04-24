@@ -56,4 +56,23 @@ describe('qnc default modules', () => {
 		$`${dir}/bin/qnc --cache-dir ${dir}/cache -o ${dir}/app ${dir}/main.js`
 		assert.strictEqual($`${dir}/app`, 'all ok')
 	})
+
+	testQnOnly('compiled binary has node-globals installed (queueMicrotask, performance, …)', ({ dir }) => {
+		// Regression test: qnc main() must run qn:init so that globals like
+		// queueMicrotask are defined. Without this, qn:http's serve() blows up.
+		mkdirSync(`${dir}/bin`)
+		copyFileSync(QNC_PATH(), `${dir}/bin/qnc`)
+
+		writeFileSync(`${dir}/main.js`, `
+			import assert from 'node:assert'
+			assert.strictEqual(typeof queueMicrotask, 'function')
+			assert.strictEqual(typeof performance, 'object')
+			assert.strictEqual(typeof performance.now, 'function')
+			assert.strictEqual(typeof DOMException, 'function')
+			queueMicrotask(() => console.log('ok'))
+		`)
+
+		$`${dir}/bin/qnc --cache-dir ${dir}/cache -o ${dir}/app ${dir}/main.js`
+		assert.strictEqual($`${dir}/app`, 'ok')
+	})
 })

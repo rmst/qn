@@ -12,51 +12,8 @@
  */
 
 import * as std from "std"
-import "node-globals"
-import * as nodeFs from "node:fs"
-import * as nodePath from "node:path"
-import { dirname, resolve } from "node:path"
-import { stripTypeScriptTypes } from "node:module"
-import { isCjs } from "./qn/cjs.js"
-import { createTsconfigPathsResolver, nodeEnv } from "./qn/tsconfig-paths.js"
-
-// Register source transform for .ts and CJS module loading.
-// Handles TypeScript stripping and CJS-to-ESM wrapping.
-__qn_setSourceTransform((source, filename) => {
-	// TypeScript stripping
-	if (filename.endsWith(".ts")) {
-		try {
-			source = stripTypeScriptTypes(source)
-		} catch {
-			source = stripTypeScriptTypes(source, { mode: "transform" })
-		}
-	}
-
-	// CJS wrapping: detect CJS files and wrap them as ESM
-	if (isCjs(filename)) {
-		source = `import { __cjsLoad } from "qn:cjs"\n` +
-			`const { module: __cjs_module } = __cjsLoad(import.meta.filename, import.meta.dirname, function(exports, require, module, __filename, __dirname) {\n` +
-			source + `\n});\n` +
-			`export default __cjs_module.exports;\n`
-	}
-
-	return source
-})
-
-// Register module resolver fallback: consults nearest tsconfig.json /
-// jsconfig.json for `compilerOptions.paths` / `baseUrl` when the normal
-// NODE_PATH / node_modules lookup fails. Invoked from the C resolver only on
-// miss, so pure-JS projects without a tsconfig pay almost nothing (one cached
-// walk to filesystem root on first miss).
-const __qnTsconfigPaths = createTsconfigPathsResolver({ env: nodeEnv(nodeFs, nodePath) })
-__qn_setModuleResolverFallback((specifier, baseName) => {
-	if (!baseName) return null
-	// Ignore non-disk bases (embedded://, node:, etc.).
-	if (baseName.startsWith("embedded://") || baseName.startsWith("node:") ||
-		baseName.includes(":") && !baseName.startsWith("/")) return null
-	const fromDir = dirname(baseName)
-	return __qnTsconfigPaths.resolve(specifier, fromDir) || null
-})
+import "qn:init"
+import { resolve } from "node:path"
 import { globSync } from "node:fs"
 import { commit, buildTime } from "qn:version-info"
 import { isDirectory, resolveDirectoryEntry } from "./qn/bootstrap-utils.js"
