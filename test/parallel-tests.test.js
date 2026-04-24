@@ -25,14 +25,14 @@ const execCapture = (cmd, args, opts = {}) => {
 
 describe('qn --test parallel execution', () => {
 	testQnOnly('runs multiple files in parallel', async ({ bin, dir }) => {
-		// Each file sleeps 200ms. With parallel execution, total time should be
-		// much less than 3 * 200ms = 600ms
+		// Each file sleeps 300ms. Sequential would be 3 * 300ms = 900ms;
+		// parallel should be ~300ms plus spawn overhead.
 		for (const name of ['a', 'b', 'c']) {
 			writeFileSync(join(dir, `${name}.test.js`), `
 				import { describe, test } from 'node:test'
 				describe('suite-${name}', () => {
 					test('slow-${name}', async () => {
-						await new Promise(r => setTimeout(r, 200))
+						await new Promise(r => setTimeout(r, 300))
 					})
 				})
 			`)
@@ -47,9 +47,9 @@ describe('qn --test parallel execution', () => {
 		assert.match(output, /suite-b/)
 		assert.match(output, /suite-c/)
 
-		// Verify parallelism: 3 files x 200ms each would be ~600ms sequential,
-		// but parallel should complete well under 500ms (plus process overhead)
-		assert.ok(elapsed < 500, `Expected parallel execution under 500ms, got ${elapsed.toFixed(0)}ms`)
+		// Threshold 600ms sits well under 900ms sequential with headroom for
+		// spawn overhead and loaded-system variance.
+		assert.ok(elapsed < 600, `Expected parallel execution under 600ms, got ${elapsed.toFixed(0)}ms`)
 	})
 
 	testQnOnly('aggregates pass/fail counts across files', async ({ bin, dir }) => {
