@@ -214,39 +214,65 @@ function resolvePackageJson(pkgDir, subpath) {
 
 	// Try "exports" field
 	if (pkg.exports !== undefined) {
-		const target = typeof pkg.exports === "string" && subpath === "."
-			? pkg.exports
-			: typeof pkg.exports === "object"
-				? pkg.exports[subpath === "." ? "." : "./" + subpath]
-				: undefined
-		if (target !== undefined) {
-			const resolved = resolveExportTarget(target, pkgDir)
+		const key = subpath === "." ? "." : "./" + subpath
+		const m = typeof pkg.exports === "string"
+			? (subpath === "." ? { target: pkg.exports, capture: null } : null)
+			: (typeof pkg.exports === "object" && !Array.isArray(pkg.exports))
+				? matchExportKey(pkg.exports, key)
+				: null
+		if (m) {
+			const resolved = resolveExportTarget(m.target, m.capture, pkgDir)
 			if (resolved) return resolved
 		}
 		// For root imports, try treating exports object as conditional
 		if (subpath === "." && typeof pkg.exports === "object" && !Array.isArray(pkg.exports)) {
-			const resolved = resolveExportTarget(pkg.exports, pkgDir)
+			const resolved = resolveExportTarget(pkg.exports, null, pkgDir)
 			if (resolved) return resolved
 		}
 	}
 
 	// Fallback to "main" field
 	if (subpath === "." && typeof pkg.main === "string") {
-		return resolveExportTarget(pkg.main, pkgDir)
+		return resolveExportTarget(pkg.main, null, pkgDir)
 	}
 	return null
 }
 
-function resolveExportTarget(target, pkgDir) {
+function matchExportKey(obj, key) {
+	if (key in obj && !key.includes("*")) return { target: obj[key], capture: null }
+	let best = null
+	for (const k of Object.keys(obj)) {
+		const star = k.indexOf("*")
+		if (star < 0) continue
+		const prefix = k.slice(0, star)
+		const suffix = k.slice(star + 1)
+		if (!key.startsWith(prefix)) continue
+		if (suffix && !key.endsWith(suffix)) continue
+		if (key.length < prefix.length + suffix.length) continue
+		if (!best
+			|| prefix.length > best.prefix.length
+			|| (prefix.length === best.prefix.length && suffix.length > best.suffix.length)) {
+			best = {
+				target: obj[k],
+				capture: key.slice(prefix.length, key.length - suffix.length),
+				prefix,
+				suffix,
+			}
+		}
+	}
+	return best
+}
+
+function resolveExportTarget(target, capture, pkgDir) {
 	if (typeof target === "string") {
-		let path = target
+		let path = capture == null ? target : target.replaceAll("*", capture)
 		if (path.startsWith("./")) path = path.slice(2)
 		return pkgDir + "/" + path
 	}
 	if (typeof target === "object" && target !== null && !Array.isArray(target)) {
 		for (const cond of ["import", "default"]) {
 			if (cond in target) {
-				const resolved = resolveExportTarget(target[cond], pkgDir)
+				const resolved = resolveExportTarget(target[cond], capture, pkgDir)
 				if (resolved) return resolved
 			}
 		}

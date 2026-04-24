@@ -621,6 +621,82 @@ describe('Bundler Mode Compilation', () => {
 		assert.strictEqual(output, 'symlinked pkg')
 	})
 
+	test('node_modules with wildcard subpath exports in compiled binary', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/wpkg/dist/utils`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/wpkg/package.json`, JSON.stringify({
+			name: "wpkg",
+			exports: { "./utils/*": "./dist/utils/*.js" }
+		}))
+		writeFileSync(`${dir}/node_modules/wpkg/dist/utils/mime.js`, `export const mime = "text/plain";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { mime } from 'wpkg/utils/mime';
+			console.log(mime);
+		`)
+		$`${QNC()} -o ${dir}/app ${dir}/main.js`
+		const output = $`${dir}/app`
+		assert.strictEqual(output, 'text/plain')
+	})
+
+	test('node_modules with wildcard conditional exports in compiled binary', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/wpkg/dist`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/wpkg/package.json`, JSON.stringify({
+			name: "wpkg",
+			exports: { "./lib/*": { "import": "./dist/*.js", "default": "./dist/*.js" } }
+		}))
+		writeFileSync(`${dir}/node_modules/wpkg/dist/a.js`, `export const v = "A";`)
+		writeFileSync(`${dir}/node_modules/wpkg/dist/b.js`, `export const v = "B";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { v as a } from 'wpkg/lib/a';
+			import { v as b } from 'wpkg/lib/b';
+			console.log(a + b);
+		`)
+		$`${QNC()} -o ${dir}/app ${dir}/main.js`
+		const output = $`${dir}/app`
+		assert.strictEqual(output, 'AB')
+	})
+
+	test('node_modules wildcard longest-prefix wins in compiled binary', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/wpkg/specific`, { recursive: true })
+		mkdirSync(`${dir}/node_modules/wpkg/generic/utils`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/wpkg/package.json`, JSON.stringify({
+			name: "wpkg",
+			exports: {
+				"./*": "./generic/*.js",
+				"./utils/*": "./specific/*.js"
+			}
+		}))
+		writeFileSync(`${dir}/node_modules/wpkg/specific/mime.js`, `export const src = "specific";`)
+		writeFileSync(`${dir}/node_modules/wpkg/generic/utils/mime.js`, `export const src = "generic";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { src } from 'wpkg/utils/mime';
+			console.log(src);
+		`)
+		$`${QNC()} -o ${dir}/app ${dir}/main.js`
+		const output = $`${dir}/app`
+		assert.strictEqual(output, 'specific')
+	})
+
+	test('node_modules exact subpath wins over wildcard in compiled binary', ({ dir }) => {
+		mkdirSync(`${dir}/node_modules/wpkg/exact`, { recursive: true })
+		mkdirSync(`${dir}/node_modules/wpkg/wild`, { recursive: true })
+		writeFileSync(`${dir}/node_modules/wpkg/package.json`, JSON.stringify({
+			name: "wpkg",
+			exports: {
+				"./utils/mime": "./exact/mime.js",
+				"./utils/*": "./wild/*.js"
+			}
+		}))
+		writeFileSync(`${dir}/node_modules/wpkg/exact/mime.js`, `export const src = "exact";`)
+		writeFileSync(`${dir}/node_modules/wpkg/wild/mime.js`, `export const src = "wild";`)
+		writeFileSync(`${dir}/main.js`, `
+			import { src } from 'wpkg/utils/mime';
+			console.log(src);
+		`)
+		$`${QNC()} -o ${dir}/app ${dir}/main.js`
+		const output = $`${dir}/app`
+		assert.strictEqual(output, 'exact')
+	})
+
 	test('node_modules with nested dependencies in compiled binary', ({ dir }) => {
 		mkdirSync(`${dir}/node_modules/outer/node_modules/inner`, { recursive: true })
 		writeFileSync(`${dir}/node_modules/outer/index.js`, `
