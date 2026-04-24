@@ -386,6 +386,7 @@ function initTypeScriptTransform() {
 // we can import Sucrase directly.
 let sucraseTransform = null
 let sucraseParse = null
+let desugarTypeScriptNamespaces = null
 
 function loadSucrase() {
 	// Find sucrase in NODE_PATH
@@ -404,333 +405,13 @@ function loadSucrase() {
 	return null
 }
 
-// Minimal text-level desugarer for TypeScript value namespaces — mirrors
-// node/node/module.js.  Rewrites `[export] namespace X { body }` to the
-// canonical `var X;(function(X){...})(X||(X={}))` IIFE tsc itself emits,
-// running BEFORE Sucrase parses anything (its pushTypeContext would
-// mistokenize `<<`/`>>`/`>=` inside the body).
-function desugarTypeScriptNamespaces(code) {
-	if (code.indexOf("namespace") < 0) return code
-	const namespaces = dtnScanTopLevel(code)
-	if (namespaces.length === 0) return code
-	const splices = []
-	for (const ns of namespaces) dtnEmitSplices(code, ns, splices)
-	splices.sort((a, b) => b.start - a.start)
-	let out = code
-	for (const s of splices) out = out.slice(0, s.start) + s.replacement + out.slice(s.end)
-	return out
-}
-
-function dtnSkipOne(code, i, prevKind) {
-	const n = code.length
-	const c = code.charCodeAt(i)
-	if (c === 32 || c === 9 || c === 10 || c === 13 || c === 12 || c === 11) return i + 1
-	if (c === 47 && code.charCodeAt(i + 1) === 47) {
-		const nl = code.indexOf("\n", i + 2)
-		return nl < 0 ? n : nl + 1
+function loadTsDesugar() {
+	const nodePath = std.getenv("NODE_PATH") || ""
+	for (const dir of nodePath.split(":").filter(Boolean)) {
+		const p = dir + "/qn/ts-desugar.js"
+		if (fileExists(p)) return import(p)
 	}
-	if (c === 47 && code.charCodeAt(i + 1) === 42) {
-		const end = code.indexOf("*/", i + 2)
-		return end < 0 ? n : end + 2
-	}
-	if (c === 34 || c === 39) {
-		let j = i + 1
-		while (j < n) {
-			const ch = code.charCodeAt(j)
-			if (ch === 92) { j += 2; continue }
-			if (ch === c) return j + 1
-			if (ch === 10) return j + 1
-			j++
-		}
-		return n
-	}
-	if (c === 96) return dtnSkipTemplate(code, i + 1)
-	if (c === 47 && prevKind !== "value") {
-		let j = i + 1
-		let inClass = false
-		while (j < n) {
-			const ch = code.charCodeAt(j)
-			if (ch === 92) { j += 2; continue }
-			if (ch === 91) inClass = true
-			else if (ch === 93) inClass = false
-			else if (ch === 47 && !inClass) {
-				j++
-				while (j < n) {
-					const f = code.charCodeAt(j)
-					if ((f >= 97 && f <= 122) || (f >= 65 && f <= 90)) j++
-					else break
-				}
-				return j
-			}
-			else if (ch === 10) return j + 1
-			j++
-		}
-		return n
-	}
-	return i
-}
-
-function dtnSkipTemplate(code, start) {
-	const n = code.length
-	let j = start
-	while (j < n) {
-		const ch = code.charCodeAt(j)
-		if (ch === 92) { j += 2; continue }
-		if (ch === 96) return j + 1
-		if (ch === 36 && code.charCodeAt(j + 1) === 123) {
-			j = dtnSkipExprInTemplate(code, j + 2)
-			continue
-		}
-		j++
-	}
-	return n
-}
-
-function dtnSkipExprInTemplate(code, start) {
-	const n = code.length
-	let j = start
-	let depth = 1
-	let prevKind = "other"
-	while (j < n && depth > 0) {
-		const next = dtnSkipOne(code, j, prevKind)
-		if (next !== j) { j = next; prevKind = "other"; continue }
-		const c = code.charCodeAt(j)
-		if (c === 123) { depth++; j++; prevKind = "other"; continue }
-		if (c === 125) { depth--; j++; if (depth === 0) return j; prevKind = "other"; continue }
-		if (dtnIsIdStart(c)) {
-			j = dtnReadIdent(code, j)
-			prevKind = "value"
-			continue
-		}
-		if (c >= 48 && c <= 57) {
-			while (j < n && /[0-9a-fA-FxXbBoOnN_.eE+-]/.test(code[j])) j++
-			prevKind = "value"
-			continue
-		}
-		if (c === 41 || c === 93) { prevKind = "value"; j++; continue }
-		prevKind = "other"
-		j++
-	}
-	return j
-}
-
-function dtnIsIdStart(c) {
-	return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c === 95 || c === 36
-}
-function dtnIsIdCont(c) {
-	return dtnIsIdStart(c) || (c >= 48 && c <= 57)
-}
-function dtnReadIdent(code, i) {
-	let j = i
-	while (j < code.length && dtnIsIdCont(code.charCodeAt(j))) j++
-	return j
-}
-
-function *dtnScan(code, start, end) {
-	let i = start
-	let prevKind = "other"
-	while (i < end) {
-		const next = dtnSkipOne(code, i, prevKind)
-		if (next !== i) { i = next; prevKind = "other"; continue }
-		const c = code.charCodeAt(i)
-		if (c === 123) { yield { kind: "{", pos: i, end: i + 1 }; i++; prevKind = "other"; continue }
-		if (c === 125) { yield { kind: "}", pos: i, end: i + 1 }; i++; prevKind = "other"; continue }
-		if (c === 40) { yield { kind: "(", pos: i, end: i + 1 }; i++; prevKind = "other"; continue }
-		if (c === 41) { yield { kind: ")", pos: i, end: i + 1 }; i++; prevKind = "value"; continue }
-		if (c === 91) { yield { kind: "[", pos: i, end: i + 1 }; i++; prevKind = "other"; continue }
-		if (c === 93) { yield { kind: "]", pos: i, end: i + 1 }; i++; prevKind = "value"; continue }
-		if (c === 44) { yield { kind: ",", pos: i, end: i + 1 }; i++; prevKind = "other"; continue }
-		if (c === 59) { yield { kind: ";", pos: i, end: i + 1 }; i++; prevKind = "other"; continue }
-		if (c === 61 && code.charCodeAt(i + 1) !== 61 && code.charCodeAt(i + 1) !== 62) {
-			yield { kind: "=", pos: i, end: i + 1 }; i++; prevKind = "other"; continue
-		}
-		if (c === 42 && code.charCodeAt(i + 1) !== 42 && code.charCodeAt(i + 1) !== 61) {
-			yield { kind: "*", pos: i, end: i + 1 }; i++; prevKind = "other"; continue
-		}
-		if (dtnIsIdStart(c)) {
-			const e = dtnReadIdent(code, i)
-			yield { kind: "ident", pos: i, end: e, text: code.slice(i, e) }
-			i = e
-			prevKind = "value"
-			continue
-		}
-		if (c >= 48 && c <= 57) {
-			let j = i + 1
-			while (j < end && /[0-9a-fA-FxXbBoOnN_.eE+-]/.test(code[j])) j++
-			i = j
-			prevKind = "value"
-			continue
-		}
-		i++
-		prevKind = "other"
-	}
-}
-
-function dtnSkipTrivia(code, from) {
-	let i = from
-	while (i < code.length) {
-		const next = dtnSkipOne(code, i, "other")
-		if (next === i) return i
-		i = next
-	}
-	return i
-}
-
-function dtnReadNextIdent(code, from) {
-	const i = dtnSkipTrivia(code, from)
-	if (i >= code.length || !dtnIsIdStart(code.charCodeAt(i))) return null
-	return { start: i, end: dtnReadIdent(code, i) }
-}
-
-function dtnFindMatchingBrace(code, openPos) {
-	let depth = 1
-	for (const tok of dtnScan(code, openPos + 1, code.length)) {
-		if (tok.kind === "{") depth++
-		else if (tok.kind === "}") { depth--; if (depth === 0) return tok.pos }
-	}
-	return -1
-}
-
-function dtnScanTopLevel(code) {
-	const results = []
-	let braceDepth = 0
-	let pending = null
-	for (const tok of dtnScan(code, 0, code.length)) {
-		if (tok.kind === "{") { braceDepth++; pending = null; continue }
-		if (tok.kind === "}") { braceDepth--; pending = null; continue }
-		if (braceDepth !== 0) { pending = null; continue }
-		if (tok.kind !== "ident") { pending = null; continue }
-		if (tok.text === "export" && !pending) { pending = { exportStart: tok.pos, declareSeen: false }; continue }
-		if (tok.text === "declare") { pending = { exportStart: pending ? pending.exportStart : -1, declareSeen: true }; continue }
-		if (tok.text === "namespace" || tok.text === "module") {
-			const declareSeen = pending && pending.declareSeen
-			const exportStart = pending ? pending.exportStart : -1
-			pending = null
-			if (declareSeen) continue
-			const nameInfo = dtnReadNextIdent(code, tok.end)
-			if (!nameInfo) continue
-			const afterName = dtnSkipTrivia(code, nameInfo.end)
-			if (code.charCodeAt(afterName) !== 123) {
-				if (code.charCodeAt(afterName) === 46) {
-					throw new SyntaxError("TypeScript namespace: qualified names (`namespace X.Y`) are not supported")
-				}
-				continue
-			}
-			const openBrace = afterName
-			const closeBrace = dtnFindMatchingBrace(code, openBrace)
-			if (closeBrace < 0) throw new SyntaxError("TypeScript namespace: unbalanced braces")
-			results.push({
-				exportStart, nsStart: tok.pos,
-				name: code.slice(nameInfo.start, nameInfo.end),
-				openBrace, closeBrace,
-			})
-			continue
-		}
-		pending = null
-	}
-	return results
-}
-
-function dtnEmitSplices(code, ns, splices) {
-	const bindings = []
-	let depth = 0
-	let pending = null
-	for (const tok of dtnScan(code, ns.openBrace + 1, ns.closeBrace)) {
-		if (pending && depth === 0) {
-			const headText = tok.kind === "ident" ? tok.text : tok.kind
-			const head = { text: headText, pos: tok.pos, end: tok.end }
-			const binding = dtnClassify(code, pending, head, ns.closeBrace)
-			splices.push({
-				start: pending.pos,
-				end: pending.end,
-				replacement: " ".repeat(pending.end - pending.pos),
-			})
-			if (binding) bindings.push(binding)
-			pending = null
-		}
-		if (tok.kind === "{") { depth++; continue }
-		if (tok.kind === "}") { depth--; continue }
-		if (depth !== 0) continue
-		if (tok.kind === "ident") {
-			if (tok.text === "namespace" || tok.text === "module") {
-				throw new SyntaxError("TypeScript nested namespaces are not supported")
-			}
-			if (tok.text === "export") pending = { pos: tok.pos, end: tok.end }
-		}
-	}
-	const headStart = ns.exportStart >= 0 ? ns.exportStart : ns.nsStart
-	splices.push({
-		start: headStart,
-		end: ns.openBrace + 1,
-		replacement: `var ${ns.name};(function(${ns.name}){`,
-	})
-	// Leading `;` guards against ASI failures when the last body statement
-	// omits its terminator.
-	let tail = ";"
-	for (const b of bindings) tail += `${ns.name}.${b}=${b};`
-	tail += `})(${ns.name}||(${ns.name}={}));`
-	if (ns.exportStart >= 0) tail += `export{${ns.name}};`
-	splices.push({
-		start: ns.closeBrace,
-		end: ns.closeBrace + 1,
-		replacement: tail,
-	})
-}
-
-function dtnClassify(code, exportTok, head, bodyEnd) {
-	const h = head.text
-	if (h === "interface" || h === "type") return null
-	if (h === "namespace" || h === "module") {
-		throw new SyntaxError("TypeScript nested namespaces are not supported")
-	}
-	if (h === "default") throw new SyntaxError("TypeScript namespace: `export default` is not supported")
-	if (h === "enum") throw new SyntaxError("TypeScript namespace: `export enum` is not supported")
-	if (h === "{") throw new SyntaxError("TypeScript namespace: `export { ... }` is not supported")
-	if (h === "*") throw new SyntaxError("TypeScript namespace: `export *` is not supported")
-	if (h === "=") throw new SyntaxError("TypeScript namespace: `export =` is not supported")
-	if (h === "async") {
-		const next = dtnReadNextIdent(code, head.end)
-		if (!next || code.slice(next.start, next.end) !== "function") {
-			throw new SyntaxError("TypeScript namespace: expected `function` after `async`")
-		}
-		const bn = dtnReadNextIdent(code, next.end)
-		if (!bn) throw new SyntaxError("TypeScript namespace: expected binding name")
-		return code.slice(bn.start, bn.end)
-	}
-	if (h === "function") {
-		let i = dtnSkipTrivia(code, head.end)
-		if (code.charCodeAt(i) === 42) i = dtnSkipTrivia(code, i + 1)
-		if (!dtnIsIdStart(code.charCodeAt(i))) throw new SyntaxError("TypeScript namespace: expected function name")
-		return code.slice(i, dtnReadIdent(code, i))
-	}
-	if (h === "class") {
-		const bn = dtnReadNextIdent(code, head.end)
-		if (!bn) throw new SyntaxError("TypeScript namespace: expected class name")
-		return code.slice(bn.start, bn.end)
-	}
-	if (h === "const" || h === "let" || h === "var") {
-		const i = dtnSkipTrivia(code, head.end)
-		const c = code.charCodeAt(i)
-		if (c === 123 || c === 91) {
-			throw new SyntaxError("TypeScript namespace: destructured bindings in `export const/let/var` are not supported")
-		}
-		if (!dtnIsIdStart(c)) throw new SyntaxError("TypeScript namespace: expected binding name")
-		const nameEnd = dtnReadIdent(code, i)
-		let depth = 0
-		for (const tok of dtnScan(code, nameEnd, bodyEnd)) {
-			if (tok.kind === "{" || tok.kind === "(" || tok.kind === "[") depth++
-			else if (tok.kind === "}" || tok.kind === ")" || tok.kind === "]") {
-				if (depth === 0) break
-				depth--
-			}
-			else if (depth === 0 && tok.kind === ";") break
-			else if (depth === 0 && tok.kind === ",") {
-				throw new SyntaxError("TypeScript namespace: multi-binding `export const a = 1, b = 2` is not supported")
-			}
-		}
-		return code.slice(i, nameEnd)
-	}
-	throw new SyntaxError(`TypeScript namespace: unsupported \`export\` form (saw \`${h}\`)`)
+	return null
 }
 
 function stripTypeScript(source, filename) {
@@ -740,9 +421,8 @@ function stripTypeScript(source, filename) {
 	// Text-level pass: rewrite value namespaces to the tsc-canonical IIFE form
 	// before Sucrase sees them.  Sucrase's pushTypeContext over namespace
 	// bodies mistokenizes `<<`/`>>`/`>=`, which would break parse on any
-	// body that uses bitshift or comparison operators.  See node/node/
-	// module.js for the shared implementation this mirrors.
-	source = desugarTypeScriptNamespaces(source)
+	// body that uses bitshift or comparison operators.
+	if (desugarTypeScriptNamespaces) source = desugarTypeScriptNamespaces(source)
 
 	// Try strip mode first (preserves source positions). Blanking can silently
 	// produce invalid JS when newlines inside a type region violate a
@@ -2027,6 +1707,17 @@ try {
 	}
 } catch (e) {
 	// TS support not available, that's OK
+}
+
+// Load the shared TS namespace desugarer alongside Sucrase.  Kept optional
+// on the same can-TS-at-all footing: if Sucrase didn't load above, we won't
+// reach stripTypeScript anyway.
+try {
+	const mod = await loadTsDesugar()
+	if (mod) desugarTypeScriptNamespaces = mod.desugarTypeScriptNamespaces
+} catch (e) {
+	// Pre-fix behavior: if the shared module is unavailable, skip desugar
+	// and let Sucrase error out on namespace bodies using `<</>>/>=`.
 }
 
 // Set version info environment variables for synthetic module
