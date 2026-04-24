@@ -15,7 +15,6 @@ import * as nodePath from "node:path"
 import { readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs"
 import { dirname, join, resolve, extname, basename, isAbsolute } from "node:path"
 import { transform, parse } from "qn:sucrase"
-import { desugarTypeScriptNamespaces } from "./ts-desugar.js"
 import { createTsconfigPathsResolver, nodeEnv } from "./tsconfig-paths.js"
 
 const PROBE_EXTS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs", ".json"]
@@ -325,17 +324,12 @@ function checkModuleSyntax(code, filePath) {
 // Load a source file, enumerate its imports, and return both the raw text
 // and the import list. Returns null sections for non-ESM inputs.
 function loadAndAnalyse(filePath) {
-	let source = readFileSync(filePath, "utf8")
+	const source = readFileSync(filePath, "utf8")
 	const ext = extname(filePath)
 	if (ext === ".json") return { kind: "json", source, ext, imports: [] }
 	if (ext === ".cjs") return { kind: "cjs", source, ext, imports: [] }
 	let imports
 	try {
-		// Desugar TS value namespaces before Sucrase sees the source: its
-		// pushTypeContext mistokenizes `<<`/`>>`/`>=` inside namespace bodies,
-		// breaking both extractImports() and the subsequent runTransform().
-		// Runs here so downstream splice offsets stay consistent.
-		if (ext === ".ts" || ext === ".tsx") source = desugarTypeScriptNamespaces(source)
 		imports = extractImports(source, ext)
 	} catch (e) {
 		throw new Error(`failed to parse ${filePath}: ${e.message}`)

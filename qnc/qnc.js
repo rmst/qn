@@ -386,7 +386,6 @@ function initTypeScriptTransform() {
 // we can import Sucrase directly.
 let sucraseTransform = null
 let sucraseParse = null
-let desugarTypeScriptNamespaces = null
 
 function loadSucrase() {
 	// Find sucrase in NODE_PATH
@@ -405,24 +404,27 @@ function loadSucrase() {
 	return null
 }
 
-function loadTsDesugar() {
-	const nodePath = std.getenv("NODE_PATH") || ""
-	for (const dir of nodePath.split(":").filter(Boolean)) {
-		const p = dir + "/qn/ts-desugar.js"
-		if (fileExists(p)) return import(p)
-	}
-	return null
-}
-
 function stripTypeScript(source, filename) {
 	if (!filename.endsWith(".ts")) return source
 	if (!sucraseTransform) return source // TS not available, pass through
 
-	// Text-level pass: rewrite value namespaces to the tsc-canonical IIFE form
-	// before Sucrase sees them.  Sucrase's pushTypeContext over namespace
-	// bodies mistokenizes `<<`/`>>`/`>=`, which would break parse on any
-	// body that uses bitshift or comparison operators.
-	if (desugarTypeScriptNamespaces) source = desugarTypeScriptNamespaces(source)
+	// Reject value namespaces before either mode runs — neither strip nor
+	// transform can faithfully emit them, so we throw with a clear error
+	// instead of producing code that fails at runtime.
+	const TT_DECLARE = 103952, CK_NAMESPACE = 23
+	const detectTokens = sucraseParse(source, false, true, false).tokens
+	for (let i = 0; i < detectTokens.length; i++) {
+		const t = detectTokens[i]
+		if (t.contextualKeyword !== CK_NAMESPACE) continue
+		let j = i - 1
+		while (j >= 0 && detectTokens[j].start === detectTokens[j].end) j--
+		if (j < 0 || detectTokens[j].type !== TT_DECLARE) {
+			throw new SyntaxError(
+				"TypeScript namespace with runtime values is not supported. " +
+				"Use `declare namespace` for type-only declarations or ES modules."
+			)
+		}
+	}
 
 	// Try strip mode first (preserves source positions). Blanking can silently
 	// produce invalid JS when newlines inside a type region violate a
@@ -446,7 +448,7 @@ function blankTypeScriptTypes(code) {
 	if (!sucraseParse) throw new Error("Sucrase parser not available")
 	const TT_IMPORT = 90640, TT_EXPORT = 89104, TT_STRING = 4608
 	const TT_ENUM = 113168, TT_BRACE_R = 11264
-	const CK_TYPE = 38, CK_FROM = 13
+	const CK_TYPE = 38, CK_NAMESPACE = 23, CK_FROM = 13
 
 	const file = sucraseParse(code, false, true, false)
 	const tokens = file.tokens
@@ -456,6 +458,8 @@ function blankTypeScriptTypes(code) {
 		const t = tokens[i]
 		if (t.start === t.end) continue
 		if (t.type === TT_ENUM) throw new SyntaxError("TypeScript enum not supported in strip mode")
+		if (t.contextualKeyword === CK_NAMESPACE && !t.isType)
+			throw new SyntaxError("TypeScript namespace not supported in strip mode")
 
 		if ((t.type === TT_IMPORT || t.type === TT_EXPORT) && i + 1 < tokens.length) {
 			const next = tokens[i + 1]
@@ -1707,17 +1711,6 @@ try {
 	}
 } catch (e) {
 	// TS support not available, that's OK
-}
-
-// Load the shared TS namespace desugarer alongside Sucrase.  Kept optional
-// on the same can-TS-at-all footing: if Sucrase didn't load above, we won't
-// reach stripTypeScript anyway.
-try {
-	const mod = await loadTsDesugar()
-	if (mod) desugarTypeScriptNamespaces = mod.desugarTypeScriptNamespaces
-} catch (e) {
-	// Pre-fix behavior: if the shared module is unavailable, skip desugar
-	// and let Sucrase error out on namespace bodies using `<</>>/>=`.
 }
 
 // Set version info environment variables for synthetic module

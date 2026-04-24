@@ -36,7 +36,7 @@ Qn is built from ~24K LOC of own code plus four vendored C dependencies and one 
 
 **Module resolution** ([`module_resolution/`](module_resolution/Readme.md)) — ~1.2K LOC C. NODE_PATH, node_modules walking, package.json resolution, `.ts`/`.js` extension probing. For standalone binaries: `embedded://` namespace separation, compile-time import map, `file://` protocol for forced disk loading.
 
-**TypeScript support** — `.ts` files are transparently transformed on load via a per-thread source transform hook in `qn-vm.c`, called by `qn_module_loader` in `module-resolution.h`. The hook tries position-preserving strip mode first (accurate error locations), falling back to Sucrase's full transform for constructs like enums. Uses the same `stripTypeScriptTypes` / Sucrase infrastructure as the `node:module` shim. Value namespaces are desugared to the canonical `var N;(function(N){...})(N||(N={}))` IIFE form via a text-level pre-pass before either Sucrase path runs — Sucrase itself deliberately drops namespace bodies, and its `pushTypeContext` tokenization also splits `<<`/`>>`/`>=` inside those bodies, which would break the initial parse.
+**TypeScript support** — `.ts` files are transparently transformed on load via a per-thread source transform hook in `qn-vm.c`, called by `qn_module_loader` in `module-resolution.h`. The hook tries position-preserving strip mode first (accurate error locations), falling back to Sucrase's full transform for constructs like enums. Uses the same `stripTypeScriptTypes` / Sucrase infrastructure as the `node:module` shim.
 
 ## Vendored Dependencies
 

@@ -247,42 +247,13 @@ describe('node:module shim', () => {
 		assert.strictEqual(out, '42')
 	})
 
-	testQnOnly('stripTypeScriptTypes desugars value namespace in strip mode', ({ bin, dir }) => {
-		// Value namespaces are rewritten to tsc's `var N;(function(N){...})(N||(N={}))`
-		// IIFE form as a text-level pre-pass, so strip mode can handle them.
+	testQnOnly('stripTypeScriptTypes throws on value namespace in strip mode', ({ bin, dir }) => {
+		// `namespace N { export const x = 42 }` has runtime effect; neither strip
+		// (blanks it entirely) nor Sucrase's transform (drops it) can emit
+		// working code, so we reject up front with a clear message.
 		writeFileSync(`${dir}/test.js`, `
 			import { stripTypeScriptTypes } from 'node:module'
 			const input = 'namespace N { export const x = 42 }\\nconsole.log(N.x)'
-			const output = stripTypeScriptTypes(input)
-			console.log(JSON.stringify({
-				hasNamespace: /\\bnamespace\\b/.test(output),
-				hasIife: /\\(function\\(N\\)/.test(output),
-			}))
-		`)
-		const { hasNamespace, hasIife } = JSON.parse($`${bin} ${dir}/test.js`)
-		assert.strictEqual(hasNamespace, false)
-		assert.strictEqual(hasIife, true)
-	})
-
-	testQnOnly('stripTypeScriptTypes desugars value namespace in transform mode too', ({ bin, dir }) => {
-		writeFileSync(`${dir}/test.js`, `
-			import { stripTypeScriptTypes } from 'node:module'
-			const input = 'namespace N { export const x = 42 }\\nconsole.log(N.x)'
-			const output = stripTypeScriptTypes(input, { mode: 'transform' })
-			console.log(JSON.stringify({
-				hasNamespace: /\\bnamespace\\b/.test(output),
-				hasIife: /\\(function\\(N\\)/.test(output),
-			}))
-		`)
-		const { hasNamespace, hasIife } = JSON.parse($`${bin} ${dir}/test.js`)
-		assert.strictEqual(hasNamespace, false)
-		assert.strictEqual(hasIife, true)
-	})
-
-	testQnOnly('stripTypeScriptTypes rejects unsupported namespace shapes', ({ bin, dir }) => {
-		writeFileSync(`${dir}/test.js`, `
-			import { stripTypeScriptTypes } from 'node:module'
-			const input = 'namespace A { export enum E { X } }'
 			try {
 				stripTypeScriptTypes(input)
 				console.log(JSON.stringify({ threw: false }))
@@ -290,10 +261,32 @@ describe('node:module shim', () => {
 				console.log(JSON.stringify({ threw: true, isSyntax: e instanceof SyntaxError, msg: e.message }))
 			}
 		`)
-		const { threw, isSyntax, msg } = JSON.parse($`${bin} ${dir}/test.js`)
+
+		const result = $`${bin} ${dir}/test.js`
+		const { threw, isSyntax, msg } = JSON.parse(result)
 		assert.strictEqual(threw, true)
 		assert.strictEqual(isSyntax, true)
-		assert.ok(/enum/i.test(msg), `expected message to mention enum, got: ${msg}`)
+		assert.ok(/namespace/i.test(msg), `message should mention namespace, got: ${msg}`)
+	})
+
+	testQnOnly('stripTypeScriptTypes throws on value namespace in transform mode too', ({ bin, dir }) => {
+		// Sucrase silently drops namespaces in transform mode too — detect and
+		// throw so the user gets a clear error instead of a runtime ReferenceError.
+		writeFileSync(`${dir}/test.js`, `
+			import { stripTypeScriptTypes } from 'node:module'
+			const input = 'namespace N { export const x = 42 }\\nconsole.log(N.x)'
+			try {
+				stripTypeScriptTypes(input, { mode: 'transform' })
+				console.log(JSON.stringify({ threw: false }))
+			} catch (e) {
+				console.log(JSON.stringify({ threw: true, isSyntax: e instanceof SyntaxError }))
+			}
+		`)
+
+		const result = $`${bin} ${dir}/test.js`
+		const { threw, isSyntax } = JSON.parse(result)
+		assert.strictEqual(threw, true)
+		assert.strictEqual(isSyntax, true)
 	})
 
 	testQnOnly('stripTypeScriptTypes erases declare namespace (type-only)', ({ bin, dir }) => {

@@ -37,34 +37,6 @@ describe('qn bundle', () => {
 		}
 	})
 
-	// Regression: Sucrase's pushTypeContext mistokenizes `<<`/`>>`/`>=` inside
-	// TS namespace bodies, so the bundler must apply the shared text-level
-	// namespace desugarer BEFORE handing source to Sucrase.  Prior to the fix,
-	// loadAndAnalyse() skipped that pre-pass and failed parsing any namespace
-	// body that used bitshift or comparison operators.
-	test('desugars TypeScript namespaces with bitshift/comparison in body', async () => {
-		const dir = mktempdir()
-		try {
-			writeFileSync(join(dir, 'ns.ts'), [
-				'export namespace NS {',
-				'	export function foo(x: number): number {',
-				'		const a = x << 1',
-				'		const b = x >> 1',
-				'		const c = x >= 0 ? 1 : 0',
-				'		return a + b + c',
-				'	}',
-				'}',
-				'export const foo = NS.foo',
-				'',
-			].join('\n'))
-			writeFileSync(join(dir, 'main.ts'), 'import { foo } from "./ns.ts"\nconsole.log(foo(5))\n')
-			await build({ entrypoints: [join(dir, 'main.ts')], outdir: join(dir, 'dist') })
-			assert.strictEqual(runBundle(join(dir, 'dist/main.js')), '13')
-		} finally {
-			rmSync(dir, { recursive: true })
-		}
-	})
-
 	test('walks node_modules with package.json exports', async () => {
 		const dir = mktempdir()
 		try {

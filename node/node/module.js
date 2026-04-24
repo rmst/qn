@@ -5,7 +5,6 @@
  */
 
 import { transform, parse } from "qn:sucrase"
-import { desugarTypeScriptNamespaces } from "../qn/ts-desugar.js"
 
 /**
  * createRequire — delegates to qn:cjs which registers itself via a global.
@@ -52,12 +51,8 @@ function isClassModifierType(type) {
  *
  * In 'strip' mode (default), type-only syntax is replaced with whitespace to preserve
  * source positions (inspired by ts-blank-space). Throws on constructs that require
- * runtime code generation that strip can't handle (enums, constructor parameter
+ * runtime code generation (enums, namespaces with values, constructor parameter
  * properties).
- *
- * Value namespaces are rewritten to the canonical `var N;(function(N){...})(N||(N={}))`
- * IIFE form via a text-level pre-pass that runs before either mode, so both modes
- * handle them.
  *
  * In 'transform' mode, Sucrase's full transform is used. Handles all TypeScript
  * constructs including enums, but does not preserve source positions.
@@ -69,16 +64,12 @@ function isClassModifierType(type) {
  */
 export function stripTypeScriptTypes(code, options) {
 	const mode = options?.mode ?? "strip"
-	// Sucrase has no namespace support: strip blanks the whole body (all tokens
-	// get isType=true via pushTypeContext) and transform drops it wholesale.
-	// Worse, `pushTypeContext` changes tokenization of `<<`/`>>`/`>=` inside
-	// the body (they split into single `<`/`>` tokens for generic nesting),
-	// which breaks the initial parse on any namespace body that uses bitshift
-	// or comparison operators.  So: do a text-level desugar BEFORE handing the
-	// source to Sucrase, rewriting top-level value namespaces to the canonical
-	// `var N;(function(N){...})(N||(N={}))` form that tsc itself emits.
-	code = desugarTypeScriptNamespaces(code)
 	const { tokens } = parse(code, false, true, false)
+	// Neither strip nor Sucrase's transform can faithfully emit a TS value
+	// namespace (strip blanks it, transform drops it). Reject before either
+	// path runs so callers get a clear error instead of code that fails at
+	// runtime with a mysterious "X is not defined".
+	requireNoValueNamespace(tokens)
 	if (mode === "transform") {
 		return transform(code, { transforms: ["typescript"], disableESTransforms: true }).code
 	}
@@ -98,6 +89,25 @@ export function stripTypeScriptTypes(code, options) {
 		)
 	}
 	return blanked
+}
+
+/**
+ * Reject value namespaces. `declare namespace` is type-only per TS spec and
+ * safely erasable; anything else may emit runtime values that we cannot preserve.
+ */
+function requireNoValueNamespace(tokens) {
+	for (let i = 0; i < tokens.length; i++) {
+		const t = tokens[i]
+		if (t.contextualKeyword !== CK_NAMESPACE) continue
+		let j = i - 1
+		while (j >= 0 && tokens[j].start === tokens[j].end) j--
+		if (j < 0 || tokens[j].type !== TT_DECLARE) {
+			throw new SyntaxError(
+				"TypeScript namespace with runtime values is not supported. " +
+				"Use `declare namespace` for type-only declarations or ES modules.",
+			)
+		}
+	}
 }
 
 /**
