@@ -4,6 +4,10 @@
  * Reads package.json dependencies and installs them into node_modules/.
  * Supports: local paths (file:), git URLs (github:, git+https://).
  *
+ * Also reads `sourceDependencies` (Cargo-style declarative git deps with
+ * { git, rev, exports?, build? } per entry). See `installSourceDeps` for
+ * the field shape and behavior.
+ *
  * Missing features:
  * - npm registry fetching (npmjs.com)
  * - Transitive dependency installation
@@ -11,7 +15,7 @@
  * - Semver resolution
  */
 
-import { readFileSync, mkdirSync, rmSync, cpSync, existsSync, readdirSync } from "node:fs"
+import { readFileSync, writeFileSync, mkdirSync, rmSync, cpSync, existsSync, readdirSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { join, resolve, basename, dirname } from "node:path"
 import { fetchTree } from "./git.js"
@@ -183,6 +187,89 @@ function getCacheDir() {
 }
 
 /**
+ * Install entries from package.json's `sourceDependencies` field.
+ *
+ * Each entry pins a git source (Cargo-style):
+ *
+ *   "preact": {
+ *     "git":     "https://github.com/preactjs/preact",  // required
+ *     "rev":     "21dd6d04...",                          // required: 40-hex SHA
+ *     "exports": { ".": "./src/index.js", ... },         // optional override
+ *     "build":   "make all"                              // optional escape hatch
+ *   }
+ *
+ * Behavior per entry:
+ *   1. Fetch the tree at `rev` via qn:git (full SHA-1 verification).
+ *   2. Rewrite the cloned package.json's `exports` field:
+ *        - if `exports` is given, use it verbatim;
+ *        - else if the original exports has `./dist/X.{js,mjs}` paths, rewrite
+ *          them to `./src/X.ts` (default tree-mirror convention);
+ *        - else leave it alone.
+ *   3. If `build` is given, run it as a shell command in the cloned dir.
+ *
+ * Lifecycle scripts on the cloned package (prepare, etc.) are NOT run —
+ * the spec is intended to be fully declarative.
+ *
+ * @param {Record<string, { git: string, rev: string, exports?: object, build?: string }>} sourceDeps
+ * @param {string} nodeModulesDir
+ */
+async function installSourceDeps(sourceDeps, nodeModulesDir) {
+	for (let [name, src] of Object.entries(sourceDeps)) {
+		if (!src || typeof src !== "object") {
+			throw new Error(`sourceDependencies["${name}"]: must be an object`)
+		}
+		if (!src.git || typeof src.git !== "string") {
+			throw new Error(`sourceDependencies["${name}"]: 'git' field is required`)
+		}
+		if (!src.rev || typeof src.rev !== "string") {
+			throw new Error(`sourceDependencies["${name}"]: 'rev' field is required`)
+		}
+
+		let dest = join(nodeModulesDir, name)
+		if (name.startsWith("@")) {
+			let scope = name.split("/")[0]
+			mkdirSync(join(nodeModulesDir, scope), { recursive: true })
+		}
+		if (existsSync(dest)) rmSync(dest, { recursive: true, force: true })
+		mkdirSync(dest, { recursive: true })
+
+		console.log(`${name} <- ${src.git}#${src.rev}`)
+		await fetchTree({ source: src.git, ref: src.rev, dest })
+
+		// Rewrite exports.
+		let pkgJsonPath = join(dest, "package.json")
+		if (existsSync(pkgJsonPath)) {
+			let cloned = JSON.parse(readFileSync(pkgJsonPath, "utf8"))
+			let next = src.exports ?? rewriteDistToSource(cloned.exports)
+			if (next) {
+				cloned.exports = next
+				writeFileSync(pkgJsonPath, JSON.stringify(cloned, null, 2))
+			}
+		}
+
+		// Optional build escape hatch.
+		if (src.build) {
+			if (typeof src.build !== "string") {
+				throw new Error(`sourceDependencies["${name}"]: 'build' must be a string`)
+			}
+			console.log(`  building ${name}...`)
+			execFileSync("sh", ["-c", src.build], { cwd: dest, stdio: "inherit" })
+		}
+	}
+}
+
+/**
+ * Default tree-mirror rewrite: ./dist/X.{js,mjs} -> ./src/X.ts.
+ * Returns null if the exports map has no /dist/ paths (or is missing).
+ */
+function rewriteDistToSource(exports) {
+	if (!exports) return null
+	let json = JSON.stringify(exports)
+	if (!json.includes("/dist/")) return null
+	return JSON.parse(json.replace(/"\.\/dist\/([^"]+)\.m?js"/g, '"./src/$1.ts"'))
+}
+
+/**
  * Install dependencies from a package.json file.
  * @param {string} projectDir - directory containing package.json
  * @param {object} [options]
@@ -208,8 +295,10 @@ export async function install(projectDir, options = {}) {
 
 	let names = Object.keys(deps)
 	let unsupported = []
+	let sourceDeps = pkg.sourceDependencies ?? {}
+	let sourceNames = Object.keys(sourceDeps)
 
-	if (names.length === 0) {
+	if (names.length === 0 && sourceNames.length === 0) {
 		console.log("No dependencies to install.")
 	} else {
 		mkdirSync(nodeModulesDir, { recursive: true })
@@ -252,6 +341,10 @@ export async function install(projectDir, options = {}) {
 				runScript(join(nodeModulesDir, name), "prepare", { binDir })
 			}
 		}
+
+		if (sourceNames.length > 0) {
+			await installSourceDeps(sourceDeps, nodeModulesDir)
+		}
 	}
 
 	if (unsupported.length > 0) {
@@ -284,11 +377,15 @@ Options:
   --dev, -D     Include devDependencies
   --help, -h    Show this help
 
-Supported dependency specifiers:
+Supported dependency specifiers (in "dependencies"):
   "file:../path"              Local directory
   "github:owner/repo[#ref]"   GitHub repository (#ref optional)
   "git+https://url.git[#ref]" Git repository over HTTPS or HTTP
   "git+ssh://url.git[#ref]"   Git repository over SSH (requires git in PATH)
+
+Also supported in "sourceDependencies":
+  "<name>": { "git": "<url>", "rev": "<sha>",
+              "exports": <map>, "build": "<cmd>" }
 
 Not yet supported:
   "^1.2.3", "~1.0.0", etc.    npm registry (planned)

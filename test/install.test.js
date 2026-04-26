@@ -307,3 +307,258 @@ describe('qn install', () => {
 		}
 	})
 })
+
+describe('qn install — sourceDependencies', () => {
+	/**
+	 * Build an upstream package fixture (committed to a local git repo).
+	 * Returns { repoDir, sha }.
+	 */
+	function makeUpstream(pkgJson, files = {}) {
+		let repoDir = makeRepo()
+		writeFileSync(join(repoDir, 'package.json'), JSON.stringify(pkgJson))
+		for (let [path, content] of Object.entries(files)) {
+			let full = join(repoDir, path)
+			mkdirSync(join(full, '..'), { recursive: true })
+			writeFileSync(full, content)
+		}
+		let sha = commitAll(repoDir, 'init')
+		return { repoDir, sha }
+	}
+
+	test('explicit exports override is written verbatim', async () => {
+		let { repoDir, sha } = makeUpstream({
+			name: 'lib',
+			exports: { ".": "./dist/lib.mjs" },  // upstream's published exports
+		}, {
+			'src/index.js': 'export default 42\n',
+		})
+		let dir = mktempdir()
+		try {
+			let projectDir = join(dir, 'project')
+			mkdirSync(projectDir)
+			writeFileSync(join(projectDir, 'package.json'), JSON.stringify({
+				name: 'project',
+				sourceDependencies: {
+					lib: { git: repoDir, rev: sha, exports: { ".": "./src/index.js" } },
+				},
+			}))
+
+			await install(projectDir)
+
+			let installed = JSON.parse(readFileSync(join(projectDir, 'node_modules/lib/package.json'), 'utf8'))
+			assert.deepStrictEqual(installed.exports, { ".": "./src/index.js" })
+		} finally {
+			rmSync(dir, { recursive: true })
+			rmSync(repoDir, { recursive: true, force: true })
+		}
+	})
+
+	test('default tree-mirror rewrites /dist/X.{js,mjs} to /src/X.ts', async () => {
+		let { repoDir, sha } = makeUpstream({
+			name: 'lib',
+			exports: {
+				".": "./dist/index.mjs",
+				"./util": "./dist/util.js",
+			},
+		})
+		let dir = mktempdir()
+		try {
+			let projectDir = join(dir, 'project')
+			mkdirSync(projectDir)
+			writeFileSync(join(projectDir, 'package.json'), JSON.stringify({
+				name: 'project',
+				sourceDependencies: {
+					lib: { git: repoDir, rev: sha },  // no override
+				},
+			}))
+
+			await install(projectDir)
+
+			let installed = JSON.parse(readFileSync(join(projectDir, 'node_modules/lib/package.json'), 'utf8'))
+			assert.deepStrictEqual(installed.exports, {
+				".": "./src/index.ts",
+				"./util": "./src/util.ts",
+			})
+		} finally {
+			rmSync(dir, { recursive: true })
+			rmSync(repoDir, { recursive: true, force: true })
+		}
+	})
+
+	test('exports without /dist/ paths are left untouched', async () => {
+		let original = { ".": "./src/index.js" }
+		let { repoDir, sha } = makeUpstream({ name: 'lib', exports: original })
+		let dir = mktempdir()
+		try {
+			let projectDir = join(dir, 'project')
+			mkdirSync(projectDir)
+			writeFileSync(join(projectDir, 'package.json'), JSON.stringify({
+				name: 'project',
+				sourceDependencies: {
+					lib: { git: repoDir, rev: sha },
+				},
+			}))
+
+			await install(projectDir)
+
+			let installed = JSON.parse(readFileSync(join(projectDir, 'node_modules/lib/package.json'), 'utf8'))
+			assert.deepStrictEqual(installed.exports, original)
+		} finally {
+			rmSync(dir, { recursive: true })
+			rmSync(repoDir, { recursive: true, force: true })
+		}
+	})
+
+	test('build escape hatch runs in cloned dir', async () => {
+		let { repoDir, sha } = makeUpstream({ name: 'lib' })
+		let dir = mktempdir()
+		try {
+			let projectDir = join(dir, 'project')
+			mkdirSync(projectDir)
+			writeFileSync(join(projectDir, 'package.json'), JSON.stringify({
+				name: 'project',
+				sourceDependencies: {
+					lib: { git: repoDir, rev: sha, build: 'echo built > BUILT.txt' },
+				},
+			}))
+
+			await install(projectDir)
+
+			let marker = join(projectDir, 'node_modules/lib/BUILT.txt')
+			assert.ok(existsSync(marker), 'build script should have run in cloned dir')
+			assert.strictEqual(readFileSync(marker, 'utf8'), 'built\n')
+		} finally {
+			rmSync(dir, { recursive: true })
+			rmSync(repoDir, { recursive: true, force: true })
+		}
+	})
+
+	test('does not run upstream prepare scripts', async () => {
+		let { repoDir, sha } = makeUpstream({
+			name: 'lib',
+			scripts: { prepare: 'echo SHOULD_NOT_RUN > prepared.txt' },
+		})
+		let dir = mktempdir()
+		try {
+			let projectDir = join(dir, 'project')
+			mkdirSync(projectDir)
+			writeFileSync(join(projectDir, 'package.json'), JSON.stringify({
+				name: 'project',
+				sourceDependencies: { lib: { git: repoDir, rev: sha } },
+			}))
+
+			await install(projectDir)
+
+			assert.ok(!existsSync(join(projectDir, 'node_modules/lib/prepared.txt')))
+		} finally {
+			rmSync(dir, { recursive: true })
+			rmSync(repoDir, { recursive: true, force: true })
+		}
+	})
+
+	async function expectRejection(fn, pattern) {
+		let err
+		try { await fn() } catch (e) { err = e }
+		assert.ok(err, 'expected rejection')
+		if (pattern) assert.match(err.message, pattern)
+	}
+
+	test('rejects missing git field', async () => {
+		let dir = mktempdir()
+		try {
+			let projectDir = join(dir, 'project')
+			mkdirSync(projectDir)
+			writeFileSync(join(projectDir, 'package.json'), JSON.stringify({
+				name: 'project',
+				sourceDependencies: { lib: { rev: '0'.repeat(40) } },
+			}))
+			await expectRejection(() => install(projectDir), /'git' field is required/)
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('rejects missing rev field', async () => {
+		let dir = mktempdir()
+		try {
+			let projectDir = join(dir, 'project')
+			mkdirSync(projectDir)
+			writeFileSync(join(projectDir, 'package.json'), JSON.stringify({
+				name: 'project',
+				sourceDependencies: { lib: { git: 'https://example.com/foo' } },
+			}))
+			await expectRejection(() => install(projectDir), /'rev' field is required/)
+		} finally {
+			rmSync(dir, { recursive: true })
+		}
+	})
+
+	test('rejects nonexistent rev (qn:git verification)', async () => {
+		let { repoDir, sha } = makeUpstream({ name: 'lib' })
+		let dir = mktempdir()
+		try {
+			let projectDir = join(dir, 'project')
+			mkdirSync(projectDir)
+			let badRev = '0'.repeat(40)
+			assert.notStrictEqual(badRev, sha)
+			writeFileSync(join(projectDir, 'package.json'), JSON.stringify({
+				name: 'project',
+				sourceDependencies: { lib: { git: repoDir, rev: badRev } },
+			}))
+			await expectRejection(() => install(projectDir))
+		} finally {
+			rmSync(dir, { recursive: true })
+			rmSync(repoDir, { recursive: true, force: true })
+		}
+	})
+
+	test('installs scoped sourceDependency', async () => {
+		let { repoDir, sha } = makeUpstream({ name: '@org/lib' })
+		let dir = mktempdir()
+		try {
+			let projectDir = join(dir, 'project')
+			mkdirSync(projectDir)
+			writeFileSync(join(projectDir, 'package.json'), JSON.stringify({
+				name: 'project',
+				sourceDependencies: { '@org/lib': { git: repoDir, rev: sha } },
+			}))
+			await install(projectDir)
+			assert.ok(existsSync(join(projectDir, 'node_modules/@org/lib/package.json')))
+		} finally {
+			rmSync(dir, { recursive: true })
+			rmSync(repoDir, { recursive: true, force: true })
+		}
+	})
+
+	const gitHttpBackend = findGitHttpBackend()
+	const remoteTest = gitHttpBackend ? test : (test.skip ?? (() => {}))
+
+	remoteTest('fetches sourceDependency over local HTTP server', async () => {
+		let { repoDir, sha } = makeUpstream({
+			name: 'remote-lib',
+			exports: { ".": "./dist/index.mjs" },
+		})
+		let { server, url } = await startGitHttpServer(repoDir + '/..', gitHttpBackend)
+		try {
+			let repoBase = url + '/' + repoDir.split('/').pop() + '/.git'
+			let dir = mktempdir()
+			try {
+				let projectDir = join(dir, 'project')
+				mkdirSync(projectDir)
+				writeFileSync(join(projectDir, 'package.json'), JSON.stringify({
+					name: 'project',
+					sourceDependencies: { 'remote-lib': { git: repoBase, rev: sha } },
+				}))
+				await install(projectDir)
+
+				let installed = JSON.parse(readFileSync(join(projectDir, 'node_modules/remote-lib/package.json'), 'utf8'))
+				assert.deepStrictEqual(installed.exports, { ".": "./src/index.ts" })
+			} finally {
+				rmSync(dir, { recursive: true })
+			}
+		} finally {
+			server.close()
+			rmSync(repoDir, { recursive: true, force: true })
+		}
+	})
+})
