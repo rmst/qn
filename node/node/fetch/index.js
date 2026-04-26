@@ -610,8 +610,14 @@ export async function fetch(input, init = {}) {
 			const connHeader = (head.headers.get('connection') || '').toLowerCase()
 			const te = head.headers.get('transfer-encoding')
 			const cl = head.headers.get('content-length')
-			const isChunked = te && te.toLowerCase().includes('chunked')
-			const contentLength = cl !== null ? parseInt(cl, 10) : null
+			// RFC 7230 §3.3.3: responses to HEAD requests, plus 204 and 304
+			// status codes, never have a body — regardless of Content-Length
+			// or Transfer-Encoding headers the server may have sent. Without
+			// this, we'd fall into "read until close" and stall waiting for
+			// the server's keep-alive timeout to fire.
+			const noBody = method === 'HEAD' || head.status === 204 || head.status === 304
+			const isChunked = !noBody && !!(te && te.toLowerCase().includes('chunked'))
+			const contentLength = noBody ? 0 : (cl !== null ? parseInt(cl, 10) : null)
 			const isFramed = isChunked || contentLength !== null
 			const keepAlive = connHeader !== 'close' && isFramed
 

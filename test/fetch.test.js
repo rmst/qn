@@ -583,3 +583,97 @@ describe('Response', () => {
 		assert.strictEqual(output, 'true,false')
 	})
 })
+
+describe('fetch no-body responses', () => {
+	// Per RFC 7230 §3.3.3, responses to HEAD plus 1xx/204/304 statuses
+	// have no body. fetch() must not wait for body framing on these,
+	// otherwise it stalls until the server's keep-alive timeout fires.
+	testQnOnly('304 over qn:http keep-alive completes immediately', async ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { serve } from 'qn:http'
+			const server = await serve({ port: 0 }, () =>
+				new Response(null, { status: 304, headers: { ETag: '"x"' } }))
+			const port = server.address().port
+			const start = Date.now()
+			const res = await fetch('http://127.0.0.1:' + port + '/')
+			const text = await res.text()
+			const elapsed = Date.now() - start
+			console.log(JSON.stringify({
+				status: res.status,
+				etag: res.headers.get('etag'),
+				body: text,
+				fast: elapsed < 1000,
+			}))
+			server.close()
+		`)
+		const output = await execAsync(bin, [`${dir}/test.js`])
+		const result = JSON.parse(output)
+		assert.strictEqual(result.status, 304)
+		assert.strictEqual(result.etag, '"x"')
+		assert.strictEqual(result.body, '')
+		assert.strictEqual(result.fast, true)
+	})
+
+	testQnOnly('204 over qn:http keep-alive completes immediately', async ({ bin, dir }) => {
+		writeFileSync(`${dir}/test.js`, `
+			import { serve } from 'qn:http'
+			const server = await serve({ port: 0 }, () =>
+				new Response(null, { status: 204 }))
+			const port = server.address().port
+			const start = Date.now()
+			const res = await fetch('http://127.0.0.1:' + port + '/')
+			const text = await res.text()
+			const elapsed = Date.now() - start
+			console.log(JSON.stringify({ status: res.status, body: text, fast: elapsed < 1000 }))
+			server.close()
+		`)
+		const output = await execAsync(bin, [`${dir}/test.js`])
+		const result = JSON.parse(output)
+		assert.strictEqual(result.status, 204)
+		assert.strictEqual(result.body, '')
+		assert.strictEqual(result.fast, true)
+	})
+
+	testQnOnly('HEAD over qn:http keep-alive completes immediately', async ({ bin, dir }) => {
+		// Server returns a body for GET, but HEAD must not wait for body bytes.
+		writeFileSync(`${dir}/test.js`, `
+			import { serve } from 'qn:http'
+			const server = await serve({ port: 0 }, () =>
+				new Response('hello world'))
+			const port = server.address().port
+			const start = Date.now()
+			const res = await fetch('http://127.0.0.1:' + port + '/', { method: 'HEAD' })
+			const text = await res.text()
+			const elapsed = Date.now() - start
+			console.log(JSON.stringify({ status: res.status, body: text, fast: elapsed < 1000 }))
+			server.close()
+		`)
+		const output = await execAsync(bin, [`${dir}/test.js`])
+		const result = JSON.parse(output)
+		assert.strictEqual(result.status, 200)
+		assert.strictEqual(result.body, '')
+		assert.strictEqual(result.fast, true)
+	})
+
+	testQnOnly('5 sequential 304s complete fast (connection is reusable)', async ({ bin, dir }) => {
+		// Without pooling + early no-body completion, each 304 would stall ~5s
+		// (qn:http default keep-alive timeout) before fetch resolves.
+		writeFileSync(`${dir}/test.js`, `
+			import { serve } from 'qn:http'
+			const server = await serve({ port: 0 }, () =>
+				new Response(null, { status: 304 }))
+			const port = server.address().port
+			const start = Date.now()
+			for (let i = 0; i < 5; i++) {
+				const res = await fetch('http://127.0.0.1:' + port + '/?i=' + i)
+				await res.text()
+			}
+			const elapsed = Date.now() - start
+			console.log(JSON.stringify({ fast: elapsed < 2000, elapsed }))
+			server.close()
+		`)
+		const output = await execAsync(bin, [`${dir}/test.js`])
+		const result = JSON.parse(output)
+		assert.strictEqual(result.fast, true, 'expected fast completion, got ' + result.elapsed + 'ms')
+	})
+})
