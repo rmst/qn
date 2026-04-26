@@ -14,6 +14,7 @@
 import { readFileSync, mkdirSync, rmSync, cpSync, existsSync, readdirSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { join, resolve, basename, dirname } from "node:path"
+import { fetchTree } from "./git.js"
 
 /**
  * Parse a dependency specifier into a type and value.
@@ -28,7 +29,7 @@ function parseSpec(name, spec) {
 	if (spec.startsWith("github:")) {
 		return { type: "github", value: spec.slice(7) }
 	}
-	if (spec.startsWith("git+https://") || spec.startsWith("git+ssh://")) {
+	if (spec.startsWith("git+https://") || spec.startsWith("git+http://") || spec.startsWith("git+ssh://")) {
 		return { type: "git", value: spec.replace(/^git\+/, "") }
 	}
 	if (/^https?:\/\/github\.com\//.test(spec)) {
@@ -39,30 +40,47 @@ function parseSpec(name, spec) {
 }
 
 /**
- * Clone or fetch a git repo to a cache directory.
- * Returns the path to the cached clone.
- * @param {string} url - git URL
- * @param {string} cacheDir - base cache directory
- * @returns {string} path to cloned repo
+ * Split a git URL into (url, ref). Refs are passed as `#fragment` per npm
+ * convention. Returns ref="HEAD" if no fragment was given.
  */
-function gitClone(url, cacheDir) {
-	// Derive a cache key from the URL
-	let key = url.replace(/[^a-zA-Z0-9._-]/g, "_")
+function splitGitRef(url) {
+	let i = url.indexOf("#")
+	if (i < 0) return { url, ref: "HEAD" }
+	return { url: url.slice(0, i), ref: url.slice(i + 1) || "HEAD" }
+}
+
+/**
+ * Fetch a git URL (https/http) into a cache directory using qn:git.
+ * Always overwrites the destination — caching by sha is left as a future
+ * optimization. Returns the path to the materialized tree.
+ *
+ * SSH URLs fall back to the system `git` binary, since qn:git speaks only
+ * smart HTTP. If that binary isn't available, the user gets a clear error.
+ */
+async function gitFetch(rawUrl, cacheDir) {
+	let { url, ref } = splitGitRef(rawUrl)
+	let key = rawUrl.replace(/[^a-zA-Z0-9._-]/g, "_")
 	let dest = join(cacheDir, key)
 
-	if (existsSync(join(dest, ".git"))) {
-		// Already cloned — pull latest
-		try {
-			execFileSync("git", ["-C", dest, "fetch", "--depth", "1"], { timeout: 30000 })
-			execFileSync("git", ["-C", dest, "reset", "--hard", "FETCH_HEAD"], { timeout: 10000 })
-		} catch {
-			// Fetch failed (offline?) — use existing clone
-		}
-	} else {
+	if (url.startsWith("ssh://") || url.startsWith("git+ssh://")) {
+		// Shell out for SSH transport — qn:git doesn't speak SSH.
+		let sshUrl = url.replace(/^git\+/, "")
+		if (existsSync(dest)) rmSync(dest, { recursive: true, force: true })
 		mkdirSync(dest, { recursive: true })
-		execFileSync("git", ["clone", "--depth", "1", url, dest], { timeout: 60000 })
+		execFileSync(
+			"git",
+			["clone", "--depth", "1", ...(ref !== "HEAD" ? ["-b", ref] : []), sshUrl, dest],
+			{ timeout: 60000 },
+		)
+		// Strip .git so installPackage's later cleanup is a no-op (kept for clarity).
+		let gitDir = join(dest, ".git")
+		if (existsSync(gitDir)) rmSync(gitDir, { recursive: true })
+		return dest
 	}
 
+	if (existsSync(dest)) rmSync(dest, { recursive: true, force: true })
+	mkdirSync(dest, { recursive: true })
+	await fetchTree({ source: url, ref, dest })
 	return dest
 }
 
@@ -70,28 +88,12 @@ function gitClone(url, cacheDir) {
  * Resolve a github shorthand (owner/repo, owner/repo#ref) to a cache path.
  * @param {string} spec - e.g. "rmst/tailpipe" or "rmst/tailpipe#v0.1.0"
  * @param {string} cacheDir - base cache directory
- * @returns {string} path to cloned repo
+ * @returns {Promise<string>} path to materialized tree
  */
-function resolveGithub(spec, cacheDir) {
+async function resolveGithub(spec, cacheDir) {
 	let [repo, ref] = spec.split("#")
-	let url = `https://github.com/${repo}.git`
-
-	let key = repo.replace("/", "_") + (ref ? `_${ref}` : "")
-	let dest = join(cacheDir, key)
-
-	if (existsSync(join(dest, ".git"))) {
-		try {
-			execFileSync("git", ["-C", dest, "fetch", "--depth", "1", ...(ref ? ["origin", ref] : [])], { timeout: 30000 })
-			execFileSync("git", ["-C", dest, "reset", "--hard", "FETCH_HEAD"], { timeout: 10000 })
-		} catch {
-			// Fetch failed — use existing clone
-		}
-	} else {
-		mkdirSync(dest, { recursive: true })
-		execFileSync("git", ["clone", "--depth", "1", ...(ref ? ["-b", ref] : []), url, dest], { timeout: 60000 })
-	}
-
-	return dest
+	let url = `https://github.com/${repo}` + (ref ? `#${ref}` : "")
+	return await gitFetch(url, cacheDir)
 }
 
 /**
@@ -186,7 +188,7 @@ function getCacheDir() {
  * @param {object} [options]
  * @param {boolean} [options.dev=false] - include devDependencies
  */
-export function install(projectDir, options = {}) {
+export async function install(projectDir, options = {}) {
 	let pkgJsonPath = join(projectDir, "package.json")
 	if (!existsSync(pkgJsonPath)) {
 		console.error(`No package.json found in ${projectDir}`)
@@ -231,12 +233,12 @@ export function install(projectDir, options = {}) {
 
 				case "github":
 					console.log(`${name} <- github:${spec.value}`)
-					srcDir = resolveGithub(spec.value, cacheDir)
+					srcDir = await resolveGithub(spec.value, cacheDir)
 					break
 
 				case "git":
 					console.log(`${name} <- ${spec.value}`)
-					srcDir = gitClone(spec.value, cacheDir)
+					srcDir = await gitFetch(spec.value, cacheDir)
 					break
 
 				case "npm":
@@ -265,7 +267,7 @@ export function install(projectDir, options = {}) {
  * CLI entry point.
  * @param {string[]} args - command line arguments after "install"
  */
-export function cli(args) {
+export async function cli(args) {
 	let dev = false
 	let dir = process.cwd()
 
@@ -284,12 +286,12 @@ Options:
 
 Supported dependency specifiers:
   "file:../path"              Local directory
-  "github:owner/repo"         GitHub repository
-  "github:owner/repo#ref"     GitHub repository at tag/branch/commit
-  "git+https://url.git"       Git repository
+  "github:owner/repo[#ref]"   GitHub repository (#ref optional)
+  "git+https://url.git[#ref]" Git repository over HTTPS or HTTP
+  "git+ssh://url.git[#ref]"   Git repository over SSH (requires git in PATH)
 
 Not yet supported:
-  "^1.2.3", "~1.0.0", etc.   npm registry (planned)
+  "^1.2.3", "~1.0.0", etc.    npm registry (planned)
   Transitive dependencies     (planned)`)
 			return
 		} else if (!arg.startsWith("-")) {
@@ -300,5 +302,5 @@ Not yet supported:
 		}
 	}
 
-	install(dir, { dev })
+	await install(dir, { dev })
 }

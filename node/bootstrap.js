@@ -200,7 +200,7 @@ if (scriptArgs[1] === '--version' || scriptArgs[1] === '-V') {
 // Handle subcommands
 if (scriptArgs[1] === 'install') {
 	const { cli } = await import("qn:install")
-	cli(scriptArgs.slice(2))
+	await cli(scriptArgs.slice(2))
 } else if (scriptArgs[1] === 'run') {
 	const { cli } = await import("qn:run")
 	await cli(scriptArgs.slice(2))
