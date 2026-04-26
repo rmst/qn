@@ -271,11 +271,12 @@ Notes: `utf8` is the only supported text encoding (no latin1, hex, base64, etc.)
 | `Writable` | ✅ | fd-based; `write`/`end`/`cork`/`uncork`/`destroy`; `drain`/`finish` events |
 | `Readable.fromWeb` / `Readable.toWeb` | ✅ | |
 | `pipeline` (promises) | ✅ | |
-| `Duplex` / `Transform` / `PassThrough` | ❌ | |
+| `Transform` / `Duplex` | ✅ | non-fd; `_transform`/`_flush` hooks, backpressure, `Symbol.asyncIterator`, `pipe()` honoring `dest.write()` return |
+| `PassThrough` | ❌ | |
 | `Readable.from` / `finished` | ❌ | |
-| Pull-mode `read()` | ❌ | |
+| Pull-mode `read()` | ⚠️ | partial: `Transform` supports `.read([n])` |
 
-Notes: Minimal fd-backed streams, not the full Node.js stream infrastructure.
+Notes: `Readable`/`Writable` are fd-backed; `Transform`/`Duplex` are generic and used by `node:zlib`. Not every Node stream feature is implemented (no `cork`/`uncork` on Transform, no `objectMode`, no `allowHalfOpen` config).
 
 ### node:buffer
 
@@ -393,13 +394,38 @@ BLOBs returned as `Uint8Array`. Transactions via `exec('BEGIN')`/`exec('COMMIT')
 | `createRequire` | ✅ | String path or `file://` URL |
 | `builtinModules` / `isBuiltin` | ❌ | |
 
+### node:zlib
+
+Backed by [miniz](https://github.com/richgel999/miniz). Async ops run on the libuv thread pool via `uv_queue_work`.
+
+| API | Status | Notes |
+|-----|--------|-------|
+| `deflateSync` / `inflateSync` | ✅ | zlib framing (RFC 1950) |
+| `deflateRawSync` / `inflateRawSync` | ✅ | raw DEFLATE (RFC 1951) |
+| `gzipSync` / `gunzipSync` | ✅ | gzip framing (RFC 1952) — header/trailer in JS, body via miniz |
+| `unzipSync` | ✅ | auto-detects zlib vs gzip on input |
+| `deflate` / `inflate` / `gzip` / `gunzip` / `unzip` (callback) | ✅ | real async — runs off the main thread |
+| `promises.{deflate,inflate,gzip,gunzip,unzip,...}` | ✅ | Promise-returning variants |
+| `createDeflate` / `createInflate` / `createGzip` / `createGunzip` / `createDeflateRaw` / `createInflateRaw` / `createUnzip` | ✅ | extends `Transform`; backpressure, `Symbol.asyncIterator`, `pipe()` |
+| `crc32` | ✅ | matches Node ≥22 |
+| `constants` (`Z_*`, `DEFLATE`, etc.) | ✅ | error codes match Node (`Z_DATA_ERROR`, etc.) |
+| `brotli*` / `createBrotli*` | ❌ | throws |
+| `zstd*` / `createZstd*` | ❌ | throws |
+| `dictionary` option | ❌ | |
+| `params()` / `flush()` on streams | ❌ | |
+
+Notes:
+- `windowBits`: option is accepted in Node's 8-15 range but miniz only supports a 32KB window, so all values use windowBits=15 internally. Round-trips are still correct; compressed output is slightly larger than real zlib at smaller windows.
+- Errors carry Node-style `.code` (`Z_DATA_ERROR` etc.) and `.errno`.
+- Compressed bytes are not bit-identical to Node's zlib (different deflate strategy choices); decompression is fully interoperable.
+
 ---
 
 ## Unavailable `node:*` Modules
 
 The following modules are not implemented. Importing them throws a `NodeCompatibilityError` with a descriptive message.
 
-`node:async_hooks`, `node:cluster`, `node:diagnostics_channel`, `node:dns`, `node:domain`, `node:http2`, `node:https`, `node:inspector`, `node:perf_hooks`, `node:punycode`, `node:querystring`, `node:readline`, `node:repl`, `node:string_decoder`, `node:tls`, `node:tty`, `node:v8`, `node:vm`, `node:wasi`, `node:worker_threads`, `node:zlib`
+`node:async_hooks`, `node:cluster`, `node:diagnostics_channel`, `node:dns`, `node:domain`, `node:http2`, `node:https`, `node:inspector`, `node:perf_hooks`, `node:punycode`, `node:querystring`, `node:readline`, `node:repl`, `node:string_decoder`, `node:tls`, `node:tty`, `node:v8`, `node:vm`, `node:wasi`, `node:worker_threads`
 
 ---
 
