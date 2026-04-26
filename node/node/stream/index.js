@@ -10,6 +10,8 @@ import {
 	setWriteHandler as _setWriteHandler,
 } from 'qn_vm'
 
+export { Transform, Duplex } from './transform.js'
+
 /**
  * UTF-8 streaming decoder that handles incomplete multi-byte sequences.
  * Buffers incomplete sequences until more data arrives.

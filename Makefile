@@ -62,6 +62,8 @@ QNC_PACK = $(BIN_DIR)/qnc-pack
 QNC_EMBED_SOURCES := $(shell find node/ qx/ vendor/ws/ -name '*.js' -o -name '*.c' -o -name '*.h' -o -name 'package.json') \
                      $(shell find libuv/ -name '*.c' -o -name '*.h') \
                      $(shell find vendor/libuv/include -name '*.h') \
+                     $(shell find vendor/miniz -maxdepth 1 \( -name 'miniz*.c' -o -name 'miniz*.h' \)) \
+                     $(shell find vendor/miniz_shim/ -name '*.h') \
                      $(shell find quickjs/ -name '*.c' -o -name '*.h') \
                      module_resolution/module-resolution.h exit-handler.h \
                      introspect/introspect.h sandboxed-worker/sandboxed-worker.h
@@ -110,6 +112,8 @@ $(QNC_PROG): qnc/wrapper.c qnc/embed.h $(QJS_PROG) $(QNC_ENGINE) qnc/qnc.js $(BI
 		$$(find vendor/libuv/include -name '*.h' | sed 's|.*|&:&|') \
 		$$(find vendor/libuv/src -name '*.h' | sed 's|.*|&:&|') \
 		$$(find libuv/ -name '*.c' -o -name '*.h' | sed 's|.*|&:&|') \
+		$$(find vendor/miniz -maxdepth 1 \( -name 'miniz*.c' -o -name 'miniz*.h' \) | sed 's|.*|&:&|') \
+		$$(find vendor/miniz_shim/ -name '*.h' | sed 's|.*|&:&|') \
 		$$(find node/ qx/ vendor/ws/ vendor/sucrase-js/ vendor/bearssl/ \( -name '*.js' -o -name '*.c' -o -name '*.h' -o -name 'package.json' \) | sed 's|.*|js/&:&|')
 
 # Patch quickjs-libc (adds import.meta.dirname, sandbox support, introspection)

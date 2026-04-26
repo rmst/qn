@@ -79,13 +79,13 @@ const DEFAULT_MODULES = [
 	"node:fetch", "node:fetch/Headers", "node:fetch/Response",
 	"node:dgram", "node:net", "node:http", "node:http/parse",
 	"node:sqlite", "node:util", "node:assert", "node:test",
-	"node:os", "node:module", "node:timers",
+	"node:os", "node:module", "node:timers", "node:zlib",
 	// Stubs for unimplemented node:* modules (throw NodeCompatibilityError on import)
 	"node:async_hooks", "node:cluster", "node:diagnostics_channel", "node:dns",
 	"node:domain", "node:http2", "node:https", "node:inspector",
 	"node:perf_hooks", "node:punycode", "node:querystring", "node:readline",
 	"node:repl", "node:string_decoder", "node:tty",
-	"node:v8", "node:vm", "node:wasi", "node:worker_threads", "node:zlib",
+	"node:v8", "node:vm", "node:wasi", "node:worker_threads",
 	"qn:crypto", "qn:tls", "qn:introspect", "qn:http", "qn:pty",
 	"qn:version-info", "qn:sucrase", "qn:worker", "qn:cjs", "qn:process", "qn:proxy", "qn:proxy/cli",
 	"qn:install", "qn:run", "qn:bundle", "qn:watch",
@@ -1239,9 +1239,11 @@ function buildExecutable(outFile, cfile, nativeModules, extraLinkFiles,
 		"libuv/qn-vm.c", "libuv/qn-worker.c", "libuv/qn-uv-utils.c",
 		"libuv/qn-uv-fs.c", "libuv/qn-uv-stream.c", "libuv/qn-uv-dgram.c",
 		"libuv/qn-uv-process.c", "libuv/qn-uv-dns.c", "libuv/qn-uv-signals.c",
-		"libuv/qn-uv-pty.c", "libuv/qn-uv-fs-event.c",
+		"libuv/qn-uv-pty.c", "libuv/qn-uv-fs-event.c", "libuv/qn-zlib.c",
 	]
 	const uvIncDir = srcDir + "/vendor/libuv/include"
+	const minizIncDir = srcDir + "/vendor/miniz"
+	const minizShimIncDir = srcDir + "/vendor/miniz_shim"
 	for (let i = 0; i < embeddedNativeSrcs.length; i++) {
 		const src = srcDir + "/" + embeddedNativeSrcs[i]
 		if (!fileExists(src)) continue
@@ -1260,12 +1262,44 @@ function buildExecutable(outFile, cfile, nativeModules, extraLinkFiles,
 		}
 		const ret = execCmd([cc, "-O2", "-D_GNU_SOURCE",
 			"-I", incDir, "-I", uvIncDir, "-I", srcDir,
+			"-I", minizIncDir, "-I", minizShimIncDir,
 			"-c", "-o", objPath, src], verbose)
 		if (ret !== 0) {
 			std.err.puts(`qnc: failed to compile '${src}'\n`)
 			return ret
 		}
 		embeddedNativeObjs.push(objPath)
+	}
+
+	// Compile miniz (DEFLATE/zlib) — used by qn-zlib.c. Skip miniz_zip.c
+	// (we don't expose archive APIs; node:zlib only needs deflate/inflate).
+	const minizObjs = []
+	const minizSrcs = ["miniz.c", "miniz_tinfl.c", "miniz_tdef.c"]
+	for (let i = 0; i < minizSrcs.length; i++) {
+		const src = `${minizIncDir}/${minizSrcs[i]}`
+		if (!fileExists(src)) continue
+		let objPath
+		if (cacheDir) {
+			const targetDir = cacheDir + "/miniz"
+			ensureDir(targetDir)
+			objPath = targetDir + "/" + minizSrcs[i].replace(/\.c$/, ".o")
+			if (getMtime(objPath) >= getMtime(src)) {
+				if (verbose) print(`qnc: cached ${objPath}`)
+				minizObjs.push(objPath)
+				continue
+			}
+		} else {
+			objPath = `/tmp/qnc_miniz_${os.getpid()}_${i}.o`
+		}
+		const ret = execCmd([cc, "-O2",
+			"-DMINIZ_NO_ARCHIVE_APIS", "-DMINIZ_NO_STDIO",
+			"-I", minizIncDir, "-I", minizShimIncDir,
+			"-c", "-o", objPath, src], verbose)
+		if (ret !== 0) {
+			std.err.puts(`qnc: failed to compile miniz source '${src}'\n`)
+			return ret
+		}
+		minizObjs.push(objPath)
 	}
 
 	// Compile QuickJS core sources
@@ -1409,6 +1443,7 @@ function buildExecutable(outFile, cfile, nativeModules, extraLinkFiles,
 	for (const obj of quickjsObjs) argv.push(obj)
 	for (const obj of miscObjs) argv.push(obj)
 	for (const obj of libuvObjs) argv.push(obj)
+	for (const obj of minizObjs) argv.push(obj)
 
 	// Native module .o files (from package.json qnc field)
 	for (const nm of nativeModules) {

@@ -27,7 +27,6 @@ const STUB_MODULES = [
 	"node:vm",
 	"node:wasi",
 	"node:worker_threads",
-	"node:zlib",
 ]
 
 const tmpDir = mkdtempSync(join(tmpdir(), "qn-stub-test-"))
